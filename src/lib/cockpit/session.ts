@@ -1,6 +1,13 @@
 import { create } from "zustand";
+import {
+  advanceCockpitSimulation,
+  createCockpitSimulation,
+  SCENARIO_DURATION_S,
+  SCENARIO_START_S,
+  type CockpitSimulationState,
+} from "./simulation";
 
-export const SCENARIO_START_S = 1_752_676_800;
+export { SCENARIO_START_S } from "./simulation";
 
 type ScenarioSession = {
   scenarioId: "gpu-training-ramp-v1";
@@ -8,6 +15,7 @@ type ScenarioSession = {
   playing: boolean;
   speed: 1 | 5 | 10 | 30 | 60;
   mode: "Observe" | "Shadow" | "Advisory";
+  simulation: CockpitSimulationState;
   setPlaying: (playing: boolean) => void;
   setSpeed: (speed: ScenarioSession["speed"]) => void;
   setMode: (mode: ScenarioSession["mode"]) => void;
@@ -21,11 +29,22 @@ export const useScenarioSession = create<ScenarioSession>((set) => ({
   playing: false,
   speed: 1,
   mode: "Advisory",
+  simulation: createCockpitSimulation(SCENARIO_START_S),
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),
   setMode: (mode) => set({ mode }),
-  advance: (seconds) => set((state) => ({ simulatedAt: state.simulatedAt + seconds })),
-  reset: () => set({ simulatedAt: SCENARIO_START_S, playing: false, speed: 1 }),
+  advance: (seconds) => set((state) => {
+    const simulation = advanceCockpitSimulation(state.simulation, seconds, SCENARIO_START_S);
+    return {
+      simulatedAt: simulation.simulatedAt,
+      simulation,
+      playing: simulation.snapshot.elapsedS < SCENARIO_DURATION_S && state.playing,
+    };
+  }),
+  reset: () => {
+    const simulation = createCockpitSimulation(SCENARIO_START_S);
+    set({ simulatedAt: SCENARIO_START_S, playing: false, speed: 1, simulation });
+  },
 }));
 
 export function formatSimulatedAt(seconds: number) {

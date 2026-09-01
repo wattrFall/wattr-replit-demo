@@ -9,6 +9,7 @@
     "build": "vite build",
     "start": "npm run db:setup && NODE_ENV=production tsx server/index.ts",
     "check": "tsc --noEmit",
+    "test:simulation": "tsx scripts/test-cockpit-simulation.ts",
     "demo:validate": "tsx scripts/validate-demo-scenario.ts"
   },
   "dependencies": {

@@ -1,0 +1,1 @@
+- [Deterministic replay cadence](deterministic-replay-cadence.md) — align time-varying inputs globally, then batch unchanged fixed physics slices across every replay path.
