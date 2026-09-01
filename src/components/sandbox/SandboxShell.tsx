@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useRef } from "react";
+import { Component, Suspense, lazy, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { RotateCcw } from "lucide-react";
 import { CATALOGUE, GRID_D, GRID_W, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
 import { useSandboxStore } from "@/lib/sandbox/store";
@@ -16,6 +16,27 @@ import { useSandboxSimulation } from "./useSandboxSimulation";
  * sits on the critical path for first paint.
  */
 const SandboxCanvas = lazy(() => import("./SandboxCanvas"));
+
+type CanvasErrorBoundaryProps = {
+  children: ReactNode;
+  fallback: ReactNode;
+};
+
+type CanvasErrorBoundaryState = {
+  hasError: boolean;
+};
+
+class CanvasErrorBoundary extends Component<CanvasErrorBoundaryProps, CanvasErrorBoundaryState> {
+  state: CanvasErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): CanvasErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
 
 export function SandboxShell() {
   const reducedMotion = useReducedMotion();
@@ -145,17 +166,37 @@ export function SandboxShell() {
           </div>
 
           <div className="relative min-h-[340px] flex-1 overflow-hidden rounded-[10px] border border-[var(--sbx-border)] sm:min-h-[440px] lg:min-h-[520px]">
-            <Suspense
+            <CanvasErrorBoundary
               fallback={
-                <div className="absolute inset-0 grid place-items-center bg-[var(--sbx-surface-0)]">
-                  <p className="text-[11px] tracking-[0.14em] text-[var(--sbx-text-faint)]">
-                    LOADING SCENE
+                <div
+                  role="img"
+                  aria-label={sceneSummary}
+                  className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[var(--sbx-surface-0)] px-6 text-center"
+                >
+                  <p className="font-[family-name:var(--sbx-font-mono)] text-[11px] tracking-[0.14em] text-[var(--sbx-primary)]">
+                    3D SCENE UNAVAILABLE
+                  </p>
+                  <p className="max-w-[340px] text-[12px] leading-[1.6] text-[var(--sbx-text-muted)]">
+                    This preview does not provide WebGL. The cooling model, controls, and inspector are still active.
+                  </p>
+                  <p className="max-w-[420px] font-[family-name:var(--sbx-font-mono)] text-[11px] leading-[1.6] text-[var(--sbx-text-faint)]">
+                    {sceneSummary}
                   </p>
                 </div>
               }
             >
-              <SandboxCanvas reducedMotion={reducedMotion} />
-            </Suspense>
+              <Suspense
+                fallback={
+                  <div className="absolute inset-0 grid place-items-center bg-[var(--sbx-surface-0)]">
+                    <p className="text-[11px] tracking-[0.14em] text-[var(--sbx-text-faint)]">
+                      LOADING SCENE
+                    </p>
+                  </div>
+                }
+              >
+                <SandboxCanvas reducedMotion={reducedMotion} />
+              </Suspense>
+            </CanvasErrorBoundary>
           </div>
 
           <div className="flex flex-col gap-3 lg:w-[260px]">
