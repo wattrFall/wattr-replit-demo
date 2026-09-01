@@ -1,6 +1,8 @@
-# Wattr Cooling Sandbox
+# Wattr Operator Cockpit
 
-This is the standalone interactive cooling sandbox. It is intentionally not the Wattr website: there are no site routes, navigation, stories, contact flow, research corpus, or customer integrations.
+An operator-grade synthetic decision cockpit for AI/HPC thermal operations. It connects workload intent, electrical power, heat, cooling response, forecast risk, safety-checked advisory review, and an immutable operator audit record.
+
+The original interactive cooling sandbox remains available at `/demo/sandbox`. All operating values and outcomes are illustrative and must not be presented as measured facility performance or closed-loop control.
 
 ## Start coding
 
@@ -9,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-The editor serves the sandbox at `http://localhost:5000/`.
+The development server exposes the React application and authenticated API on port 5000.
 
 ## Checks
 
@@ -19,4 +21,8 @@ npm run demo:validate
 npm run build
 ```
 
-The sandbox is illustrative and must not be presented as measured operational performance.
+## Runtime foundations
+
+- Clerk provides the operator session.
+- PostgreSQL persists app-level roles, facility permissions, model versions, preferences, and audit records.
+- `database/schema.sql` documents the development schema applied through Replit's managed database workflow.
