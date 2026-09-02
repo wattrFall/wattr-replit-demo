@@ -17,6 +17,7 @@
     "test:role-security-api": "npm run db:setup && tsx scripts/test-role-security-api.ts",
     "test:ask-wattr": "npm run db:setup && tsx scripts/test-ask-wattr.ts",
     "test:decision-workflow": "npm run db:setup && tsx scripts/test-decision-workflow.ts",
+    "test:product-learning": "npm run db:setup && tsx scripts/test-product-learning.ts",
     "demo:validate": "tsx scripts/validate-demo-scenario.ts"
   },
   "dependencies": {

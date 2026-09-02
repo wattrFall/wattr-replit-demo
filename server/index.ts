@@ -198,6 +198,11 @@ async function requireFacilityAccess(userId: string, facilityId: string, res: Re
   // Do not distinguish an unknown facility from one outside the user's
   // organization or facility grant.
   if (!permission) {
+    await recordLearningError({
+      userId,
+      category: "PERMISSION_FAILURE",
+      code: `FACILITY_${capability.toUpperCase()}_REQUIRED`,
+    });
     res.status(404).json({ error: "Facility unavailable" });
     return undefined;
   }
@@ -207,6 +212,7 @@ async function requireFacilityAccess(userId: string, facilityId: string, res: Re
 async function requireOrganizationAdmin(userId: string, res: Response) {
   const membership = await organizationMembership(userId);
   if (!membership || (!membership.is_admin && !membership.is_owner)) {
+    await recordLearningError({ userId, category: "PERMISSION_FAILURE", code: "ORGANIZATION_ADMIN_REQUIRED" });
     res.status(403).json({ error: "Organization administration permission required" });
     return undefined;
   }
@@ -260,6 +266,201 @@ function canonical(row: Record<string, any>, facilityId: string) {
     provenance: canonicalProvenance(row),
     quality: row.quality ?? "GOOD",
   };
+}
+
+const LEARNING_EVENT_NAMES = new Set([
+  "TUTORIAL_STEP_COMPLETED", "TUTORIAL_COMPLETED", "FACILITY_DRILLDOWN",
+  "INCIDENT_REVIEWED", "RECOMMENDATION_INSPECTED", "WHAT_IF_USED",
+  "SAFETY_RESULT", "DECISION_RECORDED", "ASSISTANT_USED",
+  "AUDIT_RECONSTRUCTED", "ENGINEERING_TOOL_USED", "SCENARIO_COMPLETED",
+]);
+const CLIENT_LEARNING_EVENT_NAMES = new Set([
+  "FACILITY_DRILLDOWN", "RECOMMENDATION_INSPECTED", "ENGINEERING_TOOL_USED",
+]);
+const LEARNING_ERROR_CATEGORIES = new Set([
+  "APPLICATION_FAULT", "SIMULATION_INVARIANT_FAILURE",
+  "PERMISSION_FAILURE", "EXTERNAL_SERVICE_UNAVAILABLE",
+]);
+const LEARNING_SURFACES = new Set([
+  "PORTFOLIO","TUTORIAL","OPERATIONS","FORECAST","RECOMMENDATIONS",
+  "ASK_WATTR","ENGINEERING","MODEL_STUDIO","MODEL_LAB","AUDIT","LEARNING","ADMIN",
+]);
+function canonicalLearningRoute(surface: unknown, facilityId?: string | null) {
+  if (typeof surface !== "string" || !LEARNING_SURFACES.has(surface)) return undefined;
+  if (["PORTFOLIO","TUTORIAL","LEARNING","ADMIN"].includes(surface)) {
+    return `/${surface.toLowerCase().replace("_", "-")}`;
+  }
+  if (!facilityId) return undefined;
+  const segment: Record<string, string> = {
+    OPERATIONS: "operations", FORECAST: "forecast", RECOMMENDATIONS: "recommendations",
+    ASK_WATTR: "ask-wattr", ENGINEERING: "engineering", MODEL_STUDIO: "model-studio",
+    MODEL_LAB: "model-lab", AUDIT: "audit",
+  };
+  return `/facilities/${facilityId}/${segment[surface]}`;
+}
+function sanitizeServerLearningRoute(route: string, facilityId?: string | null) {
+  if (route.startsWith("/tutorial")) return "/tutorial";
+  if (route.startsWith("/portfolio")) return "/portfolio";
+  if (route.startsWith("/learning")) return "/learning";
+  if (route.startsWith("/admin")) return "/admin";
+  const surface = [
+    ["operations", "OPERATIONS"], ["forecast", "FORECAST"], ["recommendations", "RECOMMENDATIONS"],
+    ["ask-wattr", "ASK_WATTR"], ["engineering", "ENGINEERING"], ["model-studio", "MODEL_STUDIO"],
+    ["model-lab", "MODEL_LAB"], ["audit", "AUDIT"],
+  ].find(([segment]) => route.includes(`/${segment}`))?.[1];
+  return surface ? canonicalLearningRoute(surface, facilityId) ?? "/" : "/";
+}
+function safeLearningProperties(eventName: string, value: unknown): Record<string, string | number | boolean | null> | undefined {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const properties = value as Record<string, unknown>;
+  const keys = Object.keys(properties).sort();
+  const exactKeys = (...expected: string[]) =>
+    keys.length === expected.length && keys.every((key, index) => key === [...expected].sort()[index]);
+  if (eventName === "TUTORIAL_STEP_COMPLETED" || eventName === "TUTORIAL_COMPLETED") {
+    return exactKeys("step", "complete") &&
+      Number.isInteger(properties.step) && Number(properties.step) >= 0 && Number(properties.step) <= 20 &&
+      typeof properties.complete === "boolean"
+      ? { step: Number(properties.step), complete: properties.complete } : undefined;
+  }
+  if (eventName === "FACILITY_DRILLDOWN") return exactKeys() ? {} : undefined;
+  if (eventName === "INCIDENT_REVIEWED") {
+    return exactKeys("incidentId") && typeof properties.incidentId === "string" && /^inc-[a-zA-Z0-9-]{1,40}$/.test(properties.incidentId)
+      ? { incidentId: properties.incidentId } : undefined;
+  }
+  if (eventName === "RECOMMENDATION_INSPECTED" || eventName === "WHAT_IF_USED") {
+    return exactKeys("recommendationId") && typeof properties.recommendationId === "string" && /^rec-[a-zA-Z0-9-]{1,40}$/.test(properties.recommendationId)
+      ? { recommendationId: properties.recommendationId } : undefined;
+  }
+  if (eventName === "SAFETY_RESULT") {
+    return exactKeys("recommendationId", "outcome") &&
+      typeof properties.recommendationId === "string" && /^rec-[a-zA-Z0-9-]{1,40}$/.test(properties.recommendationId) &&
+      ["PASS", "WARNING", "BLOCK"].includes(String(properties.outcome))
+      ? { recommendationId: properties.recommendationId, outcome: String(properties.outcome) } : undefined;
+  }
+  if (eventName === "DECISION_RECORDED") {
+    return exactKeys("recommendationId", "decision", "outcome") &&
+      typeof properties.recommendationId === "string" && /^rec-[a-zA-Z0-9-]{1,40}$/.test(properties.recommendationId) &&
+      ["APPROVE","REJECT","DEFER","REQUEST_ALTERNATIVE","ACKNOWLEDGE"].includes(String(properties.decision)) &&
+      ["ALLOWED_AS_ADVISORY","REJECTED","DEFERRED","ALTERNATIVE_REQUESTED","ACKNOWLEDGED"].includes(String(properties.outcome))
+      ? { recommendationId: properties.recommendationId, decision: String(properties.decision), outcome: String(properties.outcome) } : undefined;
+  }
+  if (eventName === "ASSISTANT_USED") {
+    return exactKeys("tool", "topic") &&
+      (ASSISTANT_TOOLS as readonly string[]).includes(String(properties.tool)) &&
+      properties.topic === properties.tool
+      ? { tool: String(properties.tool), topic: String(properties.topic) } : undefined;
+  }
+  if (eventName === "AUDIT_RECONSTRUCTED") {
+    return exactKeys("auditId") && typeof properties.auditId === "string" && /^[0-9]{1,20}$/.test(properties.auditId)
+      ? { auditId: properties.auditId } : undefined;
+  }
+  if (eventName === "ENGINEERING_TOOL_USED") return exactKeys() ? {} : undefined;
+  if (eventName === "SCENARIO_COMPLETED") {
+    return exactKeys("scenarioCompleted") && properties.scenarioCompleted === true
+      ? { scenarioCompleted: true } : undefined;
+  }
+  return undefined;
+}
+
+async function recordLearningError(input: {
+  userId?: string | null;
+  facilityId?: string | null;
+  category: string;
+  code: string;
+  route?: string | null;
+}) {
+  if (!LEARNING_ERROR_CATEGORIES.has(input.category) || !/^[A-Z0-9_:-]{1,120}$/.test(input.code)) return;
+  try {
+    await pool.query(
+      `INSERT INTO product_learning_errors
+        (id, organization_id, user_id, facility_id, category, code, route)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        randomUUID(), DEMO_ORGANIZATION_ID, input.userId ?? null, input.facilityId ?? null,
+        input.category, input.code,
+        typeof input.route === "string" ? sanitizeServerLearningRoute(input.route, input.facilityId) : null,
+      ],
+    );
+  } catch {
+    // Learning collection must never change the product request outcome.
+  }
+}
+
+async function recordLearningEvent(input: {
+  organizationId: string;
+  userId: string;
+  facilityId?: string | null;
+  scenarioId?: string | null;
+  eventName: string;
+  route: string;
+  role: Role;
+  modelVersionId?: string | null;
+  simulatedAt?: number | null;
+  dedupeKey: string;
+  properties?: Record<string, string | number | boolean | null>;
+  client?: pg.Pool | pg.PoolClient;
+}) {
+  const properties = safeLearningProperties(input.eventName, input.properties);
+  if (!LEARNING_EVENT_NAMES.has(input.eventName) || !properties) return;
+  const client = input.client ?? pool;
+  try {
+    await client.query(
+      `INSERT INTO product_learning_events
+        (id, organization_id, user_id, facility_id, scenario_id, event_name, route,
+         role, model_version_id, simulated_at, session_id, dedupe_key, properties)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'server', $11, $12::jsonb)
+       ON CONFLICT (organization_id, user_id, event_name, dedupe_key) DO NOTHING`,
+      [
+        randomUUID(), input.organizationId, input.userId, input.facilityId ?? null,
+        input.scenarioId ?? null, input.eventName,
+        sanitizeServerLearningRoute(input.route, input.facilityId), input.role,
+        input.modelVersionId ?? null, input.simulatedAt ?? null, input.dedupeKey,
+        JSON.stringify(properties),
+      ],
+    );
+  } catch {
+    // Product learning is best-effort and must never alter the user workflow.
+  }
+}
+
+let lastLearningPurgeAt = 0;
+async function purgeExpiredLearningRecords() {
+  const now = Date.now();
+  if (now - lastLearningPurgeAt < 60_000) return;
+  lastLearningPurgeAt = now;
+  await Promise.all([
+    pool.query("DELETE FROM product_learning_events WHERE expires_at <= now()"),
+    pool.query("DELETE FROM operator_test_sessions WHERE expires_at <= now()"),
+    pool.query("DELETE FROM product_feedback WHERE expires_at <= now()"),
+    pool.query("DELETE FROM product_learning_errors WHERE expires_at <= now()"),
+  ]);
+}
+
+async function learningFacilityContext(userId: string, facilityId: string) {
+  const permission = await facilityPermission(userId, facilityId, "view");
+  if (!permission) return undefined;
+  const model = await publishedModel(facilityId);
+  const scenario = await pool.query(
+    "SELECT id, simulated_start_at FROM scenarios WHERE facility_id = $1 AND status = 'PUBLISHED' ORDER BY created_at DESC LIMIT 1",
+    [facilityId],
+  );
+  return {
+    organizationId: permission.organization_id,
+    role: permission.role as Role,
+    modelVersionId: model?.model_version ?? null,
+    scenarioId: scenario.rows[0]?.id ?? null,
+  };
+}
+
+async function requireLearningViewer(userId: string, res: Response) {
+  const membership = await organizationMembership(userId);
+  if (!membership || (!membership.is_admin && !membership.is_owner && membership.role !== "PORTFOLIO_MANAGER")) {
+    await recordLearningError({ userId, category: "PERMISSION_FAILURE", code: "LEARNING_SUMMARY_FORBIDDEN" });
+    res.status(403).json({ error: "Learning summary permission required" });
+    return undefined;
+  }
+  return membership;
 }
 
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
@@ -600,6 +801,293 @@ app.get("/api/admin/audit", requireAuth, async (req: AuthedRequest, res) => {
     [DEMO_ORGANIZATION_ID],
   );
   res.json({ items: result.rows });
+});
+
+app.post("/api/learning/events", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  await purgeExpiredLearningRecords();
+  const { eventName, facilityId, simulatedAt, sessionId } = req.body ?? {};
+  const suppliedKeys = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+    ? Object.keys(req.body).sort()
+    : [];
+  const expectedKeys = simulatedAt === undefined
+    ? ["eventName", "facilityId", "sessionId"]
+    : ["eventName", "facilityId", "sessionId", "simulatedAt"];
+  const exactBody = suppliedKeys.length === expectedKeys.length &&
+    suppliedKeys.every((key, index) => key === [...expectedKeys].sort()[index]);
+  if (
+    !exactBody ||
+    typeof eventName !== "string" || !CLIENT_LEARNING_EVENT_NAMES.has(eventName) ||
+    typeof sessionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId) ||
+    (simulatedAt !== undefined && !isScenarioTimestamp(simulatedAt)) ||
+    typeof facilityId !== "string" || facilityId.length > 120
+  ) {
+    return res.status(400).json({ error: "Invalid learning event" });
+  }
+  const membership = await organizationMembership(req.userId!);
+  if (!membership) return res.status(403).json({ error: "Organization membership required" });
+  const context = await learningFacilityContext(req.userId!, facilityId);
+  if (!context) {
+    await recordLearningError({
+      userId: req.userId!, category: "PERMISSION_FAILURE",
+      code: "LEARNING_EVENT_FACILITY_FORBIDDEN",
+    });
+    return res.status(404).json({ error: "Facility unavailable" });
+  }
+  const inserted = await pool.query(
+    `INSERT INTO product_learning_events
+      (id, organization_id, user_id, facility_id, scenario_id, event_name, route,
+       role, model_version_id, simulated_at, session_id, dedupe_key, properties)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+     ON CONFLICT (organization_id, user_id, event_name, dedupe_key) DO NOTHING
+     RETURNING id`,
+    [
+      randomUUID(), membership.organization_id, req.userId!, facilityId,
+      context.scenarioId, eventName,
+      eventName === "FACILITY_DRILLDOWN"
+        ? "/portfolio"
+        : eventName === "RECOMMENDATION_INSPECTED"
+          ? `/facilities/${facilityId}/recommendations`
+          : `/facilities/${facilityId}/engineering`,
+      context.role, context.modelVersionId, simulatedAt ?? null, sessionId,
+      `${sessionId}:${eventName}:${facilityId}`,
+      JSON.stringify({}),
+    ],
+  );
+  res.status(inserted.rowCount ? 201 : 202).json({
+    accepted: true,
+    deduplicated: !inserted.rowCount,
+    id: inserted.rows[0]?.id ?? null,
+  });
+});
+
+app.post("/api/learning/errors", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  await purgeExpiredLearningRecords();
+  const { category, code, surface, facilityId } = req.body ?? {};
+  const suppliedKeys = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? Object.keys(req.body) : [];
+  const route = canonicalLearningRoute(surface, facilityId);
+  const permittedClientError =
+    category === "APPLICATION_FAULT" && /^HTTP_5[0-9]{2}$/.test(code) ||
+    category === "EXTERNAL_SERVICE_UNAVAILABLE" && /^HTTP_(502|503|504)$/.test(code);
+  if (
+    suppliedKeys.some((key) => !["category","code","surface","facilityId"].includes(key)) ||
+    typeof category !== "string" || !LEARNING_ERROR_CATEGORIES.has(category) ||
+    typeof code !== "string" || !permittedClientError ||
+    !route ||
+    (facilityId !== undefined && (typeof facilityId !== "string" || facilityId.length > 120))
+  ) return res.status(400).json({ error: "Invalid learning error" });
+  let scopedFacilityId: string | null = null;
+  if (facilityId && await learningFacilityContext(req.userId!, facilityId)) scopedFacilityId = facilityId;
+  await recordLearningError({
+    userId: req.userId!, facilityId: scopedFacilityId, category, code, route,
+  });
+  res.status(202).json({ accepted: true });
+});
+
+app.post("/api/learning/operator-sessions", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  await purgeExpiredLearningRecords();
+  const { facilityId } = req.body ?? {};
+  const suppliedKeys = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? Object.keys(req.body) : [];
+  if (
+    typeof facilityId !== "string" || facilityId.length > 120 ||
+    suppliedKeys.length !== 1 || suppliedKeys[0] !== "facilityId"
+  ) return res.status(400).json({ error: "Invalid operator test session" });
+  const context = await learningFacilityContext(req.userId!, facilityId);
+  if (!context) return res.status(404).json({ error: "Facility unavailable" });
+  if (context.role !== "OPERATOR") {
+    await recordLearningError({ userId: req.userId!, category: "PERMISSION_FAILURE", code: "OPERATOR_TEST_ROLE_REQUIRED" });
+    return res.status(403).json({ error: "Operator role required for an operator test session" });
+  }
+  const id = randomUUID();
+  const result = await pool.query(
+    `INSERT INTO operator_test_sessions
+      (id, organization_id, user_id, facility_id, scenario_id, model_version_id, role, status, last_route)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'IN_PROGRESS', $8)
+     RETURNING id, facility_id, scenario_id, model_version_id, status, started_at`,
+    [
+      id, context.organizationId, req.userId!, facilityId, context.scenarioId,
+      context.modelVersionId, context.role, canonicalLearningRoute("OPERATIONS", facilityId),
+    ],
+  );
+  res.status(201).json(result.rows[0]);
+});
+
+app.patch("/api/learning/operator-sessions/:sessionId", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  await purgeExpiredLearningRecords();
+  const { status, scenarioCompleted, timeToUnderstandingS, errorCount, abandonmentCode, qualitativeFeedbackCode, surface } = req.body ?? {};
+  const suppliedKeys = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? Object.keys(req.body) : [];
+  if (
+    suppliedKeys.some((key) => !["status","scenarioCompleted","timeToUnderstandingS","errorCount","abandonmentCode","qualitativeFeedbackCode","surface"].includes(key)) ||
+    (status !== undefined && !["IN_PROGRESS", "COMPLETED", "ABANDONED"].includes(status)) ||
+    (scenarioCompleted !== undefined && typeof scenarioCompleted !== "boolean") ||
+    (timeToUnderstandingS !== undefined && (!Number.isInteger(timeToUnderstandingS) || timeToUnderstandingS < 0)) ||
+    (errorCount !== undefined && (!Number.isInteger(errorCount) || errorCount < 0)) ||
+    (abandonmentCode !== undefined && !["NAVIGATION_FRICTION","UNCLEAR_FORECAST","UNCLEAR_RECOMMENDATION","PERMISSION_BLOCK","TECHNICAL_ERROR","MODERATOR_ENDED","OTHER"].includes(abandonmentCode)) ||
+    (qualitativeFeedbackCode !== undefined && !["CLEAR","PARTLY_CLEAR","UNCLEAR","TOO_SLOW","MISSING_CONTEXT","OTHER"].includes(qualitativeFeedbackCode)) ||
+    (surface !== undefined && !LEARNING_SURFACES.has(surface))
+  ) return res.status(400).json({ error: "Invalid operator test outcome" });
+  const existing = await pool.query(
+    `SELECT facility_id FROM operator_test_sessions
+     WHERE id = $1 AND organization_id = $2 AND user_id = $3`,
+    [req.params.sessionId, DEMO_ORGANIZATION_ID, req.userId!],
+  );
+  if (!existing.rows[0]) return res.status(404).json({ error: "Operator test session unavailable" });
+  const result = await pool.query(
+    `UPDATE operator_test_sessions
+     SET status = COALESCE($3, status),
+         scenario_completed = COALESCE($4, scenario_completed),
+         time_to_understanding_s = COALESCE($5, time_to_understanding_s),
+         error_count = COALESCE($6, error_count),
+         abandonment_code = COALESCE($7, abandonment_code),
+         qualitative_feedback_code = COALESCE($8, qualitative_feedback_code),
+         last_route = COALESCE($9, last_route),
+         completed_at = CASE WHEN COALESCE($3, status) IN ('COMPLETED', 'ABANDONED')
+           THEN COALESCE(completed_at, now()) ELSE completed_at END
+     WHERE id = $1 AND organization_id = $2 AND user_id = $10
+     RETURNING id, status, scenario_completed, time_to_understanding_s, error_count,
+               abandonment_code, qualitative_feedback_code, last_route, started_at, completed_at`,
+    [
+      req.params.sessionId, DEMO_ORGANIZATION_ID, status ?? null, scenarioCompleted ?? null,
+      timeToUnderstandingS ?? null, errorCount ?? null, abandonmentCode ?? null,
+      qualitativeFeedbackCode ?? null,
+      surface === undefined ? null : canonicalLearningRoute(surface, existing.rows[0].facility_id),
+      req.userId!,
+    ],
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: "Operator test session unavailable" });
+  const session = result.rows[0];
+  if (session.status === "COMPLETED" && session.scenario_completed) {
+    const context = await pool.query(
+      `SELECT s.organization_id, s.facility_id, s.scenario_id, s.model_version_id, s.role
+       FROM operator_test_sessions s WHERE s.id = $1`,
+      [req.params.sessionId],
+    );
+    if (context.rows[0]) {
+      await recordLearningEvent({
+        organizationId: context.rows[0].organization_id,
+        userId: req.userId!,
+        facilityId: context.rows[0].facility_id,
+        scenarioId: context.rows[0].scenario_id,
+        eventName: "SCENARIO_COMPLETED",
+        route: session.last_route ?? "/",
+        role: context.rows[0].role,
+        modelVersionId: context.rows[0].model_version_id,
+        dedupeKey: `scenario-completed-${req.params.sessionId}`,
+        properties: { scenarioCompleted: true },
+      });
+    }
+  }
+  res.json(session);
+});
+
+app.post("/api/learning/feedback", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  await purgeExpiredLearningRecords();
+  const { facilityId, surface, sentiment, feedbackCode } = req.body ?? {};
+  const suppliedKeys = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? Object.keys(req.body) : [];
+  const route = canonicalLearningRoute(surface, facilityId);
+  if (
+    suppliedKeys.some((key) => !["facilityId","surface","sentiment","feedbackCode"].includes(key)) ||
+    (facilityId !== undefined && (typeof facilityId !== "string" || facilityId.length > 120)) ||
+    !route ||
+    !["POSITIVE", "NEUTRAL", "NEGATIVE"].includes(sentiment) ||
+    !["HELPFUL","UNCLEAR","MISSING_CONTEXT","TOO_SLOW","UNEXPECTED_RESULT","OTHER"].includes(feedbackCode)
+  ) return res.status(400).json({ error: "Invalid contextual feedback" });
+  let context: Awaited<ReturnType<typeof learningFacilityContext>> | undefined;
+  if (facilityId) {
+    context = await learningFacilityContext(req.userId!, facilityId);
+    if (!context) return res.status(404).json({ error: "Facility unavailable" });
+  }
+  const result = await pool.query(
+    `INSERT INTO product_feedback
+      (id, organization_id, user_id, facility_id, scenario_id, model_version_id,
+       route, role, sentiment, feedback_code)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, created_at`,
+    [
+      randomUUID(), DEMO_ORGANIZATION_ID, req.userId!, facilityId ?? null,
+      context?.scenarioId ?? null, context?.modelVersionId ?? null, route,
+      context?.role ?? (await organizationMembership(req.userId!))!.role, sentiment, feedbackCode,
+    ],
+  );
+  res.status(201).json({ accepted: true, id: result.rows[0].id, created_at: result.rows[0].created_at });
+});
+
+app.get("/api/learning/outcomes", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  await purgeExpiredLearningRecords();
+  const viewer = await requireLearningViewer(req.userId!, res);
+  if (!viewer) return;
+  const facilityId = typeof req.query.facilityId === "string" ? req.query.facilityId : undefined;
+  if (facilityId && !await facilityPermission(req.userId!, facilityId, "view")) {
+    await recordLearningError({ userId: req.userId!, facilityId, category: "PERMISSION_FAILURE", code: "LEARNING_OUTCOME_FACILITY_FORBIDDEN" });
+    return res.status(404).json({ error: "Facility unavailable" });
+  }
+  const unrestricted = viewer.is_admin || viewer.is_owner;
+  const grants = unrestricted ? [] : (await pool.query(
+    `SELECT p.facility_id FROM facility_permissions p
+     JOIN facilities f ON f.id = p.facility_id
+     WHERE p.user_id = $1 AND p.can_view = true AND f.organization_id = $2`,
+    [req.userId!, DEMO_ORGANIZATION_ID],
+  )).rows.map((row) => row.facility_id as string);
+  const params: unknown[] = facilityId
+    ? [DEMO_ORGANIZATION_ID, facilityId]
+    : unrestricted
+      ? [DEMO_ORGANIZATION_ID]
+      : [DEMO_ORGANIZATION_ID, grants];
+  const scope = facilityId
+    ? " AND facility_id = $2"
+    : unrestricted
+      ? ""
+      : " AND facility_id = ANY($2::text[])";
+  const facilityScope = facilityId
+    ? " AND facility_id = $2"
+    : unrestricted
+      ? ""
+      : " AND facility_id = ANY($2::text[])";
+  const [events, sessions, safety, decisions, feedback, errors, topics] = await Promise.all([
+    pool.query(`SELECT event_name, count(*)::int AS count, count(DISTINCT user_id)::int AS users
+                FROM product_learning_events WHERE organization_id = $1 AND expires_at > now()${scope}
+                GROUP BY event_name ORDER BY event_name`, params),
+    pool.query(`SELECT count(*)::int AS total,
+                       count(*) FILTER (WHERE status = 'COMPLETED')::int AS completed,
+                       count(*) FILTER (WHERE status = 'ABANDONED')::int AS abandoned,
+                       round(avg(time_to_understanding_s) FILTER (WHERE time_to_understanding_s IS NOT NULL))::int AS avg_time_to_understanding_s,
+                       round(avg(error_count))::int AS avg_error_count
+                FROM operator_test_sessions WHERE organization_id = $1 AND expires_at > now()${scope}`, params),
+    pool.query(`SELECT outcome, count(*)::int AS count FROM safety_evaluations
+                WHERE facility_id IN (SELECT id FROM facilities WHERE organization_id = $1)${facilityScope}
+                GROUP BY outcome ORDER BY outcome`, params),
+    pool.query(`SELECT outcome, count(*)::int AS count FROM operator_decisions
+                WHERE facility_id IN (SELECT id FROM facilities WHERE organization_id = $1)${facilityScope}
+                GROUP BY outcome ORDER BY outcome`, params),
+    pool.query(`SELECT count(*)::int AS count,
+                       count(*) FILTER (WHERE sentiment = 'POSITIVE')::int AS positive,
+                       count(*) FILTER (WHERE sentiment = 'NEUTRAL')::int AS neutral,
+                       count(*) FILTER (WHERE sentiment = 'NEGATIVE')::int AS negative
+                FROM product_feedback WHERE organization_id = $1 AND expires_at > now()${scope}`, params),
+    pool.query(`SELECT category, count(*)::int AS count FROM product_learning_errors
+                WHERE organization_id = $1 AND expires_at > now()${scope} GROUP BY category ORDER BY category`, params),
+    pool.query(`SELECT COALESCE(properties->>'topic', properties->>'tool', 'unknown') AS topic,
+                       count(*)::int AS count
+                FROM product_learning_events
+                WHERE organization_id = $1 AND expires_at > now() AND event_name = 'ASSISTANT_USED'${scope}
+                GROUP BY topic ORDER BY count DESC, topic`, params),
+  ]);
+  res.json({
+    scope: facilityId ?? "organization",
+    retention: { eventsAndFeedbackDays: 180, errorsDays: 90 },
+    journeyEvents: events.rows,
+    operatorSessions: sessions.rows[0],
+    safetyOutcomes: safety.rows,
+    decisionOutcomes: decisions.rows,
+    feedback: feedback.rows[0],
+    errors: errors.rows,
+    commonAssistantTopics: topics.rows,
+  });
 });
 
 /**
@@ -1101,6 +1589,15 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
     response.context.modelVersionId = null;
     response.context.provenance = null;
     response.context.quality = rows.every((row) => row.facility.quality === "GOOD") ? "GOOD" : "DEGRADED";
+    await recordLearningEvent({
+      organizationId: membership.organization_id,
+      userId: req.userId!,
+      eventName: "ASSISTANT_USED",
+      route: "/ask-wattr",
+      role: membership.role,
+      dedupeKey: `assistant-${randomUUID()}`,
+      properties: { tool, topic: tool },
+    });
     return res.json(response);
   }
 
@@ -1325,6 +1822,19 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
       assistantActions(facility, tool, membership.role),
     );
   }
+  await recordLearningEvent({
+    organizationId: membership.organization_id,
+    userId: req.userId!,
+    facilityId: facility.id,
+    scenarioId: facility.scenario_id,
+    eventName: "ASSISTANT_USED",
+    route: `/facilities/${facility.id}/ask-wattr`,
+    role: membership.role,
+    modelVersionId: facility.model_version_id,
+    simulatedAt,
+    dedupeKey: `assistant-${randomUUID()}`,
+    properties: { tool, topic: tool },
+  });
   return res.json(response);
 });
 
@@ -1599,7 +2109,8 @@ app.get("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequ
 
 app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
+  const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res);
+  if (!permission) return;
   const result = await pool.query(
     `SELECT a.id, a.action, a.scenario_id, a.simulated_at, a.model_version, a.payload, a.created_at
      FROM audit_records a
@@ -1612,6 +2123,19 @@ app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: A
   if (!record.payload?.snapshot) {
     return res.status(409).json({ error: "This legacy record does not contain an immutable reconstruction snapshot" });
   }
+  await recordLearningEvent({
+    organizationId: permission.organization_id,
+    userId: req.userId!,
+    facilityId: String(req.params.facilityId),
+    scenarioId: record.scenario_id,
+    eventName: "AUDIT_RECONSTRUCTED",
+    route: `/facilities/${req.params.facilityId}/audit`,
+    role: permission.role,
+    modelVersionId: record.model_version,
+    simulatedAt: Number(record.simulated_at),
+    dedupeKey: `audit-${record.id}`,
+    properties: { auditId: String(record.id) },
+  });
   res.json({
     record,
     snapshot: record.payload.snapshot,
@@ -1641,7 +2165,8 @@ app.get("/api/facilities/:facilityId/incidents", requireAuth, async (req: Authed
 
 app.get("/api/facilities/:facilityId/incidents/:incidentId", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
+  const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res);
+  if (!permission) return;
   const result = await pool.query(
     `SELECT i.id, i.title, i.severity, i.status, i.simulated_at, i.affected_assets,
             i.raw_signal_count, i.likely_cause, i.forecast_minutes, i.correlated_signals,
@@ -1652,6 +2177,19 @@ app.get("/api/facilities/:facilityId/incidents/:incidentId", requireAuth, async 
     [req.userId, req.params.facilityId, req.params.incidentId],
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Incident not found" });
+  await recordLearningEvent({
+    organizationId: permission.organization_id,
+    userId: req.userId!,
+    facilityId: String(req.params.facilityId),
+    scenarioId: "gpu-training-ramp-v1",
+    eventName: "INCIDENT_REVIEWED",
+    route: `/facilities/${req.params.facilityId}/incidents/${req.params.incidentId}`,
+    role: permission.role,
+    modelVersionId: result.rows[0].model_version,
+    simulatedAt: Number(result.rows[0].simulated_at),
+    dedupeKey: `incident-${result.rows[0].id}`,
+    properties: { incidentId: result.rows[0].id },
+  });
   res.json({ incident: result.rows[0], snapshot: replaySnapshot(Number(result.rows[0].simulated_at), result.rows[0].model_config) });
 });
 
@@ -1695,6 +2233,18 @@ app.patch("/api/me/tutorial", requireAuth, async (req: AuthedRequest, res) => {
      RETURNING tutorial_step, tutorial_complete`,
     [req.userId, step, complete],
   );
+  const membership = await organizationMembership(req.userId!);
+  if (membership) {
+    await recordLearningEvent({
+      organizationId: membership.organization_id,
+      userId: req.userId!,
+      eventName: complete ? "TUTORIAL_COMPLETED" : "TUTORIAL_STEP_COMPLETED",
+      route: "/help",
+      role: membership.role,
+      dedupeKey: complete ? "tutorial-complete" : `tutorial-step-${step}`,
+      properties: { step, complete },
+    });
+  }
   res.json(result.rows[0]);
 });
 
@@ -1830,7 +2380,8 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
 
 app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "assistant")) return;
+  const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "assistant");
+  if (!permission) return;
   const simulatedAt = req.body?.simulatedAt;
   const command = parseAdvisoryCommand(req.body?.command);
   if (!isScenarioTimestamp(simulatedAt) || !command) return res.status(400).json({ error: "Invalid counterfactual request" });
@@ -1851,7 +2402,7 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if"
   const inaction = replaySnapshot(simulatedAt, row.model_config);
   const recommended = counterfactualCockpitSnapshot(simulatedAt, recommendedCommand, row.model_config);
   const alternative = counterfactualCockpitSnapshot(simulatedAt, command, row.model_config);
-  res.json({
+  const response = {
     scenarioId: "gpu-training-ramp-v1",
     simulatedAt,
     modelVersionId: row.model_version_id,
@@ -1889,12 +2440,27 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if"
       },
     ],
     provenance: syntheticProvenance(undefined, row.model_version_id),
+  };
+  await recordLearningEvent({
+    organizationId: permission.organization_id,
+    userId: req.userId!,
+    facilityId: String(req.params.facilityId),
+    scenarioId: "gpu-training-ramp-v1",
+    eventName: "WHAT_IF_USED",
+    route: `/facilities/${req.params.facilityId}/recommendations/${req.params.recommendationId}`,
+    role: permission.role,
+    modelVersionId: row.model_version_id,
+    simulatedAt,
+    dedupeKey: `what-if-${req.params.recommendationId}-${simulatedAt}-${command.flowPercent}-${command.durationMinutes}`,
+    properties: { recommendationId: String(req.params.recommendationId) },
   });
+  res.json(response);
 });
 
 app.post("/api/facilities/:facilityId/recommendations/:recommendationId/evaluate", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "assistant")) return;
+  const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "assistant");
+  if (!permission) return;
   const simulatedAt = req.body?.simulatedAt;
   if (!isScenarioTimestamp(simulatedAt)) return res.status(400).json({ error: "Invalid simulation timestamp" });
 
@@ -1938,6 +2504,19 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/evaluate
       JSON.stringify(model.config),
     ],
   );
+  await recordLearningEvent({
+    organizationId: permission.organization_id,
+    userId: req.userId!,
+    facilityId: String(req.params.facilityId),
+    scenarioId: "gpu-training-ramp-v1",
+    eventName: "SAFETY_RESULT",
+    route: `/facilities/${req.params.facilityId}/recommendations/${req.params.recommendationId}`,
+    role: permission.role,
+    modelVersionId: model.model_version,
+    simulatedAt,
+    dedupeKey: `safety-${id}`,
+    properties: { recommendationId: String(req.params.recommendationId), outcome },
+  });
   res.status(201).json({
     id,
     outcome,
@@ -2122,6 +2701,23 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
       await client.query("UPDATE safety_evaluations SET used_at = now() WHERE id = $1", [suppliedEvaluationId]);
     }
     await client.query("COMMIT");
+    await recordLearningEvent({
+      organizationId: permission.organization_id,
+      userId: req.userId!,
+      facilityId: String(req.params.facilityId),
+      scenarioId: "gpu-training-ramp-v1",
+      eventName: "DECISION_RECORDED",
+      route: `/facilities/${req.params.facilityId}/recommendations/${req.params.recommendationId}`,
+      role: permission.role,
+      modelVersionId: activeModel.model_version,
+      simulatedAt,
+      dedupeKey: `decision-${decisionId}`,
+      properties: {
+        recommendationId: String(req.params.recommendationId),
+        decision,
+        outcome,
+      },
+    });
     res.status(201).json(auditResult.rows[0]);
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2148,8 +2744,22 @@ if (process.env.NODE_ENV === "production") {
   app.use(vite.middlewares);
 }
 
-app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+void purgeExpiredLearningRecords().catch(() => {});
+const learningRetentionTimer = setInterval(() => {
+  lastLearningPurgeAt = 0;
+  void purgeExpiredLearningRecords().catch(() => {});
+}, 60 * 60 * 1000);
+learningRetentionTimer.unref();
+
+app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   console.error(error);
+  const message = error instanceof Error ? error.message : String(error);
+  void recordLearningError({
+    userId: (req as AuthedRequest).userId,
+    category: /simulation|invariant|model contract/i.test(message) ? "SIMULATION_INVARIANT_FAILURE" : "APPLICATION_FAULT",
+    code: /simulation|invariant|model contract/i.test(message) ? "SERVER_SIMULATION_INVARIANT" : "SERVER_UNHANDLED_ERROR",
+    route: req.path,
+  });
   res.status(500).json({ error: "Internal server error" });
 });
 

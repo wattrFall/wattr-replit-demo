@@ -2,3 +2,4 @@
 - [Model-bound decisions](model-bound-decisions.md) — bind safety, incidents, and audits to immutable model config; reject approval after an active-version change.
 - [Forward migration parity](forward-migration-parity.md) — legacy upgrades must explicitly converge column types, nullability, checks, and FKs with clean installs.
 - [Grounded assistant boundaries](grounded-assistant-boundaries.md) — bind each answer and proposed action to the exact authorized record, model, scenario, and time.
+- [Product learning boundaries](product-learning-boundaries.md) — learning signals stay structured, facility-scoped, best-effort, sparse, and independently expired.

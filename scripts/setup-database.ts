@@ -56,6 +56,18 @@ try {
       version: "0007_decision_history_hardening",
       file: new URL("../database/migrations/0007_decision_history_hardening.sql", import.meta.url),
     },
+    {
+      version: "0008_product_learning",
+      file: new URL("../database/migrations/0008_product_learning.sql", import.meta.url),
+    },
+    {
+      version: "0009_product_learning_retention",
+      file: new URL("../database/migrations/0009_product_learning_retention.sql", import.meta.url),
+    },
+    {
+      version: "0010_product_learning_privacy",
+      file: new URL("../database/migrations/0010_product_learning_privacy.sql", import.meta.url),
+    },
   ];
 
   for (const migration of migrations) {

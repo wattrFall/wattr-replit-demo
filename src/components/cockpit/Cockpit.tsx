@@ -12,6 +12,7 @@ import { replayCockpitSnapshot, SCENARIO_DURATION_S, snapshotForAudit, type Cock
 import { compareControllers, graphSelection, thermalGraph, type GraphView, type ControllerComparison } from "@/lib/cockpit/workspaces";
 import { ROLES, type Role } from "@/lib/security/rolePolicy";
 import { assistantSuggestions, type AssistantResponse } from "@/lib/cockpit/assistant";
+import { learningSurfaceForPath, recordLearningEvent, reportLearningError } from "@/lib/cockpit/learning";
 
 type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model: boolean; assistant: boolean };
 type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number };
@@ -46,6 +47,17 @@ type MemberFacility = { facility_id: string; facility_name: string; can_view: bo
 type Member = { id: string; email: string | null; display_name: string | null; role: Role; is_admin: boolean; is_owner: boolean; facilities: MemberFacility[] };
 type SessionData = { me: Me; facilities: Facility[] };
 type ThemePreference = "light" | "dark" | "system";
+type LearningOutcomesData = {
+  scope: string;
+  retention: { eventsAndFeedbackDays: number; errorsDays: number };
+  journeyEvents: Array<{ event_name: string; count: number; users: number }>;
+  operatorSessions: { total: number; completed: number; abandoned: number; avg_time_to_understanding_s: number | null; avg_error_count: number | null };
+  safetyOutcomes: Array<{ outcome: string; count: number }>;
+  decisionOutcomes: Array<{ outcome: string; count: number }>;
+  feedback: { count: number; positive: number; neutral: number; negative: number };
+  errors: Array<{ category: string; count: number }>;
+  commonAssistantTopics: Array<{ topic: string; count: number }>;
+};
 
 const mono = "font-[family-name:var(--font-mono)]";
 const navigate = (path: string) => {
@@ -56,7 +68,17 @@ const navigate = (path: string) => {
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, init);
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    if (!path.startsWith("/api/learning/")) {
+      const category = response.status === 401 || response.status === 403 || response.status === 404
+        ? "PERMISSION_FAILURE"
+        : response.status === 502 || response.status === 503 || response.status === 504
+          ? "EXTERNAL_SERVICE_UNAVAILABLE"
+          : "APPLICATION_FAULT";
+      reportLearningError(category, `HTTP_${response.status}`, { route: location.pathname });
+    }
+    throw new Error(body.error || `Request failed (${response.status})`);
+  }
   return body as T;
 }
 const post = <T,>(path: string, body: unknown) => api<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -138,6 +160,37 @@ function Metric({ label, value, unit, sub, warn, help }: { label: string; value:
 function PageHead({ eyebrow, title, detail, action }: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
   return <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><div className={`${mono} mb-2 text-[10px] tracking-[.2em] text-cyan-400`}>{eyebrow}</div><h1 className="text-2xl font-semibold tracking-tight text-slate-100 md:text-3xl">{title}</h1><p className="mt-1 text-sm text-slate-500">{detail}</p></div>{action}</div>;
 }
+
+function ContextualFeedback({ facility }: { facility?: Facility }) {
+  const [sentiment, setSentiment] = useState<"POSITIVE" | "NEUTRAL" | "NEGATIVE">("NEUTRAL");
+  const [feedbackCode, setFeedbackCode] = useState("HELPFUL");
+  const [message, setMessage] = useState("");
+  const submit = async () => {
+    try {
+      await post("/api/learning/feedback", {
+        ...(facility ? { facilityId: facility.id } : {}),
+        surface: learningSurfaceForPath(location.pathname),
+        sentiment,
+        feedbackCode,
+      });
+      setMessage("Feedback saved with this product surface.");
+    } catch (cause) {
+      setMessage(`Feedback was not saved: ${String(cause)}`);
+    }
+  };
+  return <details className="disclosure mt-8">
+    <summary>Share feedback on this workspace<ArrowRight size={13} aria-hidden="true"/></summary>
+    <div className="disclosure-content">
+      <p className="text-xs text-slate-500">Optional and non-blocking. Structured categories prevent facility-sensitive details or operator notes from entering learning records.</p>
+      <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Feedback sentiment">
+        {(["POSITIVE", "NEUTRAL", "NEGATIVE"] as const).map((item) => <button type="button" key={item} className={`speed ${sentiment === item ? "selected" : ""}`} aria-pressed={sentiment === item} onClick={() => setSentiment(item)}>{item.toLowerCase()}</button>)}
+      </div>
+      <label className="field mt-3 block">What best describes this surface?<select className="select mt-2 w-full" value={feedbackCode} onChange={(event) => setFeedbackCode(event.target.value)}><option value="HELPFUL">Helpful</option><option value="UNCLEAR">Unclear</option><option value="MISSING_CONTEXT">Missing context</option><option value="TOO_SLOW">Too slow</option><option value="UNEXPECTED_RESULT">Unexpected result</option><option value="OTHER">Other product friction</option></select></label>
+      <div className="mt-3 flex items-center gap-3"><button type="button" className="button secondary" onClick={submit}>Send feedback</button>{message && <span className="text-xs text-slate-500" role="status">{message}</span>}</div>
+    </div>
+  </details>;
+}
+
 function Shell({ data, facility, children }: { data: SessionData; facility?: Facility; children: ReactNode }) {
   const [mobile, setMobile] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -156,6 +209,7 @@ function Shell({ data, facility, children }: { data: SessionData; facility?: Fac
       ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
     ] : []),
     ...(data.me.is_admin ? [[UserCog, "Access administration", "/admin"] as [LucideIcon, string, string]] : []),
+    ...((data.me.role === "PORTFOLIO_MANAGER" || data.me.is_admin) ? [[Activity, "Learning outcomes", "/learning"] as [LucideIcon, string, string]] : []),
   ];
   return <div className="cockpit min-h-[100dvh] bg-[#0a1018] text-slate-200">
     <a className="skip-link" href="#main-content">Skip to main content</a>
@@ -167,7 +221,7 @@ function Shell({ data, facility, children }: { data: SessionData; facility?: Fac
     </header>
     {mobile && <button type="button" className="mobile-scrim md:hidden" aria-label="Close navigation" onClick={() => { setMobile(false); menuButtonRef.current?.focus(); }}/>}
     <aside id="cockpit-navigation" aria-label="Primary navigation" className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><nav className="space-y-1">{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/>{label}</button>)}</nav><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className="cockpit-nav"><CircleHelp size={16} aria-hidden="true"/>Help & tutorials</button></div></aside>
-    <main id="main-content" tabIndex={-1} className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}</div></main>
+    <main id="main-content" tabIndex={-1} className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}<ContextualFeedback facility={facility}/></div></main>
   </div>;
 }
 
@@ -208,6 +262,12 @@ function Portfolio({ data }: { data: SessionData }) {
     totalPower: total.totalPower + row.snapshot.totalPowerKw,
   }), { headroom: 0, incidents: 0, itPower: 0, totalPower: 0 });
   const toggleCompare = (id: string) => setCompareIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : ids.length < 3 ? [...ids, id] : ids);
+  const openFacility = (facility: Facility) => {
+    void recordLearningEvent("FACILITY_DRILLDOWN", {
+      facilityId: facility.id,
+    });
+    navigate(`/facilities/${facility.id}/operations`);
+  };
   const compared = rows.filter((row) => compareIds.includes(row.facility.id));
   return <Shell data={data}>
     <PageHead eyebrow={`PORTFOLIO COMMAND / ${data.facilities.length.toString().padStart(2, "0")} AUTHORIZED`} title="Facility health" detail="Ranked operating context from your authorized sites." action={<Status>{formatSimulatedAt(simulatedAt).slice(0, 16)} UTC</Status>}/>
@@ -224,8 +284,8 @@ function Portfolio({ data }: { data: SessionData }) {
         <label className="flex items-center gap-2 text-xs text-slate-500">Rank by <select aria-label="Rank facilities by" className="select" value={sort} onChange={(event) => setSort(event.target.value as PortfolioSort)}><option value="attention">Attention</option><option value="risk">Forecast risk</option><option value="power">IT power</option><option value="cooling">Cooling load</option><option value="efficiency">PUE efficiency</option><option value="recommendation">Recommendation status</option></select></label>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-[#0d1722] px-4 py-3 text-xs text-slate-400"><span><b className="text-slate-200">{filtered.length}</b> of {rows.length} authorized sites shown</span><span className="flex items-center gap-2"><Layers3 size={14} className="text-cyan-300"/>Compare up to 3 sites</span></div>
-      <div className="hidden overflow-x-auto md:block"><table className="data-table min-w-[980px]"><caption className="sr-only">Authorized facility ranking</caption><thead><tr><th>Compare</th><th>Facility</th><th><ArrowDownUp size={12} className="inline"/> Health</th><th>IT power</th><th>Peak inlet</th><th>Cooling</th><th>PUE</th><th>Recommendation</th><th>Model</th><th/></tr></thead><tbody>{filtered.map(({ facility, snapshot }) => <tr key={facility.id} className="hover:bg-slate-800/30"><td><input aria-label={`Compare ${facility.name}`} type="checkbox" checked={compareIds.includes(facility.id)} onChange={() => toggleCompare(facility.id)} disabled={!compareIds.includes(facility.id) && compareIds.length >= 3}/></td><td><b>{facility.name}</b><small className="mt-1 block text-slate-500">{facility.location} · {facility.id}</small></td><td><Status tone={snapshot.forecast.risk === "critical" ? "bad" : snapshot.incident.open ? "warn" : "good"}>{snapshot.forecast.risk === "clear" ? "Nominal" : snapshot.forecast.risk}</Status><small className="mt-1 block text-slate-500">{snapshot.forecast.baselinePeakC.toFixed(1)}°C forecast</small></td><td>{snapshot.itPowerKw.toLocaleString()} kW</td><td className={snapshot.peakInletC >= snapshot.incident.limitC ? "text-amber-300" : ""}>{snapshot.peakInletC.toFixed(1)}°C</td><td>{snapshot.fanPercent.toFixed(0)}%</td><td>{snapshot.pue.toFixed(3)}</td><td><Status tone={facility.recommendation_status === "PROPOSED" ? "warn" : "good"}>{facility.recommendation_status}</Status></td><td><span className={`${mono} text-[10px] text-slate-500`}>{facility.model_version}</span></td><td><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/operations`)}>Open <ArrowRight size={14}/></button></td></tr>)}</tbody></table></div>
-      <div className="space-y-2 p-3 md:hidden">{filtered.map(({ facility, snapshot }) => <article key={facility.id} className="rounded-md border border-slate-800 p-4"><div className="flex items-start justify-between gap-3"><div><b>{facility.name}</b><p className="mt-1 text-xs text-slate-500">{facility.location}</p></div><Status tone={snapshot.incident.open ? "warn" : "good"}>{snapshot.incident.open ? "Attention" : "Nominal"}</Status></div><div className="mt-4 grid grid-cols-2 gap-3 text-xs"><span className="text-slate-500">Peak <b className="ml-1 text-slate-200">{snapshot.peakInletC.toFixed(1)}°C</b></span><span className="text-slate-500">PUE <b className="ml-1 text-slate-200">{snapshot.pue.toFixed(3)}</b></span><span className="text-slate-500">Power <b className="ml-1 text-slate-200">{snapshot.itPowerKw.toLocaleString()} kW</b></span><span className="text-slate-500">Cooling <b className="ml-1 text-slate-200">{snapshot.fanPercent.toFixed(0)}%</b></span><span className="col-span-2 text-slate-500">Recommendation <b className="ml-1 text-slate-200">{facility.recommendation_status}</b></span></div><div className="mt-4 flex items-center justify-between"><label className="text-xs text-slate-500"><input type="checkbox" checked={compareIds.includes(facility.id)} onChange={() => toggleCompare(facility.id)} className="mr-2"/>Compare</label><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/operations`)}>Open <ArrowRight size={14}/></button></div></article>)}</div>
+      <div className="hidden overflow-x-auto md:block"><table className="data-table min-w-[980px]"><caption className="sr-only">Authorized facility ranking</caption><thead><tr><th>Compare</th><th>Facility</th><th><ArrowDownUp size={12} className="inline"/> Health</th><th>IT power</th><th>Peak inlet</th><th>Cooling</th><th>PUE</th><th>Recommendation</th><th>Model</th><th/></tr></thead><tbody>{filtered.map(({ facility, snapshot }) => <tr key={facility.id} className="hover:bg-slate-800/30"><td><input aria-label={`Compare ${facility.name}`} type="checkbox" checked={compareIds.includes(facility.id)} onChange={() => toggleCompare(facility.id)} disabled={!compareIds.includes(facility.id) && compareIds.length >= 3}/></td><td><b>{facility.name}</b><small className="mt-1 block text-slate-500">{facility.location} · {facility.id}</small></td><td><Status tone={snapshot.forecast.risk === "critical" ? "bad" : snapshot.incident.open ? "warn" : "good"}>{snapshot.forecast.risk === "clear" ? "Nominal" : snapshot.forecast.risk}</Status><small className="mt-1 block text-slate-500">{snapshot.forecast.baselinePeakC.toFixed(1)}°C forecast</small></td><td>{snapshot.itPowerKw.toLocaleString()} kW</td><td className={snapshot.peakInletC >= snapshot.incident.limitC ? "text-amber-300" : ""}>{snapshot.peakInletC.toFixed(1)}°C</td><td>{snapshot.fanPercent.toFixed(0)}%</td><td>{snapshot.pue.toFixed(3)}</td><td><Status tone={facility.recommendation_status === "PROPOSED" ? "warn" : "good"}>{facility.recommendation_status}</Status></td><td><span className={`${mono} text-[10px] text-slate-500`}>{facility.model_version}</span></td><td><button className="button secondary" onClick={() => openFacility(facility)}>Open <ArrowRight size={14}/></button></td></tr>)}</tbody></table></div>
+      <div className="space-y-2 p-3 md:hidden">{filtered.map(({ facility, snapshot }) => <article key={facility.id} className="rounded-md border border-slate-800 p-4"><div className="flex items-start justify-between gap-3"><div><b>{facility.name}</b><p className="mt-1 text-xs text-slate-500">{facility.location}</p></div><Status tone={snapshot.incident.open ? "warn" : "good"}>{snapshot.incident.open ? "Attention" : "Nominal"}</Status></div><div className="mt-4 grid grid-cols-2 gap-3 text-xs"><span className="text-slate-500">Peak <b className="ml-1 text-slate-200">{snapshot.peakInletC.toFixed(1)}°C</b></span><span className="text-slate-500">PUE <b className="ml-1 text-slate-200">{snapshot.pue.toFixed(3)}</b></span><span className="text-slate-500">Power <b className="ml-1 text-slate-200">{snapshot.itPowerKw.toLocaleString()} kW</b></span><span className="text-slate-500">Cooling <b className="ml-1 text-slate-200">{snapshot.fanPercent.toFixed(0)}%</b></span><span className="col-span-2 text-slate-500">Recommendation <b className="ml-1 text-slate-200">{facility.recommendation_status}</b></span></div><div className="mt-4 flex items-center justify-between"><label className="text-xs text-slate-500"><input type="checkbox" checked={compareIds.includes(facility.id)} onChange={() => toggleCompare(facility.id)} className="mr-2"/>Compare</label><button className="button secondary" onClick={() => openFacility(facility)}>Open <ArrowRight size={14}/></button></div></article>)}</div>
       {!filtered.length && <p className="p-8 text-center text-sm text-slate-500">No authorized facilities match those filters.</p>}
     </section>
     {compared.length > 0 && <section className="panel mt-4 overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><div className="eyebrow">SIDE-BY-SIDE REVIEW</div><h2 className="mt-1 font-semibold">{compared.length} selected {compared.length === 1 ? "site" : "sites"}</h2></div><button className="button secondary" onClick={() => setCompareIds([])}>Clear comparison</button></div><div className="grid gap-3 p-4 md:grid-cols-3">{compared.map(({ facility, snapshot }) => <div key={facility.id} className="rounded-md border border-slate-800 p-4"><div className="flex items-center justify-between"><b>{facility.name}</b><Status tone={snapshot.incident.open ? "warn" : "good"}>{snapshot.incident.open ? "Watch" : "Nominal"}</Status></div><div className="mt-4 grid grid-cols-2 gap-3 text-xs"><Metric label="Risk" value={snapshot.forecast.baselinePeakC.toFixed(1)} unit="°C" sub={`${snapshot.forecast.horizonS / 60}m forecast`}/><Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub="current load"/><Metric label="Cooling" value={snapshot.fanPercent.toFixed(0)} unit="%" sub="fan / pump command"/><Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="physical balance"/></div><p className="mt-3 text-xs text-slate-500">Recommendation <b className="ml-1 text-slate-200">{facility.recommendation_status}</b></p></div>)}</div></section>}
@@ -269,6 +329,69 @@ function Transparency({ facility, snapshot }: { facility: Facility; snapshot: Co
 type TwinView = "physical" | "thermal";
 type TwinOverlay = "thermal" | "flow" | "incident";
 
+function OperatorTestSession({ facility, elapsedS }: { facility: Facility; elapsedS: number }) {
+  const [sessionId, setSessionId] = useState("");
+  const [startedAt, setStartedAt] = useState(0);
+  const [errorCount, setErrorCount] = useState(0);
+  const [scenarioCompleted, setScenarioCompleted] = useState(false);
+  const [feedbackCode, setFeedbackCode] = useState("CLEAR");
+  const [abandonmentCode, setAbandonmentCode] = useState("MODERATOR_ENDED");
+  const [message, setMessage] = useState("");
+  const start = async () => {
+    try {
+      const session = await post<{ id: string; started_at: string }>("/api/learning/operator-sessions", {
+        facilityId: facility.id,
+      });
+      setSessionId(session.id);
+      setStartedAt(Date.now());
+      setMessage("Evaluation session active.");
+    } catch (cause) {
+      setMessage(`Session could not start: ${String(cause)}`);
+    }
+  };
+  const recordFriction = async () => {
+    if (!sessionId) return;
+    const next = errorCount + 1;
+    setErrorCount(next);
+    await patch(`/api/learning/operator-sessions/${sessionId}`, { errorCount: next, surface: learningSurfaceForPath(location.pathname) });
+    setMessage("Friction noted.");
+  };
+  const finish = async (status: "COMPLETED" | "ABANDONED") => {
+    if (!sessionId) return;
+    const timeToUnderstandingS = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    try {
+      await patch(`/api/learning/operator-sessions/${sessionId}`, {
+        status,
+        scenarioCompleted,
+        timeToUnderstandingS: status === "COMPLETED" ? timeToUnderstandingS : undefined,
+        errorCount,
+        abandonmentCode: status === "ABANDONED" ? abandonmentCode : undefined,
+        qualitativeFeedbackCode: feedbackCode,
+        surface: learningSurfaceForPath(location.pathname),
+      });
+      setSessionId("");
+      setMessage(status === "COMPLETED" ? "Understanding outcome recorded." : "Abandonment recorded.");
+    } catch (cause) {
+      setMessage(`Session outcome was not saved: ${String(cause)}`);
+    }
+  };
+  return <details className="disclosure mb-4">
+    <summary>Operator evaluation session<ArrowRight size={13} aria-hidden="true"/></summary>
+    <div className="disclosure-content">
+      <p className="text-xs text-slate-500">Optional moderated testing only. This records workflow outcomes, not replay telemetry.</p>
+      {!sessionId ? <button type="button" className="button secondary mt-3" onClick={start}>Start evaluation session</button> : <>
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+          <Status>ACTIVE</Status><span>{Math.round(elapsedS / 60)}m into scenario</span>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={scenarioCompleted} onChange={(event) => setScenarioCompleted(event.target.checked)}/>Core scenario completed</label>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="field">Understanding<select className="select mt-2 w-full" value={feedbackCode} onChange={(event) => setFeedbackCode(event.target.value)}><option value="CLEAR">Clear</option><option value="PARTLY_CLEAR">Partly clear</option><option value="UNCLEAR">Unclear</option><option value="TOO_SLOW">Too slow</option><option value="MISSING_CONTEXT">Missing context</option><option value="OTHER">Other</option></select></label><label className="field">If abandoned<select className="select mt-2 w-full" value={abandonmentCode} onChange={(event) => setAbandonmentCode(event.target.value)}><option value="MODERATOR_ENDED">Moderator ended</option><option value="NAVIGATION_FRICTION">Navigation friction</option><option value="UNCLEAR_FORECAST">Forecast unclear</option><option value="UNCLEAR_RECOMMENDATION">Recommendation unclear</option><option value="PERMISSION_BLOCK">Permission blocked</option><option value="TECHNICAL_ERROR">Technical error</option><option value="OTHER">Other</option></select></label></div>
+        <div className="mt-3 flex flex-wrap gap-2"><button type="button" className="button secondary" onClick={recordFriction}>Record friction ({errorCount})</button><button type="button" className="button primary" onClick={() => finish("COMPLETED")}>Mark thread understood</button><button type="button" className="button secondary" onClick={() => finish("ABANDONED")}>End as abandoned</button></div>
+      </>}
+      {message && <p className="mt-3 text-xs text-slate-500" role="status">{message}</p>}
+    </div>
+  </details>;
+}
+
 function Operations({ data, facility }: { data: SessionData; facility: Facility }) {
   const s = useScenarioSession(), snapshot = s.simulation.snapshot;
   const [view, setView] = useState<TwinView>("physical");
@@ -282,6 +405,7 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
   return <Shell data={data} facility={facility}>
     <PageHead eyebrow={`FACILITY / ${facility.id.toUpperCase()} / OPERATIONS`} title={facility.name} detail={`${facility.location} · deterministic GPU Training Ramp · ${facility.provenance}`} action={<Status tone="warn">REPLAY-CONTROLLED</Status>}/>
     <ReplayBar/>
+    {data.me.role === "OPERATOR" && <OperatorTestSession facility={facility} elapsedS={snapshot.elapsedS}/>}
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
       <Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}%`} help="The modeled electrical load used by computing equipment. It is the main heat input to this scenario."/>
       <Metric label="Total facility" value={snapshot.totalPowerKw.toLocaleString()} unit="kW" sub="physical power balance" help="IT power plus modeled cooling and facility overhead at this replay instant."/>
@@ -324,6 +448,13 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const command = { assetId: "cdu-03" as const, flowPercent, durationMinutes };
+
+  useEffect(() => {
+    void recordLearningEvent("RECOMMENDATION_INSPECTED", {
+      facilityId: facility.id,
+      simulatedAt: snapshot.simulatedAt,
+    });
+  }, [facility.id]);
 
   useEffect(() => {
     setComparison(null);
@@ -521,6 +652,12 @@ function GraphPage({ data, facility }: { data: SessionData; facility: Facility }
   const snapshot = useScenarioSession((s) => s.simulation.snapshot), [view, setView] = useState<GraphView>("topology"), graph = useMemo(() => thermalGraph(snapshot, view), [snapshot, view]), [selectedId, setSelectedId] = useState("cdu-03");
   const selected = graph.nodes.find(node => node.id === selectedId) ?? graph.nodes[0], related = graphSelection(graph, selected.id);
   const nodeTone = (node: typeof graph.nodes[number]) => view === "forecast" && node.risk ? "border-amber-400 bg-amber-400/10" : view === "current" && node.id === "cdu-03" ? "border-cyan-300 bg-cyan-300/10" : "border-slate-700 bg-slate-900";
+  useEffect(() => {
+    void recordLearningEvent("ENGINEERING_TOOL_USED", {
+      facilityId: facility.id,
+      simulatedAt: snapshot.simulatedAt,
+    });
+  }, [facility.id, view]);
   return <Shell data={data} facility={facility}><PageHead eyebrow="THERMAL DEPENDENCY GRAPH" title="Heat-flow topology" detail="Select an asset to trace what affects it, where heat goes, and what would be impacted by degradation."/><ReplayBar/><div className="mb-4 flex flex-wrap gap-2">{(["topology","current","forecast"] as GraphView[]).map(item => <button key={item} onClick={() => setView(item)} className={`button ${view === item ? "primary" : "secondary"}`}>{item === "topology" ? "Topology" : item === "current" ? "Current state" : "Forecast state"}</button>)}</div><div className="grid gap-4 xl:grid-cols-[1fr_340px]"><section className="panel p-5"><div className="mb-5 flex items-center justify-between"><div><h2 className="font-semibold">{view === "topology" ? "THERMAL DEPENDENCY GRAPH" : view.toUpperCase()}</h2><p className="mt-1 text-xs text-slate-500">GPU Training Ramp · {formatSimulatedAt(snapshot.simulatedAt)}</p></div><GitBranch className="text-cyan-300"/></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{graph.nodes.map(node => <button key={node.id} onClick={() => setSelectedId(node.id)} className={`rounded-md border p-4 text-left transition-colors ${nodeTone(node)} ${selected.id === node.id ? "ring-2 ring-cyan-300" : ""}`}><div className="flex justify-between gap-2"><span className="text-[10px] uppercase tracking-[.14em] text-slate-500">{node.kind}</span>{node.risk&&<span className="text-[10px] text-amber-300">RISK</span>}</div><b className="mt-2 block">{node.label}</b><span className="mt-1 block text-xs text-slate-500">{node.detail}</span><span className={`${mono} mt-3 block text-xs text-cyan-300`}>{node.value}</span></button>)}</div><div className="mt-5 border-t border-slate-800 pt-4"><div className="eyebrow">RELATIONSHIPS</div><div className="mt-3 grid gap-2 sm:grid-cols-2">{graph.edges.filter(edge => edge.from === selected.id || edge.to === selected.id).map(edge => <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 text-xs"><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.from)?.label}</span><ArrowRight size={13} className="text-cyan-300"/><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.to)?.label}</span><small className="text-slate-500">· {edge.label}</small></div>)}</div></div></section><aside className="panel p-5"><div className="eyebrow">SELECTED ASSET</div><h2 className="mt-2 text-xl font-semibold">{selected.label}</h2><p className="mt-2 text-sm text-slate-400">{selected.detail} · {selected.value}</p><div className="mt-6 space-y-5"><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowUp size={13}/>Upstream / what affects it</div><ul className="mt-2 space-y-1 text-sm">{related.upstream.length ? related.upstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Source node</li>}</ul></div><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowDown size={13}/>Downstream / carries heat away</div><ul className="mt-2 space-y-1 text-sm">{related.downstream.length ? related.downstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Terminal node</li>}</ul></div><div className="border-t border-slate-800 pt-4"><div className="text-[10px] uppercase tracking-[.14em] text-amber-300">Impact if degraded</div><p className="mt-2 text-sm leading-6 text-slate-400">{related.impact.length ? `${related.impact.map(node => node.label).join(", ")} would require review.` : "No downstream impact is modeled."}</p></div></div></aside></div></Shell>;
 }
 
@@ -528,6 +665,11 @@ function ModelStudio({ data, facility }: { data: SessionData; facility: Facility
   const [versions, setVersions] = useState<ModelVersion[]>([]), [config, setConfig] = useState('{"scenario":"gpu-training-ramp-v1","seed":4103,"thermalMass":0.82,"responseLag":12}'), [message, setMessage] = useState(""), [error, setError] = useState("");
   const refresh = () => api<ModelVersion[]>(`/api/facilities/${facility.id}/model/versions`).then(setVersions).catch(e => setError(String(e)));
   useEffect(() => { void refresh(); }, [facility.id]);
+  useEffect(() => {
+    void recordLearningEvent("ENGINEERING_TOOL_USED", {
+      facilityId: facility.id,
+    });
+  }, [facility.id]);
   const createDraft = async () => { try { const parsed = JSON.parse(config); const result = await post<ModelVersion>(`/api/facilities/${facility.id}/model/versions`, { config: parsed }); setVersions(v => [result, ...v]); setMessage(`${result.id} created as DRAFT`); setError(""); } catch (e) { setError(String(e)); } };
   const action = async (path: string, success: string, body: unknown = {}, reloadModel = false) => { try { await post(path, body); await refresh(); if (reloadModel) { const active = (await api<Facility[]>("/api/facilities")).find(item => item.id === facility.id); if (active) useScenarioSession.getState().setModelConfig(active.model_config); } setMessage(success); setError(""); } catch (e) { setError(String(e)); } };
   return <Shell data={data} facility={facility}><PageHead eyebrow="MODEL ADMINISTRATION / DEMO MODEL" title="Model Studio" detail="Edit the facility representation Operations consumes. Changes are validated, versioned, and explicitly published." action={<Status tone="warn">DEMO MODEL</Status>}/><div className="grid gap-4 xl:grid-cols-[.9fr_1.1fr]"><section className="panel p-6"><div className="flex items-center gap-3"><SlidersHorizontal className="text-cyan-300"/><div><h2 className="font-semibold">Create facility model version</h2><p className="text-xs text-slate-500">Synthetic simulation parameters only</p></div></div><label className="mt-6 block text-xs text-slate-500" htmlFor="model-config">Configuration JSON</label><textarea id="model-config" value={config} onChange={e=>setConfig(e.target.value)} className="textarea mt-2 min-h-[170px] w-full font-mono text-xs" aria-describedby="model-config-help"/><p id="model-config-help" className="mt-2 text-xs text-slate-500">Include scenario, seed, thermal mass, and response lag. Invalid JSON cannot be saved.</p><button className="button primary mt-4" onClick={createDraft}><Save size={15}/>Save draft version</button>{message&&<p role="status" className="mt-4 text-sm text-teal-300">{message}</p>}{error&&<p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}</section><section className="panel overflow-hidden"><div className="border-b border-slate-800 p-5"><h2 className="font-semibold">Version history</h2><p className="mt-1 text-xs text-slate-500">Published version: {facility.model_version}</p></div>{versions.map(version => <div key={version.id} className="border-b border-slate-800 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className={`${mono} text-sm text-cyan-300`}>{version.id}</div><p className="mt-1 text-xs text-slate-500">{new Date(version.created_at).toLocaleString()} · {Object.keys(version.config).length} parameters</p></div><Status tone={version.status === "PUBLISHED" ? "good" : version.status === "DRAFT" ? "warn" : "good"}>{version.status}</Status></div><div className="mt-4 flex flex-wrap gap-2">{version.status === "DRAFT"&&<button className="button secondary" onClick={() => action(`/api/facilities/${facility.id}/model/versions/${version.id}/validate`, `${version.id} validated`)}><Check size={14}/>Validate</button>}{version.status === "VALIDATED"&&<button className="button primary" onClick={() => action(`/api/facilities/${facility.id}/model/versions/${version.id}/publish`, `${version.id} published to Operations`, {}, true)}><ArrowUp size={14}/>Publish</button>}{version.status !== "PUBLISHED"&&version.status !== "DRAFT"&&<button className="button secondary" onClick={() => action(`/api/facilities/${facility.id}/model/rollback`, `Operations rolled back to ${version.id}`, { versionId: version.id }, true)}><RotateCcw size={14}/>Rollback to this version</button>}</div></div>)}{versions.length===0&&<p className="p-5 text-sm text-slate-500">No model versions returned.</p>}</section></div></Shell>;
@@ -535,7 +677,13 @@ function ModelStudio({ data, facility }: { data: SessionData; facility: Facility
 
 function ModelLab({ data, facility }: { data: SessionData; facility: Facility }) {
   const snapshot = useScenarioSession((s) => s.simulation.snapshot), [comparison, setComparison] = useState<ControllerComparison | null>(null);
-  const run = () => setComparison(compareControllers(snapshot));
+  const run = () => {
+    setComparison(compareControllers(snapshot));
+    void recordLearningEvent("ENGINEERING_TOOL_USED", {
+      facilityId: facility.id,
+      simulatedAt: snapshot.simulatedAt,
+    });
+  };
   return <Shell data={data} facility={facility}><PageHead eyebrow="MODEL LAB / PHYSICAL AI" title="Controller comparison" detail="Every controller receives the same initial state and event stream. This is a comparison harness, not a superiority claim." action={<Status tone="warn">SYNTHETIC</Status>}/><ReplayBar/><section className="panel p-6"><div className="grid gap-4 md:grid-cols-3"><div><div className="eyebrow">INITIAL STATE</div><p className="mt-2 text-sm">{comparison?.initialState ?? `${snapshot.workloadPercent}% workload · ${snapshot.itPowerKw.toLocaleString()} kW IT · ${snapshot.rackCount} racks`}</p></div><div><div className="eyebrow">SHARED EVENTS</div><p className="mt-2 text-sm">{comparison?.events.join(" → ") ?? "Training ramp → power rise → CDU response lag"}</p></div><div className="flex items-end md:justify-end"><button className="button primary" onClick={run}><Play size={15}/>Run same-input comparison</button></div></div></section>{comparison&&<section className="panel mt-4 overflow-x-auto"><table className="data-table min-w-[900px]"><caption className="sr-only">Controller comparison results</caption><thead><tr><th>Controller</th><th>Peak temp</th><th>Degree-minutes</th><th>Warning lead</th><th>Cooling energy</th><th>Interventions</th><th>Inference events</th><th>Objective</th></tr></thead><tbody>{comparison.results.map(result => <tr key={result.id}><td><b>{result.name}</b><small className="mt-1 block text-slate-500">{result.architecturalMetric}: {result.architecturalValue}</small></td><td>{result.peakC.toFixed(1)}°C</td><td>{result.degreeMinutes}</td><td>{result.warningLeadMinutes} min</td><td>{result.coolingEnergyKwh} kWh</td><td>{result.interventions}</td><td>{result.inferenceEvents || "continuous"}</td><td>{result.objective}</td></tr>)}</tbody></table><p className="p-5 text-xs text-slate-500">SNN rows show architectural event metrics where measured compute energy is unavailable. No energy-efficiency percentage is inferred.</p></section>}</Shell>;
 }
 
@@ -585,6 +733,36 @@ function AccessAdministration({ data }: { data: SessionData }) {
   return <Shell data={data}><PageHead eyebrow="ORGANIZATION / ACCESS ADMINISTRATION" title="People and facility permissions" detail="Organization roles and site grants take effect on the next authorized request. Every change is retained in administrative history."/>
     <section className="panel mb-4 p-5"><h2 className="font-semibold">Provision a member</h2><div className="mt-4 grid gap-3 md:grid-cols-5"><input className="input" placeholder="Clerk user ID" value={draft.userId} onChange={event=>setDraft({...draft,userId:event.target.value})}/><input className="input" placeholder="Display name" value={draft.displayName} onChange={event=>setDraft({...draft,displayName:event.target.value})}/><input className="input" placeholder="Email (optional)" value={draft.email} onChange={event=>setDraft({...draft,email:event.target.value})}/><select className="select" value={draft.role} onChange={event=>setDraft({...draft,role:event.target.value as Role})}>{ROLES.map(role=><option key={role}>{role}</option>)}</select><button className="button primary justify-center" disabled={!draft.userId} onClick={()=>saveMember(draft)}>Save membership</button></div>{data.me.is_owner&&<label className="mt-3 flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={draft.isAdmin} onChange={event=>setDraft({...draft,isAdmin:event.target.checked})}/>Grant organization administration</label>}{message&&<p role="status" className="mt-3 text-sm text-teal-300">{message}</p>}{error&&<p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}</section>
     <div className="grid gap-4 xl:grid-cols-[1fr_.7fr]"><section className="space-y-3">{members.map(member=><article key={member.id} className="panel p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><b>{member.display_name ?? member.id}</b>{member.is_owner&&<Status>OWNER</Status>}{member.is_admin&&!member.is_owner&&<Status>ADMIN</Status>}</div><p className="mt-1 text-xs text-slate-500">{member.email ?? member.id}</p></div><div className="flex gap-2"><select className="select" value={member.role} disabled={member.is_owner} onChange={event=>saveMember({userId:member.id,role:event.target.value as Role,isAdmin:member.is_admin})}>{ROLES.map(role=><option key={role}>{role}</option>)}</select>{!member.is_owner&&member.id!==data.me.id&&<button className="button secondary" aria-label={`Revoke ${member.display_name ?? member.id}`} onClick={()=>revoke(member)}><Trash2 size={14}/></button>}</div></div><div className="mt-4 space-y-2">{member.facilities.map(facility=><div key={facility.facility_id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 p-3"><span className="text-sm font-medium">{facility.facility_name}</span><div className="flex flex-wrap gap-4 text-xs text-slate-400">{([["View","can_view"],["Operate","can_operate"],["Edit model","can_edit_model"]] as const).map(([label,key])=><label key={key} className="flex items-center gap-2"><input type="checkbox" checked={facility[key]} disabled={key!=="can_view"&&!facility.can_view} onChange={event=>saveGrant(member,facility,{[key]:event.target.checked,...(key==="can_view"&&!event.target.checked?{can_operate:false,can_edit_model:false}:{})})}/>{label}</label>)}</div></div>)}</div></article>)}</section><aside className="panel overflow-hidden"><div className="border-b border-slate-800 p-5"><h2 className="font-semibold">Administrative history</h2><p className="mt-1 text-xs text-slate-500">Immutable role and facility changes</p></div>{audit.map(record=><div key={record.id} className="border-b border-slate-800 p-4"><Status>{record.action.replace(/_/g," ")}</Status><p className="mt-2 text-xs text-slate-400">{record.target_user_id ?? "Organization"}{record.facility_id ? ` · ${record.facility_id}` : ""}</p><p className="mt-1 text-[10px] text-slate-500">{new Date(record.created_at).toLocaleString()} · by {record.actor_user_id}</p></div>)}{!audit.length&&<p className="p-5 text-sm text-slate-500">No access changes recorded yet.</p>}</aside></div>
+  </Shell>;
+}
+
+function LearningOutcomes({ data }: { data: SessionData }) {
+  const [outcomes, setOutcomes] = useState<LearningOutcomesData | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api<LearningOutcomesData>("/api/learning/outcomes").then(setOutcomes).catch((cause) => setError(String(cause)));
+  }, []);
+  const eventCount = (name: string) => outcomes?.journeyEvents.find((item) => item.event_name === name)?.count ?? 0;
+  return <Shell data={data}>
+    <PageHead eyebrow="PRODUCT LEARNING / PERMISSION CONTROLLED" title="Core journey outcomes" detail="Sparse workflow outcomes for managers and administrators. No replay ticks, raw questions, operator notes, or individual feedback are exposed."/>
+    {error && <p className="panel p-5 text-red-300" role="alert">{error}</p>}
+    {!outcomes && !error && <p className="panel p-5 text-slate-500">Loading outcome summaries…</p>}
+    {outcomes && <>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <Metric label="Facility drilldowns" value={String(eventCount("FACILITY_DRILLDOWN"))} sub="authorized site opens"/>
+        <Metric label="Incident reviews" value={String(eventCount("INCIDENT_REVIEWED"))} sub="persisted investigations"/>
+        <Metric label="What-if uses" value={String(eventCount("WHAT_IF_USED"))} sub="same-input comparisons"/>
+        <Metric label="Safety results" value={String(eventCount("SAFETY_RESULT"))} sub="server-verified outcomes"/>
+        <Metric label="Decisions" value={String(eventCount("DECISION_RECORDED"))} sub="immutable dispositions"/>
+      </div>
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
+        <section className="panel p-5"><div className="eyebrow">OPERATOR UNDERSTANDING</div><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><Metric label="Sessions" value={String(outcomes.operatorSessions.total ?? 0)} sub="moderated tests"/><Metric label="Completed" value={String(outcomes.operatorSessions.completed ?? 0)} sub="thread understood"/><Metric label="Abandoned" value={String(outcomes.operatorSessions.abandoned ?? 0)} sub="ended early" warn={Boolean(outcomes.operatorSessions.abandoned)}/><Metric label="Avg. understanding" value={outcomes.operatorSessions.avg_time_to_understanding_s == null ? "—" : String(outcomes.operatorSessions.avg_time_to_understanding_s)} unit="s" sub={`avg. errors ${outcomes.operatorSessions.avg_error_count ?? 0}`}/></div></section>
+        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL FEEDBACK</div><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><Metric label="Responses" value={String(outcomes.feedback.count)} sub="surface-linked"/><Metric label="Positive" value={String(outcomes.feedback.positive)} sub="helpful"/><Metric label="Neutral" value={String(outcomes.feedback.neutral)} sub="mixed"/><Metric label="Negative" value={String(outcomes.feedback.negative)} sub="friction" warn={Boolean(outcomes.feedback.negative)}/></div></section>
+        <section className="panel p-5"><div className="eyebrow">SAFETY & DECISIONS</div><div className="mt-4 grid gap-4 sm:grid-cols-2"><div><h2 className="text-sm font-semibold">Safety outcomes</h2><div className="mt-2 space-y-2">{outcomes.safetyOutcomes.map((item) => <div key={item.outcome} className="flex justify-between border-b border-slate-800 pb-2 text-xs"><span>{item.outcome}</span><b>{item.count}</b></div>)}</div></div><div><h2 className="text-sm font-semibold">Decision outcomes</h2><div className="mt-2 space-y-2">{outcomes.decisionOutcomes.map((item) => <div key={item.outcome} className="flex justify-between border-b border-slate-800 pb-2 text-xs"><span>{item.outcome.replace(/_/g, " ")}</span><b>{item.count}</b></div>)}</div></div></div></section>
+        <section className="panel p-5"><div className="eyebrow">FRICTION & QUESTIONS</div><div className="mt-4 grid gap-4 sm:grid-cols-2"><div><h2 className="text-sm font-semibold">Classified errors</h2><div className="mt-2 space-y-2">{outcomes.errors.map((item) => <div key={item.category} className="flex justify-between border-b border-slate-800 pb-2 text-xs"><span>{item.category.replace(/_/g, " ")}</span><b>{item.count}</b></div>)}{!outcomes.errors.length && <p className="text-xs text-slate-500">No classified errors.</p>}</div></div><div><h2 className="text-sm font-semibold">Common assistant topics</h2><div className="mt-2 space-y-2">{outcomes.commonAssistantTopics.map((item) => <div key={item.topic} className="flex justify-between border-b border-slate-800 pb-2 text-xs"><span>{item.topic.replace(/_/g, " ")}</span><b>{item.count}</b></div>)}{!outcomes.commonAssistantTopics.length && <p className="text-xs text-slate-500">No assistant use recorded.</p>}</div></div></div></section>
+      </div>
+      <p className="mt-4 text-xs text-slate-500">Journey events and feedback expire after {outcomes.retention.eventsAndFeedbackDays} days; classified errors expire after {outcomes.retention.errorsDays} days.</p>
+    </>}
   </Shell>;
 }
 
@@ -777,6 +955,8 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   useEffect(()=>{if(path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])navigate(defaultPath)},[data.me.role,data.facilities,path,defaultPath]);
   if(path==="/admin"&&!data.me.is_admin)return <Shell data={data}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This workspace is not present in your authorized navigation."/></Shell>;
   if(path==="/admin")return <AccessAdministration data={data}/>;
+  if(path==="/learning"&&data.me.role!=="PORTFOLIO_MANAGER"&&!data.me.is_admin)return <Shell data={data}><PageHead eyebrow="ACCESS" title="Learning outcomes unavailable" detail="Organization learning summaries require manager or administrator access."/></Shell>;
+  if(path==="/learning")return <LearningOutcomes data={data}/>;
   if(path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Opening your authorized workspace…</div>;
   if(path==="/portfolio")return <Portfolio data={data}/>;
   if(path==="/ask-wattr"&&data.me.role==="PORTFOLIO_MANAGER")return <AssistantPage data={data}/>;

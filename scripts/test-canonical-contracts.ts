@@ -58,6 +58,9 @@ try {
     "0005_immutable_administrative_audit",
     "0006_decision_workflow",
     "0007_decision_history_hardening",
+    "0008_product_learning",
+    "0009_product_learning_retention",
+    "0010_product_learning_privacy",
   ]);
 
   const counts = await pool.query(`
@@ -118,6 +121,33 @@ try {
     WHERE table_schema = 'public' AND table_name IN ('telemetry', 'telemetry_ticks', 'sensor_readings')
   `);
   assert.equal(telemetryTables.rowCount, 0, "high-frequency telemetry must be reconstructed, not stored");
+
+  const learningContracts = await pool.query(`
+    SELECT
+      to_regclass('public.product_learning_events') IS NOT NULL AS events,
+      to_regclass('public.operator_test_sessions') IS NOT NULL AS sessions,
+      to_regclass('public.product_feedback') IS NOT NULL AS feedback,
+      to_regclass('public.product_learning_errors') IS NOT NULL AS errors,
+      NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name IN ('product_feedback', 'operator_test_sessions')
+          AND column_name IN ('comment', 'qualitative_feedback', 'abandonment_reason')
+      ) AS no_free_text,
+      EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'product_learning_events'
+          AND column_name = 'expires_at' AND is_nullable = 'NO'
+      ) AS event_expiry
+  `);
+  assert.deepEqual(learningContracts.rows[0], {
+    events: true,
+    sessions: true,
+    feedback: true,
+    errors: true,
+    no_free_text: true,
+    event_expiry: true,
+  });
 
   // Exercise the forward migration against the shape that existed before the
   // canonical release, including a recorded baseline version.
