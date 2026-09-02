@@ -54,6 +54,8 @@ try {
     "0002_canonical_contracts",
     "0002_canonical_indexes",
     "0003_canonical_completion_gates",
+    "0004_role_security",
+    "0005_immutable_administrative_audit",
   ]);
 
   const counts = await pool.query(`

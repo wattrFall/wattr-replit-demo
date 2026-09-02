@@ -19,10 +19,18 @@ import {
   provenanceForRecord,
   syntheticProvenance,
 } from "../src/lib/cockpit/contracts";
+import {
+  defaultLandingPath,
+  ROLE_CAPABILITIES,
+  ROLES,
+  type Capability,
+  type Role,
+} from "../src/lib/security/rolePolicy";
 
 const app = express();
 const port = Number(process.env.PORT || 5000);
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const DEMO_ORGANIZATION_ID = "wattr-demo";
 const isDatabaseTimestamp = (value: unknown): value is number =>
   Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 2_147_483_647;
 const isScenarioTimestamp = (value: unknown): value is number =>
@@ -38,22 +46,82 @@ async function publishedModel(facilityId: string, client: pg.Pool | pg.PoolClien
   const result = await client.query(
     `SELECT f.model_version, mv.config
      FROM facilities f JOIN model_versions mv ON mv.id = f.model_version
-     WHERE f.id = $1`,
+     WHERE f.id = $1 AND mv.status = 'PUBLISHED'`,
     [facilityId],
   );
   return result.rows[0] as { model_version: string; config: FacilityModelConfig } | undefined;
 }
 
-async function facilityPermission(userId: string, facilityId: string, capability = "can_view") {
-  const result = await pool.query(
-    `SELECT p.can_view, p.can_operate, p.can_edit_model, f.organization_id
+async function facilityPermission(userId: string, facilityId: string, capability: Capability = "view", client: pg.Pool | pg.PoolClient = pool) {
+  const result = await client.query(
+    `SELECT p.can_view, p.can_operate, p.can_edit_model, f.organization_id, m.role, m.is_admin,
+            (o.owner_user_id = m.user_id) AS is_owner
      FROM facility_permissions p
      JOIN facilities f ON f.id = p.facility_id
-     WHERE p.user_id = $1 AND p.facility_id = $2`,
-    [userId, facilityId],
+     JOIN memberships m ON m.organization_id = f.organization_id AND m.user_id = p.user_id
+     JOIN organizations o ON o.id = f.organization_id
+     WHERE p.user_id = $1 AND p.facility_id = $2 AND f.organization_id = $4
+       AND (
+         ($3 = 'view' AND p.can_view)
+         OR ($3 = 'operate' AND p.can_operate AND m.role = 'OPERATOR')
+         OR ($3 = 'engineer' AND p.can_view AND m.role = 'ENGINEER')
+         OR ($3 = 'model' AND p.can_edit_model AND m.role = 'MODEL_ADMIN')
+         OR ($3 = 'assistant' AND p.can_view AND m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER'))
+       )`,
+    [userId, facilityId, capability, DEMO_ORGANIZATION_ID],
   );
   const row = result.rows[0];
-  return row && row[capability] ? row : undefined;
+  return row && ROLE_CAPABILITIES[row.role as Role]?.[capability] ? row : undefined;
+}
+
+async function organizationMembership(userId: string, client: pg.Pool | pg.PoolClient = pool) {
+  const result = await client.query(
+    `SELECT m.user_id, m.organization_id, m.role, m.is_admin,
+            (o.owner_user_id = m.user_id) AS is_owner
+     FROM memberships m
+     JOIN organizations o ON o.id = m.organization_id
+     WHERE m.user_id = $1 AND m.organization_id = $2`,
+    [userId, DEMO_ORGANIZATION_ID],
+  );
+  return result.rows[0] as {
+    user_id: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean;
+  } | undefined;
+}
+
+async function requireFacilityAccess(userId: string, facilityId: string, res: Response, capability: Capability = "view") {
+  const permission = await facilityPermission(userId, facilityId, capability);
+  // Do not distinguish an unknown facility from one outside the user's
+  // organization or facility grant.
+  if (!permission) {
+    res.status(404).json({ error: "Facility unavailable" });
+    return undefined;
+  }
+  return permission;
+}
+
+async function requireOrganizationAdmin(userId: string, res: Response) {
+  const membership = await organizationMembership(userId);
+  if (!membership || (!membership.is_admin && !membership.is_owner)) {
+    res.status(403).json({ error: "Organization administration permission required" });
+    return undefined;
+  }
+  return membership;
+}
+
+async function recordAdministrativeAudit(
+  client: pg.Pool | pg.PoolClient,
+  actorUserId: string,
+  action: string,
+  targetUserId: string | null,
+  facilityId: string | null,
+  payload: Record<string, unknown>,
+) {
+  await client.query(
+    `INSERT INTO administrative_audit_records
+       (id, organization_id, actor_user_id, target_user_id, facility_id, action, payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [randomUUID(), DEMO_ORGANIZATION_ID, actorUserId, targetUserId, facilityId, action, JSON.stringify(payload)],
+  );
 }
 
 function canonicalProvenance(row: {
@@ -99,6 +167,13 @@ app.use(clerkMiddleware((req) => ({
 type AuthedRequest = Request & { userId?: string };
 
 function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+  if (process.env.NODE_ENV === "test") {
+    const testUserId = req.header("x-test-user-id");
+    if (testUserId) {
+      req.userId = testUserId;
+      return next();
+    }
+  }
   const auth = getAuth(req);
   const userId = auth?.sessionClaims?.userId as string | undefined || auth?.userId;
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
@@ -110,40 +185,44 @@ async function ensureDemoAccess(userId: string) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    // Serialize the first-member decision for this organization. The lock is
-    // transaction-scoped, so concurrent endpoints and signups cannot both
-    // observe an empty membership set and grant themselves administrator rights.
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('wattr-demo-bootstrap'))");
+    // The one-time owner bootstrap establishes a durable owner. After that,
+    // authenticated users never receive a role implicitly; an owner/admin must
+    // provision them through the administration API.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('wattr-demo-owner'))");
     await client.query(
-      "INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
-      [userId, "Wattr Operator"],
+      "INSERT INTO users (id, display_name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET updated_at = now()",
+      [userId, "Wattr User"],
     );
     await client.query(
       "INSERT INTO user_preferences (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
       [userId],
     );
-    const existing = await client.query(
-      "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = 'wattr-demo'",
-      [userId],
+    const organization = await client.query(
+      "SELECT owner_user_id FROM organizations WHERE id = $1 FOR UPDATE",
+      [DEMO_ORGANIZATION_ID],
     );
-    if (!existing.rowCount) {
-      const memberCount = await client.query(
-        "SELECT count(*)::integer AS count FROM memberships WHERE organization_id = 'wattr-demo'",
+    if (!organization.rows[0]?.owner_user_id) {
+      const legacyOwner = await client.query(
+        `SELECT user_id FROM memberships
+         WHERE organization_id = $1 AND role = 'MODEL_ADMIN'
+         ORDER BY user_id LIMIT 1`,
+        [DEMO_ORGANIZATION_ID],
       );
-      const firstUser = memberCount.rows[0].count === 0;
-      await client.query(
-        `INSERT INTO memberships (user_id, organization_id, role)
-         VALUES ($1, 'wattr-demo', $2)
-         ON CONFLICT (user_id, organization_id) DO NOTHING`,
-        [userId, firstUser ? "MODEL_ADMIN" : "VIEWER"],
-      );
-      await client.query(
-        `INSERT INTO facility_permissions
-          (user_id, facility_id, can_view, can_operate, can_edit_model)
-         VALUES ($1, 'sfo-01', true, $2, $2)
-         ON CONFLICT (user_id, facility_id) DO NOTHING`,
-        [userId, firstUser],
-      );
+      // Legacy databases can safely promote their already-established model
+      // administrator. New databases fail closed until the explicit
+      // security:provision-owner command is run.
+      const legacyOwnerId = legacyOwner.rows[0]?.user_id;
+      if (legacyOwnerId) {
+        await client.query(
+          "UPDATE organizations SET owner_user_id = $1 WHERE id = $2",
+          [legacyOwnerId, DEMO_ORGANIZATION_ID],
+        );
+        await client.query(
+          `UPDATE memberships SET is_admin = true
+           WHERE user_id = $1 AND organization_id = $2`,
+          [legacyOwnerId, DEMO_ORGANIZATION_ID],
+        );
+      }
     }
     await client.query("COMMIT");
   } catch (error) {
@@ -156,31 +235,261 @@ async function ensureDemoAccess(userId: string) {
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "wattr-operator-cockpit" }));
 
+app.use("/api", requireAuth, async (req: AuthedRequest, res: Response, next: NextFunction) => {
+  try {
+    await ensureDemoAccess(req.userId!);
+    if (!await organizationMembership(req.userId!)) {
+      return res.status(403).json({ error: "Organization membership required" });
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/me", requireAuth, async (req: AuthedRequest, res) => {
-  await ensureDemoAccess(req.userId!);
   const result = await pool.query(
-    `SELECT u.id, u.display_name, m.role, p.theme, p.tutorial_complete, p.tutorial_step
+    `SELECT u.id, u.display_name, m.organization_id, m.role, m.is_admin,
+            (o.owner_user_id = m.user_id) AS is_owner,
+            p.theme, p.tutorial_complete, p.tutorial_step
      FROM users u
-     JOIN memberships m ON m.user_id = u.id AND m.organization_id = 'wattr-demo'
+     JOIN memberships m ON m.user_id = u.id AND m.organization_id = $2
+     JOIN organizations o ON o.id = m.organization_id
      JOIN user_preferences p ON p.user_id = u.id
      WHERE u.id = $1`,
-    [req.userId],
+    [req.userId, DEMO_ORGANIZATION_ID],
   );
-  res.json(result.rows[0]);
+  const member = result.rows[0];
+  if (!member) return res.status(403).json({ error: "Organization membership required" });
+  res.json({
+    ...member,
+    is_admin: Boolean(member.is_admin || member.is_owner),
+    capabilities: ROLE_CAPABILITIES[member.role as Role],
+    default_path: defaultLandingPath(member.role as Role),
+  });
 });
 
 app.get("/api/facilities", requireAuth, async (req: AuthedRequest, res) => {
-  await ensureDemoAccess(req.userId!);
   const result = await pool.query(
     `SELECT f.id, f.name, f.location, f.model_version, f.provenance, mv.config AS model_config,
-            p.can_operate, p.can_edit_model
+            p.can_view,
+            (p.can_operate AND m.role = 'OPERATOR') AS can_operate,
+            (p.can_edit_model AND m.role = 'MODEL_ADMIN') AS can_edit_model,
+            (m.role = 'ENGINEER') AS can_engineer,
+            (m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER')) AS can_assistant
      FROM facilities f
      JOIN model_versions mv ON mv.id = f.model_version
      JOIN facility_permissions p ON p.facility_id = f.id
-     WHERE p.user_id = $1 AND p.can_view = true`,
-    [req.userId],
+     JOIN memberships m ON m.user_id = p.user_id AND m.organization_id = f.organization_id
+     WHERE p.user_id = $1 AND f.organization_id = $2 AND p.can_view = true`,
+    [req.userId, DEMO_ORGANIZATION_ID],
   );
   res.json(result.rows);
+});
+
+app.get("/api/admin/memberships", requireAuth, async (req: AuthedRequest, res) => {
+  if (!await requireOrganizationAdmin(req.userId!, res)) return;
+  const result = await pool.query(
+    `SELECT u.id, u.email, u.display_name, m.role, m.is_admin,
+            (o.owner_user_id = u.id) AS is_owner,
+            COALESCE(
+              jsonb_agg(
+                jsonb_build_object(
+                  'facility_id', f.id,
+                  'facility_name', f.name,
+                  'can_view', COALESCE(p.can_view, false),
+                  'can_operate', COALESCE(p.can_operate, false),
+                  'can_edit_model', COALESCE(p.can_edit_model, false)
+                ) ORDER BY f.name
+              ) FILTER (WHERE f.id IS NOT NULL),
+              '[]'::jsonb
+            ) AS facilities
+     FROM memberships m
+     JOIN users u ON u.id = m.user_id
+     JOIN organizations o ON o.id = m.organization_id
+     LEFT JOIN facilities f ON f.organization_id = m.organization_id
+     LEFT JOIN facility_permissions p ON p.user_id = m.user_id AND p.facility_id = f.id
+     WHERE m.organization_id = $1
+     GROUP BY u.id, u.email, u.display_name, m.role, m.is_admin, o.owner_user_id
+     ORDER BY (o.owner_user_id = u.id) DESC, u.display_name, u.id`,
+    [DEMO_ORGANIZATION_ID],
+  );
+  res.json({ items: result.rows });
+});
+
+app.post("/api/admin/memberships", requireAuth, async (req: AuthedRequest, res) => {
+  const administrator = await requireOrganizationAdmin(req.userId!, res);
+  if (!administrator) return;
+  const { userId, email, displayName, role, isAdmin = false } = req.body ?? {};
+  if (
+    typeof userId !== "string" || userId.length < 2 || userId.length > 200 ||
+    !ROLES.includes(role) ||
+    typeof isAdmin !== "boolean" ||
+    (email !== undefined && (typeof email !== "string" || email.length > 320)) ||
+    (displayName !== undefined && (typeof displayName !== "string" || displayName.length > 120))
+  ) {
+    return res.status(400).json({ error: "Invalid membership" });
+  }
+  // Only the durable owner may grant organization-administrator authority.
+  if (isAdmin && !administrator.is_owner) {
+    return res.status(403).json({ error: "Only the organization owner can grant administrator access" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const previous = await client.query(
+      `SELECT role, is_admin FROM memberships
+       WHERE user_id = $1 AND organization_id = $2 FOR UPDATE`,
+      [userId, DEMO_ORGANIZATION_ID],
+    );
+    const owner = await client.query(
+      "SELECT owner_user_id FROM organizations WHERE id = $1 FOR UPDATE",
+      [DEMO_ORGANIZATION_ID],
+    );
+    if (owner.rows[0]?.owner_user_id === userId && !isAdmin) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "The organization owner must remain an administrator" });
+    }
+    await client.query(
+      `INSERT INTO users (id, email, display_name)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET
+         email = COALESCE(EXCLUDED.email, users.email),
+         display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+         updated_at = now()`,
+      [userId, email ?? null, displayName ?? null],
+    );
+    await client.query(
+      "INSERT INTO user_preferences (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+      [userId],
+    );
+    await client.query(
+      `INSERT INTO memberships (user_id, organization_id, role, is_admin)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, organization_id) DO UPDATE
+         SET role = EXCLUDED.role, is_admin = EXCLUDED.is_admin`,
+      [userId, DEMO_ORGANIZATION_ID, role, isAdmin],
+    );
+    await recordAdministrativeAudit(client, req.userId!, previous.rowCount ? "MEMBERSHIP_UPDATED" : "MEMBERSHIP_CREATED", userId, null, {
+      previous: previous.rows[0] ?? null,
+      role,
+      isAdmin,
+    });
+    await client.query("COMMIT");
+    res.status(previous.rowCount ? 200 : 201).json({ user_id: userId, role, is_admin: isAdmin });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.patch("/api/admin/memberships/:userId/facilities/:facilityId", requireAuth, async (req: AuthedRequest, res) => {
+  if (!await requireOrganizationAdmin(req.userId!, res)) return;
+  const { canView, canOperate, canEditModel } = req.body ?? {};
+  if ([canView, canOperate, canEditModel].some((value) => typeof value !== "boolean") ||
+      ((!canView) && (canOperate || canEditModel))) {
+    return res.status(400).json({ error: "Facility grants require boolean values and view access for elevated rights" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const target = await client.query(
+      `SELECT m.role FROM memberships m
+       JOIN facilities f ON f.organization_id = m.organization_id
+       WHERE m.user_id = $1 AND m.organization_id = $2 AND f.id = $3`,
+      [req.params.userId, DEMO_ORGANIZATION_ID, req.params.facilityId],
+    );
+    if (!target.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Membership or facility unavailable" });
+    }
+    const previous = await client.query(
+      `SELECT can_view, can_operate, can_edit_model FROM facility_permissions
+       WHERE user_id = $1 AND facility_id = $2 FOR UPDATE`,
+      [req.params.userId, req.params.facilityId],
+    );
+    await client.query(
+      `INSERT INTO facility_permissions
+         (user_id, facility_id, can_view, can_operate, can_edit_model)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (user_id, facility_id) DO UPDATE SET
+         can_view = EXCLUDED.can_view,
+         can_operate = EXCLUDED.can_operate,
+         can_edit_model = EXCLUDED.can_edit_model`,
+      [req.params.userId, req.params.facilityId, canView, canOperate, canEditModel],
+    );
+    await recordAdministrativeAudit(client, req.userId!, "FACILITY_PERMISSION_CHANGED", String(req.params.userId), String(req.params.facilityId), {
+      previous: previous.rows[0] ?? null,
+      canView,
+      canOperate,
+      canEditModel,
+    });
+    await client.query("COMMIT");
+    res.json({ facility_id: req.params.facilityId, can_view: canView, can_operate: canOperate, can_edit_model: canEditModel });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.delete("/api/admin/memberships/:userId", requireAuth, async (req: AuthedRequest, res) => {
+  if (!await requireOrganizationAdmin(req.userId!, res)) return;
+  if (req.params.userId === req.userId) {
+    return res.status(409).json({ error: "Administrators cannot revoke their own membership" });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const owner = await client.query(
+      "SELECT owner_user_id FROM organizations WHERE id = $1 FOR UPDATE",
+      [DEMO_ORGANIZATION_ID],
+    );
+    if (owner.rows[0]?.owner_user_id === req.params.userId) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "The organization owner cannot be revoked" });
+    }
+    const membership = await client.query(
+      `DELETE FROM memberships
+       WHERE user_id = $1 AND organization_id = $2
+       RETURNING role, is_admin`,
+      [req.params.userId, DEMO_ORGANIZATION_ID],
+    );
+    if (!membership.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Membership unavailable" });
+    }
+    await client.query(
+      `DELETE FROM facility_permissions p USING facilities f
+       WHERE p.facility_id = f.id AND p.user_id = $1 AND f.organization_id = $2`,
+      [req.params.userId, DEMO_ORGANIZATION_ID],
+    );
+    await recordAdministrativeAudit(client, req.userId!, "MEMBERSHIP_REVOKED", String(req.params.userId), null, {
+      previous: membership.rows[0],
+    });
+    await client.query("COMMIT");
+    res.status(204).end();
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/admin/audit", requireAuth, async (req: AuthedRequest, res) => {
+  if (!await requireOrganizationAdmin(req.userId!, res)) return;
+  const result = await pool.query(
+    `SELECT id, actor_user_id, target_user_id, facility_id, action, payload, created_at
+     FROM administrative_audit_records
+     WHERE organization_id = $1
+     ORDER BY created_at DESC LIMIT 200`,
+    [DEMO_ORGANIZATION_ID],
+  );
+  res.json({ items: result.rows });
 });
 
 /**
@@ -273,7 +582,7 @@ app.get("/api/facilities/:facilityId/context", requireAuth, async (req: AuthedRe
   const mapRows = (rows: Record<string, any>[]) => rows.map((row) => canonical(row, facilityId));
   const facilityRow = facility.rows[0];
   const scenario = scenarios.rows[0];
-  const simulatedAt = scenario?.simulated_start_at ?? SCENARIO_START_S;
+  const simulatedAt = scenario ? Number(scenario.simulated_start_at) : SCENARIO_START_S;
   const modelConfig = facilityRow.model_config as FacilityModelConfig;
   assertModelConfig(modelConfig);
   return res.json({
@@ -289,7 +598,7 @@ app.get("/api/facilities/:facilityId/context", requireAuth, async (req: AuthedRe
     recommendations: recommendations.rows.map((row) => ({
       ...canonical(row, facilityId),
       command: row.command,
-      snapshot: replaySnapshot(row.simulated_at, row.model_config),
+      snapshot: replaySnapshot(Number(row.simulated_at), row.model_config),
     })),
     decisions: mapRows(decisions.rows),
     checkpoints: mapRows(checkpoints.rows),
@@ -427,7 +736,7 @@ app.get("/api/facilities/:facilityId/recommendations", requireAuth, async (req: 
     contractVersion: CONTRACT_VERSION,
     items: result.rows.map((row) => ({
       ...canonical(row, facilityId),
-      snapshot: replaySnapshot(row.simulated_at, row.model_config),
+      snapshot: replaySnapshot(Number(row.simulated_at), row.model_config),
     })),
   });
 });
@@ -463,8 +772,20 @@ app.get("/api/me/saved-views", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const result = await pool.query(
     `SELECT id, facility_id, name, view_type, state, created_at, updated_at
-     FROM saved_views WHERE user_id = $1 ORDER BY updated_at DESC`,
-    [req.userId],
+     FROM saved_views sv
+     WHERE user_id = $1
+       AND (
+         facility_id IS NULL OR EXISTS (
+           SELECT 1
+           FROM facility_permissions fp
+           JOIN facilities f ON f.id = fp.facility_id
+           JOIN memberships m ON m.user_id = fp.user_id AND m.organization_id = f.organization_id
+           WHERE fp.user_id = $1 AND fp.facility_id = sv.facility_id
+             AND fp.can_view = true AND f.organization_id = $2
+         )
+       )
+     ORDER BY updated_at DESC`,
+    [req.userId, DEMO_ORGANIZATION_ID],
   );
   res.json({ contractVersion: CONTRACT_VERSION, items: result.rows });
 });
@@ -472,13 +793,19 @@ app.get("/api/me/saved-views", requireAuth, async (req: AuthedRequest, res) => {
 app.get("/api/tutorials", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const result = await pool.query(
-    `SELECT id, role, version, steps, provenance, created_at FROM tutorials ORDER BY role, version DESC`,
+    `SELECT t.id, t.role, t.version, t.steps, t.provenance, t.created_at
+     FROM tutorials t
+     JOIN memberships m ON m.role = t.role
+     WHERE m.user_id = $1 AND m.organization_id = $2
+     ORDER BY t.version DESC`,
+    [req.userId, DEMO_ORGANIZATION_ID],
   );
   res.json({ contractVersion: CONTRACT_VERSION, items: result.rows });
 });
 
 app.get("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
   const result = await pool.query(
     `SELECT a.id, a.action, a.scenario_id, a.simulated_at, a.model_version, a.payload, a.created_at
      FROM audit_records a
@@ -492,6 +819,7 @@ app.get("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequ
 
 app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
   const result = await pool.query(
     `SELECT a.id, a.action, a.scenario_id, a.simulated_at, a.model_version, a.payload, a.created_at
      FROM audit_records a
@@ -501,11 +829,12 @@ app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: A
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Audit record not found" });
   const record = result.rows[0];
-  res.json({ record, snapshot: record.payload?.snapshot ?? replaySnapshot(record.simulated_at, record.payload?.modelConfig) });
+  res.json({ record, snapshot: record.payload?.snapshot ?? replaySnapshot(Number(record.simulated_at), record.payload?.modelConfig) });
 });
 
 app.get("/api/facilities/:facilityId/incidents", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
   const result = await pool.query(
     `SELECT i.id, i.title, i.severity, i.status, i.simulated_at, i.affected_assets,
             i.raw_signal_count, i.likely_cause, i.forecast_minutes, i.model_version
@@ -520,6 +849,7 @@ app.get("/api/facilities/:facilityId/incidents", requireAuth, async (req: Authed
 
 app.get("/api/facilities/:facilityId/incidents/:incidentId", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
   const result = await pool.query(
     `SELECT i.id, i.title, i.severity, i.status, i.simulated_at, i.affected_assets,
             i.raw_signal_count, i.likely_cause, i.forecast_minutes, i.model_version, i.model_config
@@ -529,16 +859,16 @@ app.get("/api/facilities/:facilityId/incidents/:incidentId", requireAuth, async 
     [req.userId, req.params.facilityId, req.params.incidentId],
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Incident not found" });
-  res.json({ incident: result.rows[0], snapshot: replaySnapshot(result.rows[0].simulated_at, result.rows[0].model_config) });
+  res.json({ incident: result.rows[0], snapshot: replaySnapshot(Number(result.rows[0].simulated_at), result.rows[0].model_config) });
 });
 
 app.get("/api/facilities/:facilityId/topology", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  const permission = await pool.query(
-    "SELECT can_view FROM facility_permissions WHERE user_id = $1 AND facility_id = $2",
-    [req.userId, req.params.facilityId],
-  );
-  if (!permission.rows[0]?.can_view) return res.status(403).json({ error: "Facility permission required" });
+  const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res);
+  if (!permission) return;
+  if (!["OPERATOR", "ENGINEER"].includes(permission.role)) {
+    return res.status(404).json({ error: "Facility workspace unavailable" });
+  }
   const [model, persisted] = await Promise.all([
     publishedModel(String(req.params.facilityId)),
     pool.query(
@@ -577,11 +907,7 @@ app.patch("/api/me/tutorial", requireAuth, async (req: AuthedRequest, res) => {
 
 app.get("/api/facilities/:facilityId/model/versions", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  const permission = await pool.query(
-    "SELECT can_view FROM facility_permissions WHERE user_id = $1 AND facility_id = $2",
-    [req.userId, req.params.facilityId],
-  );
-  if (!permission.rows[0]?.can_view) return res.status(403).json({ error: "Facility permission required" });
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "model")) return;
   const result = await pool.query(
     `SELECT id, facility_id, status, config, published_at, created_by, created_at
      FROM model_versions WHERE facility_id = $1 ORDER BY created_at DESC`,
@@ -592,11 +918,7 @@ app.get("/api/facilities/:facilityId/model/versions", requireAuth, async (req: A
 
 app.post("/api/facilities/:facilityId/model/versions", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  const permission = await pool.query(
-    "SELECT can_edit_model FROM facility_permissions WHERE user_id = $1 AND facility_id = $2",
-    [req.userId, req.params.facilityId],
-  );
-  if (!permission.rows[0]?.can_edit_model) return res.status(403).json({ error: "Model editing permission required" });
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "model")) return;
   const config = req.body?.config;
   if (
     !config || typeof config !== "object" || Array.isArray(config) ||
@@ -618,15 +940,7 @@ app.post("/api/facilities/:facilityId/model/versions", requireAuth, async (req: 
 });
 
 async function requireModelEdit(userId: string, facilityId: string, res: Response) {
-  const permission = await pool.query(
-    "SELECT can_edit_model FROM facility_permissions WHERE user_id = $1 AND facility_id = $2",
-    [userId, facilityId],
-  );
-  if (!permission.rows[0]?.can_edit_model) {
-    res.status(403).json({ error: "Model editing permission required" });
-    return false;
-  }
-  return true;
+  return Boolean(await requireFacilityAccess(userId, facilityId, res, "model"));
 }
 
 app.post("/api/facilities/:facilityId/model/versions/:versionId/validate", requireAuth, async (req: AuthedRequest, res) => {
@@ -707,11 +1021,7 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
 
 app.post("/api/facilities/:facilityId/recommendations/rec-17/evaluate", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  const permission = await pool.query(
-    "SELECT can_view FROM facility_permissions WHERE user_id = $1 AND facility_id = $2",
-    [req.userId, req.params.facilityId],
-  );
-  if (!permission.rows[0]?.can_view) return res.status(403).json({ error: "Facility permission required" });
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "assistant")) return;
   const simulatedAt = req.body?.simulatedAt;
   if (!isScenarioTimestamp(simulatedAt)) return res.status(400).json({ error: "Invalid simulation timestamp" });
 
@@ -740,13 +1050,8 @@ app.post("/api/facilities/:facilityId/recommendations/rec-17/evaluate", requireA
 
 app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
-  const permission = await pool.query(
-    `SELECT p.can_operate, f.organization_id
-     FROM facility_permissions p JOIN facilities f ON f.id = p.facility_id
-     WHERE p.user_id = $1 AND p.facility_id = $2`,
-    [req.userId, req.params.facilityId],
-  );
-  if (!permission.rows[0]?.can_operate) return res.status(403).json({ error: "Facility operation permission required" });
+  const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "operate");
+  if (!permission) return;
   const { action, simulatedAt, payload, safetyEvaluationId } = req.body ?? {};
   const validPayload =
     payload &&
@@ -810,7 +1115,7 @@ app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedReq
        VALUES ($1, $2, $3, $4, 'gpu-training-ramp-v1', $5, $6, $6, $7::jsonb,
                'SIMULATED', 'SYNTHETIC')
        RETURNING id, action, created_at`,
-      [permission.rows[0].organization_id, req.params.facilityId, req.userId, action, simulatedAt, facilityModel.model_version, JSON.stringify({
+      [permission.organization_id, req.params.facilityId, req.userId, action, simulatedAt, facilityModel.model_version, JSON.stringify({
         ...payload,
         operatorDecisionId: decisionId,
         safetyEvaluationId,

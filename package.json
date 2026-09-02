@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "db:setup": "tsx scripts/setup-database.ts",
+    "security:provision-owner": "npm run db:setup && tsx scripts/provision-owner.ts",
     "dev": "npm run db:setup && tsx server/index.ts",
     "build": "vite build",
     "start": "npm run db:setup && NODE_ENV=production tsx server/index.ts",
@@ -12,6 +13,8 @@
     "test:simulation": "tsx scripts/test-cockpit-simulation.ts",
     "test:workspaces": "tsx scripts/test-operating-workspaces.ts",
     "test:contracts": "npm run db:setup && tsx scripts/test-canonical-contracts.ts",
+    "test:role-security": "npm run db:setup && tsx scripts/test-role-security.ts",
+    "test:role-security-api": "npm run db:setup && tsx scripts/test-role-security-api.ts",
     "demo:validate": "tsx scripts/validate-demo-scenario.ts"
   },
   "dependencies": {

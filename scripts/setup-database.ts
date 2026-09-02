@@ -40,6 +40,14 @@ try {
       version: "0003_canonical_completion_gates",
       file: new URL("../database/migrations/0002_canonical_contracts.sql", import.meta.url),
     },
+    {
+      version: "0004_role_security",
+      file: new URL("../database/migrations/0004_role_security.sql", import.meta.url),
+    },
+    {
+      version: "0005_immutable_administrative_audit",
+      file: new URL("../database/migrations/0005_immutable_administrative_audit.sql", import.meta.url),
+    },
   ];
 
   for (const migration of migrations) {

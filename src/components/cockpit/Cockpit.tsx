@@ -3,20 +3,23 @@ import { Show, SignIn, SignUp, useUser } from "@clerk/react";
 import {
   Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BookOpen, BrainCircuit, Check,
   CircleHelp, Clock3, Cpu, Gauge, GitBranch, History, LayoutDashboard, Menu, Pause, Play,
-  RotateCcw, Save, ShieldCheck, SlidersHorizontal, Thermometer, X,
+  RotateCcw, Save, ShieldCheck, SlidersHorizontal, Thermometer, Trash2, UserCog, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { SandboxShell } from "@/components/sandbox/SandboxShell";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { snapshotForAudit, type CockpitSnapshot, type FacilityModelConfig } from "@/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph, type GraphView, type ControllerComparison } from "@/lib/cockpit/workspaces";
+import { ROLES, type Role } from "@/lib/security/rolePolicy";
 
-type Role = "PORTFOLIO_MANAGER" | "OPERATOR" | "ENGINEER" | "MODEL_ADMIN" | "VIEWER";
-type Me = { id: string; display_name: string; role: Role; theme: string; tutorial_complete: boolean; tutorial_step: number };
-type Facility = { id: string; name: string; location: string; model_version: string; model_config: FacilityModelConfig; provenance: "SIMULATED"; can_operate: boolean; can_edit_model: boolean };
+type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model: boolean; assistant: boolean };
+type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number };
+type Facility = { id: string; name: string; location: string; model_version: string; model_config: FacilityModelConfig; provenance: "SIMULATED"; can_view: boolean; can_operate: boolean; can_edit_model: boolean; can_engineer: boolean; can_assistant: boolean };
 type Audit = { id: number; action: string; scenario_id: string; simulated_at: number; model_version: string; payload: Record<string, any>; created_at: string };
 type Incident = { id: string; title: string; severity: "WATCH" | "HIGH"; status: "OPEN" | "RESOLVED"; simulated_at: number; affected_assets: string[]; raw_signal_count: number; likely_cause: string; forecast_minutes: number; model_version: string };
 type ModelVersion = { id: string; facility_id: string; status: "DRAFT" | "VALIDATED" | "PUBLISHED" | "ARCHIVED"; config: Record<string, unknown>; published_at: string | null; created_by: string | null; created_at: string };
+type MemberFacility = { facility_id: string; facility_name: string; can_view: boolean; can_operate: boolean; can_edit_model: boolean };
+type Member = { id: string; email: string | null; display_name: string | null; role: Role; is_admin: boolean; is_owner: boolean; facilities: MemberFacility[] };
 type SessionData = { me: Me; facilities: Facility[] };
 
 const mono = "font-[family-name:var(--font-mono)]";
@@ -33,6 +36,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 const post = <T,>(path: string, body: unknown) => api<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const patch = <T,>(path: string, body: unknown) => api<T>(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const remove = (path: string) => api<void>(path, { method: "DELETE" });
 
 function Brand() {
   return <button onClick={() => navigate("/")} className="flex items-center gap-2.5 text-left"><span className="grid h-8 w-8 place-items-center rounded-md bg-cyan-400 text-slate-950"><Activity size={18}/></span><span><b className="block text-sm tracking-[.18em]">WATTR</b><small className="block text-[9px] tracking-[.2em] text-slate-500">OPERATOR COCKPIT</small></span></button>;
@@ -47,13 +51,19 @@ function PageHead({ eyebrow, title, detail, action }: { eyebrow: string; title: 
 function Shell({ data, facility, children }: { data: SessionData; facility?: Facility; children: ReactNode }) {
   const [mobile, setMobile] = useState(false);
   const active = facility ?? data.facilities[0];
-  const nav: Array<[LucideIcon, string, string]> = active ? [
-    [LayoutDashboard, "Portfolio", "/portfolio"], [Gauge, "Operations", `/facilities/${active.id}/operations`],
-    [AlertTriangle, "Incident", `/facilities/${active.id}/incidents/inc-204`], [ShieldCheck, "Recommendation", `/facilities/${active.id}/recommendations/rec-17`],
-    [History, "Audit history", `/facilities/${active.id}/audit`], [GitBranch, "Thermal graph", `/facilities/${active.id}/topology`],
-    [BrainCircuit, "Model Lab", `/facilities/${active.id}/model-lab`],
-    ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
-  ] : [];
+  const nav: Array<[LucideIcon, string, string]> = [
+    ...(data.me.role === "PORTFOLIO_MANAGER" ? [[LayoutDashboard, "Portfolio", "/portfolio"] as [LucideIcon, string, string]] : []),
+    ...(active ? [
+      [Gauge, "Operations", `/facilities/${active.id}/operations`] as [LucideIcon, string, string],
+      [AlertTriangle, "Incident", `/facilities/${active.id}/incidents/inc-204`] as [LucideIcon, string, string],
+      [ShieldCheck, "Recommendation", `/facilities/${active.id}/recommendations/rec-17`] as [LucideIcon, string, string],
+      [History, "Audit history", `/facilities/${active.id}/audit`] as [LucideIcon, string, string],
+      ...(["OPERATOR", "ENGINEER"].includes(data.me.role) ? [[GitBranch, "Thermal graph", `/facilities/${active.id}/topology`] as [LucideIcon, string, string]] : []),
+      ...(active.can_engineer ? [[BrainCircuit, "Model Lab", `/facilities/${active.id}/model-lab`] as [LucideIcon, string, string]] : []),
+      ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
+    ] : []),
+    ...(data.me.is_admin ? [[UserCog, "Access administration", "/admin"] as [LucideIcon, string, string]] : []),
+  ];
   return <div className="min-h-[100dvh] bg-[#0a1018] text-slate-200">
     <header className="fixed inset-x-0 top-0 z-30 flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4"><div className="flex items-center gap-4"><button className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"}><Menu size={20}/></button><Brand/></div><div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><Status>{data.me.role.replace(/_/g, " ")}</Status></div></header>
     <aside className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><div className="space-y-1">{nav.map(([Icon, label, path]) => <button key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`}><Icon size={16}/>{label}</button>)}</div><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button onClick={() => navigate("/help")} className="cockpit-nav"><CircleHelp size={16}/>Help & tutorials</button></div></aside>
@@ -82,7 +92,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
   const snapshot = useScenarioSession((s) => s.simulation.snapshot), [evaluation, setEvaluation] = useState<any>(null), [error, setError] = useState(""), [saved, setSaved] = useState(false);
   const evaluate = async () => { setError(""); try { setEvaluation(await post(`/api/facilities/${facility.id}/recommendations/rec-17/evaluate`, { simulatedAt: snapshot.simulatedAt })); } catch (e) { setError(String(e)); } };
   const approve = async () => { if (!evaluation || evaluation.outcome !== "PASS") return; setError(""); try { await post(`/api/facilities/${facility.id}/audit`, { action: "APPROVE_ADVISORY", simulatedAt: snapshot.simulatedAt, safetyEvaluationId: evaluation.id, payload: { recommendationId: "rec-17", outcome: "ALLOWED_AS_ADVISORY", provenance: "SIMULATED", command: { assetId: "cdu-03", flowPercent: 78, durationMinutes: 20 } } }); setSaved(true); } catch (e) { setError(String(e)); } };
-  return <Shell data={data} facility={facility}><PageHead eyebrow="RECOMMENDATION / REC-17" title="Pre-emptive CDU-03 flow adjustment" detail={`Same ${formatSimulatedAt(snapshot.simulatedAt)} replay context as Operations and the audit trail.`}/><ReplayBar/><div className="grid gap-4 xl:grid-cols-[1fr_.8fr]"><section className="panel p-6"><div className="flex items-start justify-between"><div><Status tone="warn">ADVISORY</Status><h2 className="mt-3 text-xl font-semibold">Increase CDU-03 flow to 78% for 20 minutes</h2></div><ShieldCheck className="text-cyan-300"/></div><p className="copy">The controller sees the workload ramp before the reactive thermal response. Simulate first, then approve only as an advisory; no command is sent to facility equipment.</p><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Baseline peak" value={snapshot.recommendation.baselinePeakC.toFixed(1)} unit="°C" sub="forecast path" warn/><Metric label="Advisory peak" value={snapshot.recommendation.advisoryPeakC.toFixed(1)} unit="°C" sub={`${snapshot.recommendation.reductionC.toFixed(1)}°C reduction`}/><Metric label="Avoided constraint" value={String(snapshot.recommendation.constraintMinutesAvoided)} unit="min" sub="synthetic forecast"/></div><div className="mt-6 flex flex-wrap gap-2"><button className="button primary" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button><button className="button secondary" disabled={!evaluation || evaluation.outcome !== "PASS" || saved} onClick={approve}><Check size={15}/>{saved ? "Recorded in audit" : "Approve advisory"}</button></div>{error&&<p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}{saved&&<p role="status" className="mt-4 text-sm text-teal-300">Decision recorded with the replay snapshot and model version.</p>}</section><section className="panel p-6"><div className="eyebrow">SAFETY SHIELD</div>{evaluation ? <><h2 className={`mt-2 text-xl font-semibold ${evaluation.outcome === "PASS" ? "text-teal-300" : "text-red-300"}`}>{evaluation.outcome}</h2><ul className="mt-5 space-y-3">{evaluation.checks.map((check: any)=><li key={check.id} className="flex gap-3 text-sm"><span className={check.pass?"text-teal-300":"text-red-300"}>{check.pass?<Check size={16}/>:<X size={16}/>}</span><span><b>{check.id.replace(/_/g," ")}</b><small className="mt-1 block text-slate-500">{check.detail}</small></span></li>)}</ul></> : <p className="copy">Run the server-side evaluation to verify command envelope, cooling headroom, maintenance state, and model confidence.</p>}</section></div></Shell>;
+  return <Shell data={data} facility={facility}><PageHead eyebrow="RECOMMENDATION / REC-17" title="Pre-emptive CDU-03 flow adjustment" detail={`Same ${formatSimulatedAt(snapshot.simulatedAt)} replay context as Operations and the audit trail.`}/><ReplayBar/><div className="grid gap-4 xl:grid-cols-[1fr_.8fr]"><section className="panel p-6"><div className="flex items-start justify-between"><div><Status tone="warn">ADVISORY</Status><h2 className="mt-3 text-xl font-semibold">Increase CDU-03 flow to 78% for 20 minutes</h2></div><ShieldCheck className="text-cyan-300"/></div><p className="copy">The controller sees the workload ramp before the reactive thermal response. Simulate first, then approve only as an advisory; no command is sent to facility equipment.</p><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Baseline peak" value={snapshot.recommendation.baselinePeakC.toFixed(1)} unit="°C" sub="forecast path" warn/><Metric label="Advisory peak" value={snapshot.recommendation.advisoryPeakC.toFixed(1)} unit="°C" sub={`${snapshot.recommendation.reductionC.toFixed(1)}°C reduction`}/><Metric label="Avoided constraint" value={String(snapshot.recommendation.constraintMinutesAvoided)} unit="min" sub="synthetic forecast"/></div>{facility.can_assistant?<div className="mt-6 flex flex-wrap gap-2"><button className="button primary" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button>{facility.can_operate&&<button className="button secondary" disabled={!evaluation || evaluation.outcome !== "PASS" || saved} onClick={approve}><Check size={15}/>{saved ? "Recorded in audit" : "Approve advisory"}</button>}</div>:<p className="mt-6 text-sm text-slate-500">Read-only access: simulations and operator decisions are unavailable for this role.</p>}{error&&<p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}{saved&&<p role="status" className="mt-4 text-sm text-teal-300">Decision recorded with the replay snapshot and model version.</p>}</section><section className="panel p-6"><div className="eyebrow">SAFETY SHIELD</div>{evaluation ? <><h2 className={`mt-2 text-xl font-semibold ${evaluation.outcome === "PASS" ? "text-teal-300" : "text-red-300"}`}>{evaluation.outcome}</h2><ul className="mt-5 space-y-3">{evaluation.checks.map((check: any)=><li key={check.id} className="flex gap-3 text-sm"><span className={check.pass?"text-teal-300":"text-red-300"}>{check.pass?<Check size={16}/>:<X size={16}/>}</span><span><b>{check.id.replace(/_/g," ")}</b><small className="mt-1 block text-slate-500">{check.detail}</small></span></li>)}</ul></> : <p className="copy">{facility.can_assistant ? "Run the server-side evaluation to verify command envelope, cooling headroom, maintenance state, and model confidence." : "Safety evaluation details are available to authorized managers, operators, and engineers."}</p>}</section></div></Shell>;
 }
 
 function IncidentPage({ data, facility, incidentId }: { data: SessionData; facility: Facility; incidentId: string }) {
@@ -133,6 +143,55 @@ function ModelLab({ data, facility }: { data: SessionData; facility: Facility })
   return <Shell data={data} facility={facility}><PageHead eyebrow="MODEL LAB / PHYSICAL AI" title="Controller comparison" detail="Every controller receives the same initial state and event stream. This is a comparison harness, not a superiority claim." action={<Status tone="warn">SYNTHETIC</Status>}/><ReplayBar/><section className="panel p-6"><div className="grid gap-4 md:grid-cols-3"><div><div className="eyebrow">INITIAL STATE</div><p className="mt-2 text-sm">{comparison?.initialState ?? `${snapshot.workloadPercent}% workload · ${snapshot.itPowerKw.toLocaleString()} kW IT · ${snapshot.rackCount} racks`}</p></div><div><div className="eyebrow">SHARED EVENTS</div><p className="mt-2 text-sm">{comparison?.events.join(" → ") ?? "Training ramp → power rise → CDU response lag"}</p></div><div className="flex items-end md:justify-end"><button className="button primary" onClick={run}><Play size={15}/>Run same-input comparison</button></div></div></section>{comparison&&<section className="panel mt-4 overflow-x-auto"><table className="data-table min-w-[900px]"><caption className="sr-only">Controller comparison results</caption><thead><tr><th>Controller</th><th>Peak temp</th><th>Degree-minutes</th><th>Warning lead</th><th>Cooling energy</th><th>Interventions</th><th>Inference events</th><th>Objective</th></tr></thead><tbody>{comparison.results.map(result => <tr key={result.id}><td><b>{result.name}</b><small className="mt-1 block text-slate-500">{result.architecturalMetric}: {result.architecturalValue}</small></td><td>{result.peakC.toFixed(1)}°C</td><td>{result.degreeMinutes}</td><td>{result.warningLeadMinutes} min</td><td>{result.coolingEnergyKwh} kWh</td><td>{result.interventions}</td><td>{result.inferenceEvents || "continuous"}</td><td>{result.objective}</td></tr>)}</tbody></table><p className="p-5 text-xs text-slate-500">SNN rows show architectural event metrics where measured compute energy is unavailable. No energy-efficiency percentage is inferred.</p></section>}</Shell>;
 }
 
+function AccessAdministration({ data }: { data: SessionData }) {
+  const [members, setMembers] = useState<Member[]>([]);
+  const [audit, setAudit] = useState<Array<{ id: string; action: string; actor_user_id: string; target_user_id: string | null; facility_id: string | null; created_at: string }>>([]);
+  const [draft, setDraft] = useState({ userId: "", email: "", displayName: "", role: "VIEWER" as Role, isAdmin: false });
+  const [message, setMessage] = useState(""), [error, setError] = useState("");
+  const refresh = async () => {
+    try {
+      const [membershipResult, auditResult] = await Promise.all([
+        api<{ items: Member[] }>("/api/admin/memberships"),
+        api<{ items: typeof audit }>("/api/admin/audit"),
+      ]);
+      setMembers(membershipResult.items);
+      setAudit(auditResult.items);
+      setError("");
+    } catch (cause) { setError(String(cause)); }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const saveMember = async (member: { userId: string; email?: string; displayName?: string; role: Role; isAdmin: boolean }) => {
+    try {
+      await post("/api/admin/memberships", member);
+      setMessage(`${member.userId} access saved`);
+      await refresh();
+    } catch (cause) { setError(String(cause)); }
+  };
+  const saveGrant = async (member: Member, facility: MemberFacility, next: Partial<MemberFacility>) => {
+    const grant = { ...facility, ...next };
+    try {
+      await patch(`/api/admin/memberships/${encodeURIComponent(member.id)}/facilities/${encodeURIComponent(facility.facility_id)}`, {
+        canView: grant.can_view,
+        canOperate: grant.can_operate,
+        canEditModel: grant.can_edit_model,
+      });
+      setMessage(`${member.display_name ?? member.id} facility access updated`);
+      await refresh();
+    } catch (cause) { setError(String(cause)); }
+  };
+  const revoke = async (member: Member) => {
+    try {
+      await remove(`/api/admin/memberships/${encodeURIComponent(member.id)}`);
+      setMessage(`${member.display_name ?? member.id} membership revoked`);
+      await refresh();
+    } catch (cause) { setError(String(cause)); }
+  };
+  return <Shell data={data}><PageHead eyebrow="ORGANIZATION / ACCESS ADMINISTRATION" title="People and facility permissions" detail="Organization roles and site grants take effect on the next authorized request. Every change is retained in administrative history."/>
+    <section className="panel mb-4 p-5"><h2 className="font-semibold">Provision a member</h2><div className="mt-4 grid gap-3 md:grid-cols-5"><input className="input" placeholder="Clerk user ID" value={draft.userId} onChange={event=>setDraft({...draft,userId:event.target.value})}/><input className="input" placeholder="Display name" value={draft.displayName} onChange={event=>setDraft({...draft,displayName:event.target.value})}/><input className="input" placeholder="Email (optional)" value={draft.email} onChange={event=>setDraft({...draft,email:event.target.value})}/><select className="select" value={draft.role} onChange={event=>setDraft({...draft,role:event.target.value as Role})}>{ROLES.map(role=><option key={role}>{role}</option>)}</select><button className="button primary justify-center" disabled={!draft.userId} onClick={()=>saveMember(draft)}>Save membership</button></div>{data.me.is_owner&&<label className="mt-3 flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={draft.isAdmin} onChange={event=>setDraft({...draft,isAdmin:event.target.checked})}/>Grant organization administration</label>}{message&&<p role="status" className="mt-3 text-sm text-teal-300">{message}</p>}{error&&<p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}</section>
+    <div className="grid gap-4 xl:grid-cols-[1fr_.7fr]"><section className="space-y-3">{members.map(member=><article key={member.id} className="panel p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><b>{member.display_name ?? member.id}</b>{member.is_owner&&<Status>OWNER</Status>}{member.is_admin&&!member.is_owner&&<Status>ADMIN</Status>}</div><p className="mt-1 text-xs text-slate-500">{member.email ?? member.id}</p></div><div className="flex gap-2"><select className="select" value={member.role} disabled={member.is_owner} onChange={event=>saveMember({userId:member.id,role:event.target.value as Role,isAdmin:member.is_admin})}>{ROLES.map(role=><option key={role}>{role}</option>)}</select>{!member.is_owner&&member.id!==data.me.id&&<button className="button secondary" aria-label={`Revoke ${member.display_name ?? member.id}`} onClick={()=>revoke(member)}><Trash2 size={14}/></button>}</div></div><div className="mt-4 space-y-2">{member.facilities.map(facility=><div key={facility.facility_id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 p-3"><span className="text-sm font-medium">{facility.facility_name}</span><div className="flex flex-wrap gap-4 text-xs text-slate-400">{([["View","can_view"],["Operate","can_operate"],["Edit model","can_edit_model"]] as const).map(([label,key])=><label key={key} className="flex items-center gap-2"><input type="checkbox" checked={facility[key]} disabled={key!=="can_view"&&!facility.can_view} onChange={event=>saveGrant(member,facility,{[key]:event.target.checked,...(key==="can_view"&&!event.target.checked?{can_operate:false,can_edit_model:false}:{})})}/>{label}</label>)}</div></div>)}</div></article>)}</section><aside className="panel overflow-hidden"><div className="border-b border-slate-800 p-5"><h2 className="font-semibold">Administrative history</h2><p className="mt-1 text-xs text-slate-500">Immutable role and facility changes</p></div>{audit.map(record=><div key={record.id} className="border-b border-slate-800 p-4"><Status>{record.action.replace(/_/g," ")}</Status><p className="mt-2 text-xs text-slate-400">{record.target_user_id ?? "Organization"}{record.facility_id ? ` · ${record.facility_id}` : ""}</p><p className="mt-1 text-[10px] text-slate-500">{new Date(record.created_at).toLocaleString()} · by {record.actor_user_id}</p></div>)}{!audit.length&&<p className="p-5 text-sm text-slate-500">No access changes recorded yet.</p>}</aside></div>
+  </Shell>;
+}
+
 const tutorialSteps: Record<Role, Array<{ title: string; body: string; route: string }>> = {
   PORTFOLIO_MANAGER: [{ title: "Portfolio health", body: "Start with site ranking and predicted risk before drilling into a facility.", route: "/portfolio" }, { title: "Facility outcomes", body: "Open a site to connect thermal headroom to operational decisions.", route: "/portfolio" }],
   OPERATOR: [{ title: "This is your facility", body: "Operations ties workload, power, heat, forecast, and cooling response to one clock.", route: "/operations" }, { title: "Read the forecast", body: "A forecast risk can arrive before a temperature limit is crossed.", route: "/incidents/inc-204" }, { title: "Trace dependencies", body: "Select a predicted risk and follow its thermal path.", route: "/topology" }, { title: "Use the Safety Shield", body: "Recommendations are advisory and require a server-verified safety pass.", route: "/recommendations/rec-17" }],
@@ -157,8 +216,13 @@ function Auth({up=false}:{up?:boolean}){return <div className="grid min-h-screen
 function ProtectedApp({path}:{path:string}){
   const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState("");
   useEffect(()=>{Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch(e=>setError(String(e)));},[]);
+  const defaultPath = data ? data.me.default_path.replace("{facilityId}", data.facilities[0]?.id ?? "") : "/portfolio";
+  useEffect(()=>{if(data&&path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])navigate(defaultPath)},[data,path,defaultPath]);
   if(error)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-red-300">{error}</div>;
   if(!data)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Loading authorized facility context…</div>;
+  if(path==="/admin"&&!data.me.is_admin)return <Shell data={data}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This workspace is not present in your authorized navigation."/></Shell>;
+  if(path==="/admin")return <AccessAdministration data={data}/>;
+  if(path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Opening your authorized workspace…</div>;
   if(path==="/portfolio")return <Portfolio data={data}/>;
   if(path==="/help")return <Help data={data}/>;
   const parts=path.split("/").filter(Boolean), facility=parts[0]==="facilities"&&data.facilities.find(f=>f.id===parts[1]);
@@ -168,7 +232,9 @@ function ProtectedApp({path}:{path:string}){
   if(section==="incidents")return <IncidentPage data={data} facility={facility} incidentId={parts[3] ?? "inc-204"}/>;
   if(section==="recommendations")return <Recommendation data={data} facility={facility}/>;
   if(section==="audit")return <AuditPage data={data} facility={facility}/>;
+  if(section==="topology"&&!["OPERATOR","ENGINEER"].includes(data.me.role))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
   if(section==="topology")return <GraphPage data={data} facility={facility}/>;
+  if(section==="model-lab"&&!facility.can_engineer)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Engineering analysis access is required."/></Shell>;
   if(section==="model-lab")return <ModelLab data={data} facility={facility}/>;
   if(section==="model"&&!facility.can_edit_model)return <Shell data={data} facility={facility}><PageHead eyebrow="FORBIDDEN" title="Model Studio access required" detail="Your role cannot edit or publish facility models."/></Shell>;
   if(section==="model")return <ModelStudio data={data} facility={facility}/>;

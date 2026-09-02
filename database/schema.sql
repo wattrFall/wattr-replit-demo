@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS organizations (
   id text PRIMARY KEY,
   name text NOT NULL,
+  owner_user_id text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS memberships (
   user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   role text NOT NULL CHECK (role IN ('PORTFOLIO_MANAGER','OPERATOR','ENGINEER','MODEL_ADMIN','VIEWER')),
+  is_admin boolean NOT NULL DEFAULT false,
   PRIMARY KEY (user_id, organization_id)
 );
 
@@ -336,6 +338,19 @@ CREATE TABLE IF NOT EXISTS audit_records (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Organization administration is deliberately separate from product roles.
+-- A portfolio manager is not implicitly allowed to change another user's access.
+CREATE TABLE IF NOT EXISTS administrative_audit_records (
+  id uuid PRIMARY KEY,
+  organization_id text NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  actor_user_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  target_user_id text REFERENCES users(id) ON DELETE SET NULL,
+  facility_id text REFERENCES facilities(id) ON DELETE SET NULL,
+  action text NOT NULL,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS facility_hierarchy_facility_idx ON facility_hierarchy(facility_id, path);
 CREATE INDEX IF NOT EXISTS assets_facility_kind_idx ON assets(facility_id, kind);
 CREATE INDEX IF NOT EXISTS sensors_facility_asset_idx ON sensors(facility_id, asset_id);
@@ -346,12 +361,26 @@ CREATE INDEX IF NOT EXISTS operator_decisions_facility_created_idx ON operator_d
 CREATE INDEX IF NOT EXISTS saved_views_user_idx ON saved_views(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS audit_records_facility_created_idx ON audit_records(facility_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS safety_evaluations_lookup_idx ON safety_evaluations(user_id, facility_id, recommendation_id, expires_at DESC);
+CREATE INDEX IF NOT EXISTS administrative_audit_org_created_idx ON administrative_audit_records(organization_id, created_at DESC);
+
+CREATE OR REPLACE FUNCTION reject_administrative_audit_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'administrative audit records are immutable';
+END;
+$$;
+DROP TRIGGER IF EXISTS administrative_audit_records_immutable ON administrative_audit_records;
+CREATE TRIGGER administrative_audit_records_immutable
+BEFORE UPDATE OR DELETE ON administrative_audit_records
+FOR EACH ROW EXECUTE FUNCTION reject_administrative_audit_mutation();
 
 -- These ALTERs make the baseline safe for databases created by the previous
 -- cockpit release before the canonical tables were introduced.
 ALTER TABLE facilities ADD COLUMN IF NOT EXISTS synthetic_status text NOT NULL DEFAULT 'SYNTHETIC';
 ALTER TABLE facilities ADD COLUMN IF NOT EXISTS quality text NOT NULL DEFAULT 'GOOD';
 ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS tutorial_step integer NOT NULL DEFAULT 0;
+ALTER TABLE organizations ADD COLUMN IF NOT EXISTS owner_user_id text;
+ALTER TABLE memberships ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false;
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS scenario_id text;
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS model_version_id text;
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS provenance text NOT NULL DEFAULT 'SIMULATED';
