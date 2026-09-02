@@ -6,7 +6,7 @@ export const ROLE_CAPABILITIES: Record<Role, Record<Capability, boolean>> = {
   PORTFOLIO_MANAGER: { view: true, operate: false, engineer: false, model: false, assistant: true },
   OPERATOR: { view: true, operate: true, engineer: false, model: false, assistant: true },
   ENGINEER: { view: true, operate: false, engineer: true, model: false, assistant: true },
-  MODEL_ADMIN: { view: true, operate: false, engineer: false, model: true, assistant: false },
+  MODEL_ADMIN: { view: true, operate: false, engineer: false, model: true, assistant: true },
   VIEWER: { view: true, operate: false, engineer: false, model: false, assistant: false },
 };
 

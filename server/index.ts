@@ -30,6 +30,13 @@ import {
   type Capability,
   type Role,
 } from "../src/lib/security/rolePolicy";
+import {
+  ASSISTANT_TOOLS,
+  type AssistantAction,
+  type AssistantCitation,
+  type AssistantResponse,
+  type AssistantTool,
+} from "../src/lib/cockpit/assistant";
 
 const app = express();
 const port = Number(process.env.PORT || 5000);
@@ -164,7 +171,7 @@ async function facilityPermission(userId: string, facilityId: string, capability
          OR ($3 = 'operate' AND p.can_operate AND m.role = 'OPERATOR')
          OR ($3 = 'engineer' AND p.can_view AND m.role = 'ENGINEER')
          OR ($3 = 'model' AND p.can_edit_model AND m.role = 'MODEL_ADMIN')
-         OR ($3 = 'assistant' AND p.can_view AND m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER'))
+          OR ($3 = 'assistant' AND p.can_view AND m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER'))
        )`,
     [userId, facilityId, capability, DEMO_ORGANIZATION_ID],
   );
@@ -379,7 +386,7 @@ app.get("/api/facilities", requireAuth, async (req: AuthedRequest, res) => {
             (p.can_operate AND m.role = 'OPERATOR') AS can_operate,
             (p.can_edit_model AND m.role = 'MODEL_ADMIN') AS can_edit_model,
             (m.role = 'ENGINEER') AS can_engineer,
-            (m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER')) AS can_assistant
+            (m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER', 'MODEL_ADMIN')) AS can_assistant
      FROM facilities f
      JOIN model_versions mv ON mv.id = f.model_version
      JOIN facility_permissions p ON p.facility_id = f.id
@@ -721,6 +728,654 @@ app.get("/api/facilities/:facilityId/context", requireAuth, async (req: AuthedRe
       quality: "GOOD",
       value: replaySnapshot(simulatedAt, modelConfig),
     },
+  });
+});
+
+type AssistantFacility = {
+  id: string;
+  name: string;
+  location: string;
+  model_version_id: string;
+  provenance: string;
+  synthetic_status: string;
+  quality: "GOOD" | "DEGRADED" | "UNKNOWN";
+  created_at: string;
+  model_config: FacilityModelConfig;
+  scenario_id: string;
+  scenario_key: string;
+  scenario_name: string;
+  simulated_start_at: number;
+  duration_s: number;
+};
+
+type AssistantContext = {
+  facilityId: string;
+  facilityName: string;
+  scenarioId: string;
+  simulatedAt: number;
+  modelVersionId: string;
+  provenance: ReturnType<typeof canonicalProvenance>;
+  quality: "GOOD" | "DEGRADED" | "UNKNOWN";
+};
+
+function assistantRefusal(role: Role, reason: string, interpretedAs = "refusal"): AssistantResponse {
+  return {
+    contractVersion: CONTRACT_VERSION,
+    answer: `I can’t answer that from your authorized Wattr data. ${reason}`,
+    role,
+    tool: "refusal",
+    interpretedAs,
+    context: {
+      facilityId: null,
+      scenarioId: null,
+      simulatedAt: null,
+      modelVersionId: null,
+      provenance: null,
+      quality: "UNKNOWN",
+    },
+    confidence: null,
+    limitations: [reason],
+    citations: [],
+    actions: [],
+  };
+}
+
+async function assistantFacilities(userId: string): Promise<AssistantFacility[]> {
+  const result = await pool.query(
+    `SELECT f.id, f.name, f.location, f.model_version AS model_version_id,
+            f.provenance, f.synthetic_status, f.quality, f.created_at,
+            mv.config AS model_config,
+            s.id AS scenario_id, s.scenario_key, s.name AS scenario_name,
+            s.simulated_start_at, s.duration_s
+     FROM facilities f
+     JOIN facility_permissions p ON p.facility_id = f.id AND p.user_id = $1 AND p.can_view = true
+     JOIN memberships m ON m.user_id = p.user_id AND m.organization_id = f.organization_id
+     JOIN model_versions mv ON mv.id = f.model_version AND mv.status = 'PUBLISHED'
+     JOIN scenarios s ON s.facility_id = f.id AND s.model_version_id = mv.id AND s.status = 'PUBLISHED'
+     WHERE f.organization_id = $2
+     ORDER BY f.name, f.id`,
+    [userId, DEMO_ORGANIZATION_ID],
+  );
+  return result.rows.map((row) => {
+    assertModelConfig(row.model_config);
+    return {
+      ...row,
+      simulated_start_at: Number(row.simulated_start_at),
+      duration_s: Number(row.duration_s),
+      model_config: row.model_config,
+    };
+  }) as AssistantFacility[];
+}
+
+async function assistantFacility(userId: string, facilityId: string): Promise<AssistantFacility | undefined> {
+  const facilities = await assistantFacilities(userId);
+  return facilities.find((facility) => facility.id === facilityId);
+}
+
+function assistantContext(facility: AssistantFacility, simulatedAt: number): AssistantContext {
+  return {
+    facilityId: facility.id,
+    facilityName: facility.name,
+    scenarioId: facility.scenario_id,
+    simulatedAt,
+    modelVersionId: facility.model_version_id,
+    provenance: canonicalProvenance({
+      provenance: facility.provenance,
+      synthetic_status: facility.synthetic_status,
+      created_at: facility.created_at,
+      model_version_id: facility.model_version_id,
+    }),
+    quality: facility.quality,
+  };
+}
+
+function assistantCitation(
+  context: AssistantContext,
+  id: string,
+  label: string,
+  kind: string,
+  evidence: Record<string, unknown>,
+  simulatedAt = context.simulatedAt,
+): AssistantCitation {
+  return {
+    id,
+    label,
+    kind,
+    facilityId: context.facilityId,
+    scenarioId: context.scenarioId,
+    simulatedAt,
+    modelVersionId: context.modelVersionId,
+    provenance: context.provenance,
+    quality: context.quality,
+    evidence,
+  };
+}
+
+function assistantRecordCitation(
+  context: AssistantContext,
+  row: {
+    scenario_id?: string;
+    simulated_at?: number | string;
+    model_version_id?: string;
+    provenance?: string;
+    synthetic_status?: string;
+    quality?: "GOOD" | "DEGRADED" | "UNKNOWN";
+    created_at?: string;
+    generated_at?: string;
+  },
+  id: string,
+  label: string,
+  kind: string,
+  evidence: Record<string, unknown>,
+): AssistantCitation {
+  return {
+    ...assistantCitation(
+      context,
+      id,
+      label,
+      kind,
+      evidence,
+      row.simulated_at === undefined ? context.simulatedAt : Number(row.simulated_at),
+    ),
+    scenarioId: row.scenario_id ?? context.scenarioId,
+    modelVersionId: row.model_version_id ?? context.modelVersionId,
+    provenance: canonicalProvenance(row),
+    quality: row.quality ?? context.quality,
+  };
+}
+
+function assistantAction(id: string, label: string, path: string, capability: AssistantAction["capability"]): AssistantAction {
+  return { id, label, kind: "NAVIGATE", path, capability };
+}
+
+function assistantActions(
+  facility: AssistantFacility,
+  tool: AssistantTool,
+  role: Role,
+  records: { incidentId?: string } = {},
+): AssistantAction[] {
+  const actions: AssistantAction[] = [
+    assistantAction("open-operations", "Open operations", `/facilities/${facility.id}/operations`, "view"),
+  ];
+  if (tool === "incident_context" && records.incidentId) {
+    actions.push(assistantAction(`open-incident:${records.incidentId}`, "Open incident", `/facilities/${facility.id}/incidents/${records.incidentId}`, "view"));
+  }
+  if (tool === "model_state" && role === "MODEL_ADMIN") {
+    actions.push(assistantAction("open-model-studio", "Open Model Studio", `/facilities/${facility.id}/model`, "model"));
+  }
+  return actions;
+}
+
+function assistantToolAllowed(role: Role, tool: AssistantTool): boolean {
+  if (tool === "portfolio_overview") return role === "PORTFOLIO_MANAGER";
+  if (tool === "model_state") return role === "MODEL_ADMIN";
+  return ROLE_CAPABILITIES[role]?.assistant === true;
+}
+
+function inferAssistantTool(question: string, hasFacility: boolean, role: Role): AssistantTool {
+  const normalized = question.toLowerCase();
+  if (!hasFacility && role === "PORTFOLIO_MANAGER") return "portfolio_overview";
+  if (/\b(portfolio|fleet|sites?|facilit(?:y|ies)|rank|highest|lowest)\b/.test(normalized) &&
+      role === "PORTFOLIO_MANAGER" && !/\b(this facility|this site|current site)\b/.test(normalized)) {
+    return "portfolio_overview";
+  }
+  if (/\b(model|parameter|mapping|mapped|constraint|version|validate|validation|publish|published|configuration|config)\b/.test(normalized)) {
+    return "model_state";
+  }
+  if (/\b(what if|counterfactual|alternative|inaction|outcome|would happen)\b/.test(normalized)) return "what_if";
+  if (/\b(recommend|recommendation|advisory|next step|should we)\b/.test(normalized)) return "recommendation";
+  if (/\b(incident|cause|affected|risk|alarm|thermal path|why)\b/.test(normalized)) return "incident_context";
+  if (/\b(audit|decision|history|disposition)\b/.test(normalized)) return "audit_history";
+  return "facility_state";
+}
+
+function assistantTimestamp(
+  requested: unknown,
+  facility: AssistantFacility,
+): { simulatedAt?: number; error?: string } {
+  const simulatedAt = requested === undefined ? facility.simulated_start_at : Number(requested);
+  if (
+    !Number.isSafeInteger(simulatedAt) ||
+    simulatedAt < facility.simulated_start_at ||
+    simulatedAt > facility.simulated_start_at + facility.duration_s
+  ) {
+    return { error: "The requested scenario time is outside the published facility scenario." };
+  }
+  return { simulatedAt };
+}
+
+function assistantAnswer(
+  role: Role,
+  tool: AssistantTool,
+  interpretedAs: string,
+  answer: string,
+  context: AssistantContext,
+  confidence: number | null,
+  citations: AssistantCitation[],
+  limitations: string[],
+  actions: AssistantAction[],
+): AssistantResponse {
+  return {
+    contractVersion: CONTRACT_VERSION,
+    answer,
+    role,
+    tool,
+    interpretedAs,
+    context: {
+      facilityId: context.facilityId,
+      scenarioId: context.scenarioId,
+      simulatedAt: context.simulatedAt,
+      modelVersionId: context.modelVersionId,
+      provenance: context.provenance,
+      quality: context.quality,
+    },
+    confidence,
+    limitations,
+    citations,
+    actions,
+  };
+}
+
+function containsPromptInjection(question: string) {
+  return /\b(ignore|disregard|override)\b.{0,40}\b(instructions?|policy|system|authorization)\b|reveal\b.{0,40}\b(prompt|system message|secret)\b/i.test(question);
+}
+
+app.get("/api/assistant/tools", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const membership = await organizationMembership(req.userId!);
+  if (!membership || !ROLE_CAPABILITIES[membership.role]?.assistant) {
+    return res.status(403).json({ error: "Ask Wattr is unavailable for this role" });
+  }
+  const tools = ASSISTANT_TOOLS.filter((tool) => assistantToolAllowed(membership.role, tool)).map((name) => ({
+    name,
+    readOnly: true,
+    scope: name === "portfolio_overview" ? "organization" : "facility",
+    description: {
+      portfolio_overview: "Rank authorized facilities by modeled forecast risk and operating context.",
+      facility_state: "Read the current authorized facility snapshot.",
+      incident_context: "Read the authorized incident, affected assets, cause, and thermal path.",
+      recommendation: "Read the authorized recommendation and its structured evidence.",
+      what_if: "Run a read-only counterfactual over the published model.",
+      audit_history: "Read immutable decision history for an authorized facility.",
+      model_state: "Read model mappings, parameters, constraints, versions, and validation state.",
+    }[name],
+  }));
+  res.json({ contractVersion: CONTRACT_VERSION, tools });
+});
+
+app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const membership = await organizationMembership(req.userId!);
+  if (!membership || !ROLE_CAPABILITIES[membership.role]?.assistant) {
+    return res.status(403).json(assistantRefusal(membership?.role ?? "VIEWER", "Ask Wattr requires an authorized assistant role."));
+  }
+  const question = req.body?.question;
+  if (typeof question !== "string" || question.trim().length < 2 || question.length > 2000) {
+    return res.status(400).json({ error: "Ask Wattr questions must be between 2 and 2,000 characters" });
+  }
+  const requestedTool = req.body?.tool;
+  const validRequestedTool = typeof requestedTool === "string" &&
+    (ASSISTANT_TOOLS as readonly string[]).includes(requestedTool)
+    ? requestedTool as AssistantTool
+    : undefined;
+  if (requestedTool !== undefined && !validRequestedTool) {
+    return res.status(400).json({ error: "Unknown Ask Wattr tool" });
+  }
+  const facilities = await assistantFacilities(req.userId!);
+  const requestedFacilityId = req.body?.facilityId;
+  if (requestedFacilityId !== undefined && (typeof requestedFacilityId !== "string" || requestedFacilityId.length > 128)) {
+    return res.status(400).json({ error: "Invalid facility scope" });
+  }
+  const hasFacility = typeof requestedFacilityId === "string";
+  const tool = validRequestedTool ?? inferAssistantTool(question, hasFacility, membership.role);
+  const injectionLimitation = containsPromptInjection(question)
+    ? "Instructions embedded in the question cannot change authorization, tool selection, or the canonical data boundary."
+    : undefined;
+  if (!assistantToolAllowed(membership.role, tool)) {
+    const refusal = assistantRefusal(membership.role, `${tool} is not available for your role.`);
+    if (injectionLimitation) refusal.limitations.push(injectionLimitation);
+    return res.status(403).json(refusal);
+  }
+  if (tool === "portfolio_overview") {
+    if (!facilities.length) {
+      return res.json(assistantRefusal(membership.role, "No authorized facilities with a published scenario are available."));
+    }
+    const requestedAt = req.body?.simulatedAt;
+    const invalidFacility = facilities.find((facility) => assistantTimestamp(requestedAt, facility).error);
+    if (invalidFacility) {
+      return res.status(400).json(assistantRefusal(
+        membership.role,
+        `The requested scenario time is unavailable for ${invalidFacility.name}; no alternate time was substituted.`,
+        "portfolio facility ranking",
+      ));
+    }
+    const rows = facilities.map((facility) => {
+      const timestamp = assistantTimestamp(requestedAt, facility);
+      const simulatedAt = timestamp.simulatedAt!;
+      const snapshot = replaySnapshot(simulatedAt, facility.model_config);
+      return { facility, simulatedAt, snapshot };
+    }).sort((left, right) => {
+      const risk = (value: string) => value === "critical" ? 3 : value === "watch" ? 2 : 1;
+      return risk(right.snapshot.forecast.risk) - risk(left.snapshot.forecast.risk) ||
+        right.snapshot.forecast.baselinePeakC - left.snapshot.forecast.baselinePeakC;
+    });
+    const citations = rows.map(({ facility, simulatedAt, snapshot }) => assistantCitation(
+      assistantContext(facility, simulatedAt),
+      `portfolio-${facility.id}`,
+      `${facility.name} modeled health`,
+      "portfolio.facility_rank",
+      {
+        rank: rows.findIndex((item) => item.facility.id === facility.id) + 1,
+        risk: snapshot.forecast.risk,
+        forecastPeakC: snapshot.forecast.baselinePeakC,
+        openIncident: snapshot.incident.open,
+        itPowerKw: snapshot.itPowerKw,
+        pue: snapshot.pue,
+      },
+      simulatedAt,
+    ));
+    const summary = rows.map((row, index) =>
+      `${index + 1}. ${row.facility.name}: ${row.snapshot.forecast.risk.toUpperCase()} risk, ` +
+      `${row.snapshot.forecast.baselinePeakC.toFixed(1)}°C modeled peak, ` +
+      `${row.snapshot.incident.open ? "open incident" : "no open incident"}`,
+    ).join("; ");
+    const limitations = [
+      "Portfolio ranking uses the deterministic published scenario; it is not live telemetry.",
+      ...(injectionLimitation ? [injectionLimitation] : []),
+    ];
+    const first = rows[0];
+    const response = assistantAnswer(
+      membership.role,
+      tool,
+      "portfolio facility ranking",
+      `Authorized facilities ranked by modeled forecast attention: ${summary}.`,
+      assistantContext(first.facility, first.simulatedAt),
+      Math.min(...rows.map((row) => row.snapshot.forecast.confidence)),
+      citations,
+      limitations,
+      [],
+    );
+    response.context.facilityId = null;
+    response.context.scenarioId = null;
+    response.context.simulatedAt = null;
+    response.context.modelVersionId = null;
+    response.context.provenance = null;
+    response.context.quality = rows.every((row) => row.facility.quality === "GOOD") ? "GOOD" : "DEGRADED";
+    return res.json(response);
+  }
+
+  const facilityId = typeof requestedFacilityId === "string"
+    ? requestedFacilityId
+    : facilities[0]?.id;
+  if (!facilityId) {
+    return res.json(assistantRefusal(membership.role, "No authorized facility with a published scenario is available."));
+  }
+  const facility = facilities.find((item) => item.id === facilityId);
+  if (!facility) {
+    return res.status(404).json(assistantRefusal(membership.role, "That facility is unavailable to your organization or facility grant."));
+  }
+  const timestamp = assistantTimestamp(req.body?.simulatedAt, facility);
+  if (timestamp.error) return res.status(400).json(assistantRefusal(membership.role, timestamp.error));
+  const simulatedAt = timestamp.simulatedAt!;
+  const context = assistantContext(facility, simulatedAt);
+  const snapshot = replaySnapshot(simulatedAt, facility.model_config);
+  const limitations = [
+    "Synthetic reduced-order model; values are not measured telemetry.",
+    ...(facility.quality !== "GOOD" ? [`Facility data quality is ${facility.quality}; interpret this answer with caution.`] : []),
+    ...(injectionLimitation ? [injectionLimitation] : []),
+  ];
+  let response: AssistantResponse;
+  if (tool === "facility_state") {
+    const citation = assistantCitation(context, `${facility.id}-snapshot-${simulatedAt}`, "Canonical facility snapshot", "simulation.snapshot", {
+      risk: snapshot.forecast.risk,
+      peakInletC: snapshot.peakInletC,
+      forecastPeakC: snapshot.forecast.baselinePeakC,
+      thresholdC: snapshot.forecast.thresholdC,
+      itPowerKw: snapshot.itPowerKw,
+      totalPowerKw: snapshot.totalPowerKw,
+      pue: snapshot.pue,
+      headroomKw: snapshot.headroomKw,
+      racksAtRisk: snapshot.racksAtRisk,
+    });
+    const detail = membership.role === "ENGINEER"
+      ? `The current modeled state is ${snapshot.forecast.risk.toUpperCase()}: ${snapshot.itPowerKw.toLocaleString()} kW IT load, ${snapshot.peakInletC.toFixed(1)}°C peak inlet, ${snapshot.headroomKw.toLocaleString()} kW headroom, and ${snapshot.racksAtRisk} rack(s) at risk.`
+      : `Current modeled state: ${snapshot.forecast.risk.toUpperCase()} risk, ${snapshot.peakInletC.toFixed(1)}°C peak inlet, and ${snapshot.forecast.baselinePeakC.toFixed(1)}°C forecast peak against a ${snapshot.forecast.thresholdC.toFixed(1)}°C limit.`;
+    response = assistantAnswer(membership.role, tool, "current facility state", detail, context, snapshot.forecast.confidence, [citation], limitations, assistantActions(facility, tool, membership.role));
+  } else if (tool === "incident_context") {
+    const result = await pool.query(
+      `SELECT id, title, severity, status, affected_assets, raw_signal_count, likely_cause,
+              forecast_minutes, correlated_signals, thermal_path, model_version_id,
+              provenance, synthetic_status, quality, scenario_id, simulated_at, created_at
+       FROM incidents
+       WHERE facility_id = $1 AND scenario_id = $2 AND model_version_id = $3
+         AND simulated_at <= $4
+       ORDER BY simulated_at DESC, created_at DESC LIMIT 1`,
+      [facility.id, facility.scenario_id, facility.model_version_id, simulatedAt],
+    );
+    const incident = result.rows[0];
+    if (!incident) {
+      response = assistantAnswer(membership.role, tool, "incident context", "No incident record is available for this authorized facility at the requested time.", context, null, [], [...limitations, "Incident data is unavailable; no cause or affected asset is inferred."], assistantActions(facility, tool, membership.role));
+    } else {
+      const citation = assistantRecordCitation(context, incident, incident.id, incident.title, "incident.record", {
+        severity: incident.severity,
+        status: incident.status,
+        affectedAssets: incident.affected_assets,
+        rawSignalCount: incident.raw_signal_count,
+        likelyCause: incident.likely_cause,
+        forecastMinutes: incident.forecast_minutes,
+        correlatedSignals: incident.correlated_signals,
+        thermalPath: incident.thermal_path,
+      });
+      const assets = Array.isArray(incident.affected_assets) ? incident.affected_assets.join(", ") : "unavailable";
+      response = assistantAnswer(
+        membership.role,
+        tool,
+        "incident, affected assets, likely cause, and thermal path",
+        `The ${incident.severity} ${incident.status.toLowerCase()} incident is ${incident.title}. Affected assets: ${assets}. Likely cause: ${incident.likely_cause}. The record contains ${incident.raw_signal_count} correlated raw signal(s) and a ${incident.forecast_minutes}-minute forecast window.`,
+        context,
+        snapshot.forecast.confidence,
+        [citation],
+        limitations,
+        assistantActions(facility, tool, membership.role, {
+          incidentId: incident.id,
+        }),
+      );
+    }
+  } else if (tool === "recommendation" || tool === "what_if") {
+    const result = await pool.query(
+      `SELECT r.id, r.title, r.status, r.rationale, r.command, r.version, r.explanation,
+              r.evidence, r.confidence, r.limitations, r.simulated_at, r.model_version_id,
+              r.scenario_id, r.provenance, r.synthetic_status, r.quality, r.created_at
+       FROM recommendations r
+       WHERE r.facility_id = $1 AND r.scenario_id = $2 AND r.model_version_id = $3
+         AND r.simulated_at <= $4
+       ORDER BY r.simulated_at DESC, r.created_at DESC LIMIT 1`,
+      [facility.id, facility.scenario_id, facility.model_version_id, simulatedAt],
+    );
+    const recommendation = result.rows[0];
+    if (!recommendation) {
+      response = assistantAnswer(membership.role, tool, "recommendation", "No recommendation is available for this authorized facility. I will not invent one.", context, null, [], [...limitations, "Recommendation data is unavailable."], []);
+    } else {
+      const command = parseAdvisoryCommand(recommendation.command);
+      const citation = assistantRecordCitation(context, recommendation, recommendation.id, recommendation.title, "recommendation.record", {
+        status: recommendation.status,
+        version: recommendation.version,
+        rationale: recommendation.rationale,
+        command: recommendation.command,
+        evidence: recommendation.evidence,
+        confidence: Number(recommendation.confidence),
+        limitations: recommendation.limitations,
+      });
+      if (tool === "what_if" && !command) {
+        response = assistantAnswer(membership.role, tool, "recommendation counterfactual", "The persisted recommendation command is unavailable or invalid, so no what-if outcome can be calculated.", context, null, [citation], [...limitations, "No valid recommendation command was available for the read-only simulation."], []);
+      } else if (tool === "what_if") {
+        const inaction = replaySnapshot(simulatedAt, facility.model_config);
+        const counterfactual = counterfactualCockpitSnapshot(simulatedAt, command!, facility.model_config);
+        response = assistantAnswer(
+          membership.role,
+          tool,
+          "read-only recommendation counterfactual",
+          `If the recommendation (${command!.flowPercent}% CDU-03 flow for ${command!.durationMinutes} minutes) were modeled at this scenario time, the forecast peak is ${counterfactual.forecast.advisoryPeakC.toFixed(1)}°C versus ${inaction.forecast.baselinePeakC.toFixed(1)}°C with inaction, avoiding ${counterfactual.forecast.advisoryConstraintMinutes.toFixed(1)} of modeled constraint minutes versus ${inaction.forecast.baselineConstraintMinutes.toFixed(1)}.`,
+          context,
+          counterfactual.forecast.confidence,
+          [citation, assistantCitation(context, `${recommendation.id}-what-if-${simulatedAt}`, "Read-only what-if outcome", "simulation.counterfactual", {
+            inactionForecastPeakC: inaction.forecast.baselinePeakC,
+            recommendationForecastPeakC: counterfactual.forecast.advisoryPeakC,
+            inactionConstraintMinutes: inaction.forecast.baselineConstraintMinutes,
+            recommendationConstraintMinutes: counterfactual.forecast.advisoryConstraintMinutes,
+            command,
+          })],
+          [...limitations, "This is a counterfactual model outcome, not a command or a measured result.", "Human approval remains required; Ask Wattr cannot approve or send OT commands."],
+          assistantActions(facility, tool, membership.role),
+        );
+      } else {
+        const inaction = replaySnapshot(simulatedAt, facility.model_config);
+        const counterfactual = command
+          ? counterfactualCockpitSnapshot(simulatedAt, command, facility.model_config)
+          : undefined;
+        const modeledEffect = counterfactual
+          ? `${Math.max(0, inaction.forecast.baselinePeakC - counterfactual.forecast.advisoryPeakC).toFixed(1)}°C lower modeled peak and ` +
+            `${Math.max(0, inaction.forecast.baselineConstraintMinutes - counterfactual.forecast.advisoryConstraintMinutes).toFixed(1)} fewer modeled constraint minutes`
+          : "unavailable because the persisted command is invalid";
+        response = assistantAnswer(
+          membership.role,
+          tool,
+          "recommendation and structured evidence",
+          `Recommendation ${recommendation.status.toLowerCase()}: ${recommendation.title}. ${recommendation.rationale} Modeled effect: ${modeledEffect}. Confidence is ${Math.round(Number(recommendation.confidence) * 100)}%.`,
+          context,
+          Number(recommendation.confidence),
+          [citation, ...(counterfactual ? [assistantCitation(context, `${recommendation.id}-snapshot-${simulatedAt}`, "Recommendation replay snapshot", "simulation.recommendation", {
+            baselinePeakC: inaction.forecast.baselinePeakC,
+            advisoryPeakC: counterfactual.forecast.advisoryPeakC,
+            reductionC: Math.max(0, inaction.forecast.baselinePeakC - counterfactual.forecast.advisoryPeakC),
+            constraintMinutesAvoided: Math.max(0, inaction.forecast.baselineConstraintMinutes - counterfactual.forecast.advisoryConstraintMinutes),
+            command,
+          })] : [])],
+          [...limitations, ...(!counterfactual ? ["The persisted recommendation command is invalid; its effect was not modeled."] : []), "The recommendation is advisory only; no command is sent to operational technology."],
+          assistantActions(facility, tool, membership.role),
+        );
+      }
+    }
+  } else if (tool === "audit_history") {
+    const result = await pool.query(
+      `SELECT id, action, scenario_id, simulated_at, model_version, model_version_id,
+              payload, provenance, synthetic_status, quality, created_at
+       FROM audit_records
+       WHERE facility_id = $1 AND scenario_id = $2 AND model_version_id = $3
+         AND simulated_at <= $4
+       ORDER BY simulated_at DESC, created_at DESC LIMIT 10`,
+      [facility.id, facility.scenario_id, facility.model_version_id, simulatedAt],
+    );
+    const citations = result.rows.map((row) => assistantRecordCitation(context, row, `audit-${row.id}`, `Audit ${row.id}`, "audit.record", {
+      action: row.action,
+      decision: row.payload?.decision ?? null,
+      outcome: row.payload?.decision?.outcome ?? null,
+    }));
+    response = assistantAnswer(
+      membership.role,
+      tool,
+      "immutable audit history",
+      result.rows.length
+        ? `${result.rows.length} immutable decision record(s) are available. Most recent: ${result.rows[0].action} at scenario time ${Number(result.rows[0].simulated_at)} with model ${result.rows[0].model_version}.`
+        : "No immutable decision records are available for this facility. I will not infer an operator decision.",
+      context,
+      result.rows.length ? 1 : null,
+      citations,
+      result.rows.length ? limitations : [...limitations, "Decision history is unavailable."],
+      [],
+    );
+  } else {
+    const [versions, mappings] = await Promise.all([
+      pool.query(
+        `SELECT id, status, config, published_at, created_at
+         FROM model_versions WHERE facility_id = $1 ORDER BY created_at DESC`,
+        [facility.id],
+      ),
+      pool.query(
+        `SELECT
+           (SELECT count(*) FROM facility_hierarchy WHERE facility_id = $1) AS hierarchy_count,
+           (SELECT count(*) FROM assets WHERE facility_id = $1) AS asset_count,
+           (SELECT count(*) FROM sensors WHERE facility_id = $1) AS sensor_count,
+           (SELECT count(*) FROM topology_edges WHERE facility_id = $1) AS topology_edge_count`,
+        [facility.id],
+      ),
+    ]);
+    const currentVersion = versions.rows.find((version) => version.id === facility.model_version_id);
+    const citation = assistantCitation(context, `${facility.id}-model-${facility.model_version_id}`, "Published model and mappings", "model.state", {
+      activeVersion: facility.model_version_id,
+      activeStatus: currentVersion?.status ?? "UNAVAILABLE",
+      parameters: facility.model_config,
+      constraints: {
+        inletTemperatureDomainMaxC: MODEL_DOMAIN_MAX_C,
+        commandEnvelope: COMMAND_ENVELOPE,
+        scenarioDurationS: facility.duration_s,
+      },
+      versions: versions.rows.map((version) => ({ id: version.id, status: version.status, publishedAt: version.published_at })),
+      mappings: mappings.rows[0],
+    });
+    response = assistantAnswer(
+      membership.role,
+      tool,
+      "model mappings, parameters, constraints, versions, and validation state",
+      `The active published model is ${facility.model_version_id} (${currentVersion?.status ?? "status unavailable"}). Parameters: seed ${facility.model_config.seed}, thermal mass ${facility.model_config.thermalMass}, response lag ${facility.model_config.responseLag}s. Mappings include ${mappings.rows[0]?.hierarchy_count ?? 0} hierarchy nodes, ${mappings.rows[0]?.asset_count ?? 0} assets, ${mappings.rows[0]?.sensor_count ?? 0} sensors, and ${mappings.rows[0]?.topology_edge_count ?? 0} topology edges. The model domain ends at ${MODEL_DOMAIN_MAX_C}°C and the permitted advisory envelope is ${COMMAND_ENVELOPE.minFlowPercent}–${COMMAND_ENVELOPE.maxFlowPercent}% CDU flow.`,
+      context,
+      1,
+      [citation],
+      [...limitations, "Model configuration is disclosed for administration and validation; Ask Wattr cannot publish, rollback, or edit a model."],
+      assistantActions(facility, tool, membership.role),
+    );
+  }
+  return res.json(response);
+});
+
+app.post("/api/assistant/action", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const membership = await organizationMembership(req.userId!);
+  if (!membership || !ROLE_CAPABILITIES[membership.role]?.assistant) {
+    return res.status(403).json({ error: "Ask Wattr action access is unavailable for this role" });
+  }
+  const action = req.body?.action;
+  const facilityId = req.body?.facilityId;
+  if (typeof action !== "string" || typeof facilityId !== "string") {
+    return res.status(400).json({ error: "A named action and facility are required" });
+  }
+  let target: { path: string; capability: Capability; resource?: { table: "incidents" | "recommendations"; id: string } } | undefined;
+  if (action === "open-operations") {
+    target = { path: `/facilities/${facilityId}/operations`, capability: "view" };
+  } else if (action === "open-model-studio") {
+    target = { path: `/facilities/${facilityId}/model`, capability: "model" };
+  } else {
+    const [kind, resourceId] = action.split(":");
+    if (resourceId && /^[a-z0-9][a-z0-9._-]{1,127}$/i.test(resourceId)) {
+      if (kind === "open-incident") {
+        target = {
+          path: `/facilities/${facilityId}/incidents/${resourceId}`,
+          capability: "view",
+          resource: { table: "incidents", id: resourceId },
+        };
+      }
+    }
+  }
+  if (!target) {
+    return res.status(403).json({ error: "Ask Wattr can only propose named navigation actions; it cannot approve decisions or issue OT commands" });
+  }
+  const permission = await facilityPermission(req.userId!, facilityId, target.capability);
+  if (!permission) return res.status(404).json({ error: "Facility action unavailable" });
+  if (target.resource) {
+    const existing = await pool.query(
+      `SELECT id FROM ${target.resource.table} WHERE id = $1 AND facility_id = $2`,
+      [target.resource.id, facilityId],
+    );
+    if (!existing.rows[0]) return res.status(404).json({ error: "Facility action target unavailable" });
+  }
+  res.json({
+    contractVersion: CONTRACT_VERSION,
+    action: "NAVIGATE",
+    actionId: action,
+    path: target.path,
+    facilityId,
+    capability: target.capability,
+    humanConfirmationRequired: false,
   });
 });
 

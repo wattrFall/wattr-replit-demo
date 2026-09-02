@@ -15,6 +15,7 @@
     "test:contracts": "npm run db:setup && tsx scripts/test-canonical-contracts.ts",
     "test:role-security": "npm run db:setup && tsx scripts/test-role-security.ts",
     "test:role-security-api": "npm run db:setup && tsx scripts/test-role-security-api.ts",
+    "test:ask-wattr": "npm run db:setup && tsx scripts/test-ask-wattr.ts",
     "test:decision-workflow": "npm run db:setup && tsx scripts/test-decision-workflow.ts",
     "demo:validate": "tsx scripts/validate-demo-scenario.ts"
   },

@@ -11,6 +11,7 @@ import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { replayCockpitSnapshot, SCENARIO_DURATION_S, snapshotForAudit, type CockpitSnapshot, type FacilityModelConfig } from "@/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph, type GraphView, type ControllerComparison } from "@/lib/cockpit/workspaces";
 import { ROLES, type Role } from "@/lib/security/rolePolicy";
+import { assistantSuggestions, type AssistantResponse } from "@/lib/cockpit/assistant";
 
 type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model: boolean; assistant: boolean };
 type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number };
@@ -143,11 +144,13 @@ function Shell({ data, facility, children }: { data: SessionData; facility?: Fac
   const active = facility ?? data.facilities[0];
   const nav: Array<[LucideIcon, string, string]> = [
     ...(data.me.role === "PORTFOLIO_MANAGER" ? [[LayoutDashboard, "Portfolio", "/portfolio"] as [LucideIcon, string, string]] : []),
+    ...(data.me.role === "PORTFOLIO_MANAGER" ? [[BrainCircuit, "Ask Wattr", "/ask-wattr"] as [LucideIcon, string, string]] : []),
     ...(active ? [
       [Gauge, "Operations", `/facilities/${active.id}/operations`] as [LucideIcon, string, string],
       [AlertTriangle, "Incident", `/facilities/${active.id}/incidents/inc-204`] as [LucideIcon, string, string],
       [ShieldCheck, "Recommendation", `/facilities/${active.id}/recommendations/rec-17`] as [LucideIcon, string, string],
       [History, "Audit history", `/facilities/${active.id}/audit`] as [LucideIcon, string, string],
+      ...(active.can_assistant && data.me.role !== "PORTFOLIO_MANAGER" ? [[BrainCircuit, "Ask Wattr", `/facilities/${active.id}/ask-wattr`] as [LucideIcon, string, string]] : []),
       ...(["OPERATOR", "ENGINEER"].includes(data.me.role) ? [[GitBranch, "Thermal graph", `/facilities/${active.id}/topology`] as [LucideIcon, string, string]] : []),
       ...(active.can_engineer ? [[BrainCircuit, "Model Lab", `/facilities/${active.id}/model-lab`] as [LucideIcon, string, string]] : []),
       ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
@@ -603,6 +606,94 @@ function Help({ data }: { data: SessionData }) {
   return <Shell data={data}><PageHead eyebrow={`HELP / ${data.me.role.replace(/_/g, " ")}`} title="Operator guide" detail="A role-specific, restartable tutorial for the Wattr operating thread."/><div className="grid gap-4 lg:grid-cols-[1fr_.8fr]"><section className="panel p-6"><div className="flex items-center gap-3"><BookOpen className="text-cyan-300" aria-hidden="true"/><div><h2 className="font-semibold">{done ? "Tutorial complete" : "Welcome to Wattr"}</h2><p className="text-xs text-slate-500">Step {done ? steps.length : step + 1} of {steps.length}</p></div></div>{done ? <p className="copy">You can restart this guide any time. The cockpit always keeps human authority and synthetic provenance visible.</p> : <><div className="mt-8 rounded-md border border-cyan-400/30 bg-cyan-400/5 p-5"><div className="eyebrow">STEP {step + 1}</div><h3 className="mt-2 text-xl font-semibold">{current.title}</h3><p className="mt-3 text-sm leading-6 text-slate-400">{current.body}</p></div><div className="mt-5 flex flex-wrap gap-2"><button type="button" className="button secondary" disabled={step===0} onClick={() => update(Math.max(0, step - 1))}>Back</button><button type="button" className="button primary" onClick={() => update(step + 1 >= steps.length ? step : step + 1, step + 1 >= steps.length)}>Next <ArrowRight size={15}/></button><button type="button" className="button secondary" onClick={() => update(step, true)}>Skip tutorial</button><button type="button" className="button secondary" onClick={openTutorialRoute}>Open this workspace</button></div></>}{error&&<p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}</section><section className="panel p-6"><div className="eyebrow">ROLE LENS</div><h2 className="mt-2 text-xl font-semibold">{data.me.role.replace(/_/g, " ")}</h2><p className="copy">The same deterministic scenario is disclosed progressively: portfolio outcomes first, asset relationships next, and model-level details only when your role needs them.</p><button type="button" className="button secondary" onClick={() => update(0, false)}><RotateCcw size={15}/>Restart tutorial</button><div className="mt-6 border-t border-slate-800 pt-5"><ThemeControl/></div></section></div></Shell>;
 }
 
+function AssistantPage({ data, facility }: { data: SessionData; facility?: Facility }) {
+  const simulatedAt = useScenarioSession((state) => state.simulatedAt);
+  const [question, setQuestion] = useState("");
+  const [response, setResponse] = useState<AssistantResponse | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const suggestions = assistantSuggestions(data.me.role, facility?.name);
+  const ask = async (value = question) => {
+    const trimmed = value.trim();
+    if (!trimmed || pending) return;
+    setQuestion(trimmed);
+    setPending(true);
+    setError("");
+    try {
+      const result = await post<AssistantResponse>("/api/assistant/query", {
+        question: trimmed,
+        ...(facility ? { facilityId: facility.id } : {}),
+        simulatedAt,
+      });
+      setResponse(result);
+    } catch (cause) {
+      setError(String(cause));
+      setResponse(null);
+    } finally {
+      setPending(false);
+    }
+  };
+  const runAction = async (action: NonNullable<AssistantResponse["actions"]>[number]) => {
+    if (!facility) return;
+    try {
+      const result = await post<{ path: string }>("/api/assistant/action", {
+        action: action.id,
+        facilityId: facility.id,
+      });
+      navigate(result.path);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+  return <Shell data={data} facility={facility}>
+    <PageHead
+      eyebrow={`ASK WATTR / ${data.me.role.replace(/_/g, " ")}`}
+      title="Authorized operating answers"
+      detail={facility ? `${facility.name} · Ask about risk, causes, recommendations, and the published model.` : "Ask about your authorized portfolio and receive facility-ranked operating context."}
+      action={<Status tone="warn">READ ONLY · HUMAN AUTHORITY</Status>}
+    />
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+      <section className="panel overflow-hidden">
+        <form className="border-b border-slate-800 p-5" onSubmit={(event) => { event.preventDefault(); void ask(); }}>
+          <label className="field m-0 block">
+            <span>What would you like to know?</span>
+            <textarea
+              aria-label="Ask Wattr question"
+              className="textarea mt-2 min-h-[100px] w-full"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder={facility ? "e.g. What is the current risk and what assets are affected?" : "e.g. Which facilities need attention first?"}
+              maxLength={2000}
+            />
+          </label>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-xs text-slate-500">Answers use authorized structured data only. No live telemetry is implied.</span>
+            <button className="button primary" type="submit" disabled={!question.trim() || pending}><BrainCircuit size={15}/>{pending ? "Reading canonical state…" : "Ask Wattr"}</button>
+          </div>
+        </form>
+        {!response && !error && <div className="p-6"><div className="eyebrow">TRY A ROLE-AWARE QUESTION</div><div className="mt-3 grid gap-2">{suggestions.map((suggestion) => <button key={suggestion} type="button" className="w-full rounded-md border border-slate-800 p-3 text-left text-sm text-slate-300 hover:border-cyan-400/60" onClick={() => void ask(suggestion)}>{suggestion}<ArrowRight size={14} className="float-right mt-0.5 text-cyan-300"/></button>)}</div></div>}
+        {error && <div className="p-6" role="alert"><p className="text-sm text-red-300">{error}</p><p className="mt-2 text-xs text-slate-500">No answer was shown because the authorized assistant request did not complete.</p></div>}
+        {response && <div className="p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">{response.tool.replace(/_/g, " ")}</div><h2 className="mt-2 text-lg font-semibold">Grounded answer</h2></div><Status tone={response.tool === "refusal" ? "bad" : "good"}>{response.tool === "refusal" ? "LIMITED" : "AUTHORIZED"}</Status></div>
+          <p className="mt-5 text-sm leading-7 text-slate-200">{response.answer}</p>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="subpanel"><span className="eyebrow">FACILITY</span><b>{response.context.facilityId ?? (response.citations.length ? `${response.citations.length} authorized sites` : "Unavailable")}</b></div>
+            <div className="subpanel"><span className="eyebrow">SCENARIO TIME</span><b className={mono}>{response.context.simulatedAt ? formatSimulatedAt(response.context.simulatedAt) : "Unavailable"}</b></div>
+            <div className="subpanel"><span className="eyebrow">MODEL VERSION</span><b className={mono}>{response.context.modelVersionId ?? (response.citations[0]?.modelVersionId ?? "Unavailable")}</b></div>
+            <div className="subpanel"><span className="eyebrow">CONFIDENCE / QUALITY</span><b>{response.confidence === null ? "Unavailable" : `${Math.round(response.confidence * 100)}%`} · {response.context.quality}</b></div>
+          </div>
+          {response.limitations.length > 0 && <div className="mt-5 rounded-md border border-amber-400/30 bg-amber-400/5 p-4"><div className="eyebrow text-amber-300">LIMITATIONS</div><ul className="mt-2 space-y-1 text-xs leading-5 text-slate-400">{response.limitations.map((limitation) => <li key={limitation}>• {limitation}</li>)}</ul></div>}
+          {response.actions.length > 0 && <div className="mt-5 flex flex-wrap gap-2"><span className="self-center text-xs text-slate-500">Authorized next step:</span>{response.actions.map((action) => <button type="button" key={action.id} className="button secondary" onClick={() => void runAction(action)}>{action.label}<ArrowRight size={14}/></button>)}</div>}
+        </div>}
+      </section>
+      <aside className="space-y-4">
+        <section className="panel p-5"><div className="eyebrow">EVIDENCE USED</div><p className="mt-2 text-xs leading-5 text-slate-500">Each answer exposes the structured records used to produce it. Expand a source to inspect the evidence values.</p><div className="mt-4 space-y-2">{response?.citations.map((citation) => <details key={citation.id} className="disclosure"><summary>{citation.label}<span className="ml-auto text-[10px] text-slate-500">{citation.quality}</span></summary><div className="space-y-2 text-[11px]"><p><b>Facility:</b> {citation.facilityId} · <b>Scenario:</b> {citation.scenarioId ?? "none"}</p><p><b>Time:</b> {citation.simulatedAt === null ? "unavailable" : formatSimulatedAt(citation.simulatedAt)}</p><p><b>Model:</b> {citation.modelVersionId}</p><p><b>Provenance:</b> {citation.provenance.kind} / {citation.provenance.syntheticStatus} · {citation.provenance.source}</p><pre className="overflow-x-auto rounded bg-black/20 p-2 text-[10px]">{JSON.stringify(citation.evidence, null, 2)}</pre></div></details>)}{response && !response.citations.length && <p className="text-xs text-slate-500">No evidence was returned because the requested data is unavailable or unauthorized.</p>}{!response && <p className="text-xs text-slate-500">Evidence will appear here after you ask a question.</p>}</div></section>
+        <section className="panel p-5"><div className="eyebrow">BOUNDARY</div><p className="mt-3 text-xs leading-6 text-slate-400">Ask Wattr can read authorized portfolio, facility, incident, recommendation, audit, simulation, and model state. It cannot approve decisions, publish models, or issue operational technology commands.</p></section>
+      </aside>
+    </div>
+  </Shell>;
+}
+
 function TutorialOverlay({ data, onProgress }: { data: SessionData; onProgress: (step: number, complete: boolean) => void }) {
   const steps = tutorialSteps[data.me.role];
   const [step, setStep] = useState(Math.min(data.me.tutorial_step ?? 0, steps.length - 1));
@@ -688,6 +779,7 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   if(path==="/admin")return <AccessAdministration data={data}/>;
   if(path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Opening your authorized workspace…</div>;
   if(path==="/portfolio")return <Portfolio data={data}/>;
+  if(path==="/ask-wattr"&&data.me.role==="PORTFOLIO_MANAGER")return <AssistantPage data={data}/>;
   if(path==="/help")return <Help data={data}/>;
   const parts=path.split("/").filter(Boolean), facility=parts[0]==="facilities"&&data.facilities.find(f=>f.id===parts[1]);
   if(!facility)return <Shell data={data}><PageHead eyebrow="ACCESS" title="Facility unavailable" detail="This facility is not present in your authorized API response."/></Shell>;
@@ -696,6 +788,8 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   if(section==="incidents")return <IncidentPage data={data} facility={facility} incidentId={parts[3] ?? "inc-204"}/>;
   if(section==="recommendations")return <Recommendation data={data} facility={facility}/>;
   if(section==="audit")return <AuditPage data={data} facility={facility}/>;
+  if(section==="ask-wattr"&&!facility.can_assistant)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Ask Wattr unavailable" detail="Assistant access requires an authorized role and facility view grant."/></Shell>;
+  if(section==="ask-wattr")return <AssistantPage data={data} facility={facility}/>;
   if(section==="topology"&&!["OPERATOR","ENGINEER"].includes(data.me.role))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
   if(section==="topology")return <GraphPage data={data} facility={facility}/>;
   if(section==="model-lab"&&!facility.can_engineer)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Engineering analysis access is required."/></Shell>;
