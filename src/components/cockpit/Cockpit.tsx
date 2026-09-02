@@ -1,20 +1,20 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Show, SignIn, SignUp, useUser } from "@clerk/react";
 import {
-  Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, BookOpen, BrainCircuit, Check,
-  CircleHelp, Clock3, Cpu, Gauge, GitBranch, History, LayoutDashboard, Menu, Pause, Play,
-  RotateCcw, Save, ShieldCheck, SlidersHorizontal, Thermometer, Trash2, UserCog, X,
+  Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ArrowDownUp, BookOpen, BrainCircuit, Check,
+  CircleHelp, Clock3, Cpu, Gauge, GitBranch, History, LayoutDashboard, Layers3, Menu, MousePointer2,
+  Pause, Play, RotateCcw, Search, Save, ShieldCheck, SkipForward, SlidersHorizontal, Thermometer, Trash2, UserCog, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { SandboxShell } from "@/components/sandbox/SandboxShell";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
-import { snapshotForAudit, type CockpitSnapshot, type FacilityModelConfig } from "@/lib/cockpit/simulation";
+import { replayCockpitSnapshot, SCENARIO_DURATION_S, snapshotForAudit, type CockpitSnapshot, type FacilityModelConfig } from "@/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph, type GraphView, type ControllerComparison } from "@/lib/cockpit/workspaces";
 import { ROLES, type Role } from "@/lib/security/rolePolicy";
 
 type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model: boolean; assistant: boolean };
 type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number };
-type Facility = { id: string; name: string; location: string; model_version: string; model_config: FacilityModelConfig; provenance: "SIMULATED"; can_view: boolean; can_operate: boolean; can_edit_model: boolean; can_engineer: boolean; can_assistant: boolean };
+type Facility = { id: string; name: string; location: string; model_version: string; model_config: FacilityModelConfig; provenance: "SIMULATED"; recommendation_status: "PROPOSED" | "APPROVED" | "REJECTED" | "EXPIRED" | "NONE"; can_view: boolean; can_operate: boolean; can_edit_model: boolean; can_engineer: boolean; can_assistant: boolean };
 type Audit = { id: number; action: string; scenario_id: string; simulated_at: number; model_version: string; payload: Record<string, any>; created_at: string };
 type Incident = { id: string; title: string; severity: "WATCH" | "HIGH"; status: "OPEN" | "RESOLVED"; simulated_at: number; affected_assets: string[]; raw_signal_count: number; likely_cause: string; forecast_minutes: number; model_version: string };
 type ModelVersion = { id: string; facility_id: string; status: "DRAFT" | "VALIDATED" | "PUBLISHED" | "ARCHIVED"; config: Record<string, unknown>; published_at: string | null; created_by: string | null; created_at: string };
@@ -71,9 +71,65 @@ function Shell({ data, facility, children }: { data: SessionData; facility?: Fac
   </div>;
 }
 
+type PortfolioSort = "attention" | "risk" | "power" | "cooling" | "efficiency" | "recommendation";
+type PortfolioFilter = "all" | "attention" | "nominal" | "recommendation";
+
+function portfolioRisk(snapshot: CockpitSnapshot) {
+  return snapshot.forecast.risk === "critical" ? 3 : snapshot.forecast.risk === "watch" ? 2 : 1;
+}
+
 function Portfolio({ data }: { data: SessionData }) {
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot);
-  return <Shell data={data}><PageHead eyebrow={`PORTFOLIO COMMAND / ${data.facilities.length.toString().padStart(2, "0")} AUTHORIZED`} title="Facility health" detail="Ranked operating context from your authorized sites."/><div className="grid gap-3 md:grid-cols-4"><Metric label="Sites monitored" value={String(data.facilities.length).padStart(2, "0")} sub="permission-filtered"/><Metric label="Fleet headroom" value={snapshot.headroomKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}% load`}/><Metric label="Open incidents" value={snapshot.incident.open ? "01" : "00"} sub={snapshot.incident.open ? "requires review" : "no active forecast"} warn={snapshot.incident.open}/><Metric label="Fleet PUE" value={snapshot.pue.toFixed(3)} sub="physical simulation"/></div><section className="panel mt-5 overflow-hidden"><div className="border-b border-slate-800 px-5 py-4"><h2 className="font-semibold">Authorized sites</h2></div>{data.facilities.map(f => <button key={f.id} onClick={() => navigate(`/facilities/${f.id}/operations`)} className="facility-row"><div><b>{f.name}</b><div className="mt-1 text-xs text-slate-500">{f.location}</div></div><div className="flex items-center gap-4"><Status tone={snapshot.incident.open ? "warn" : "good"}>{snapshot.incident.open ? "Watch" : "Nominal"}</Status><span className={`${mono} text-[10px] text-slate-500`}>{f.provenance}</span><ArrowRight size={16}/></div></button>)}</section></Shell>;
+  const simulatedAt = useScenarioSession((s) => s.simulatedAt);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<PortfolioFilter>("all");
+  const [sort, setSort] = useState<PortfolioSort>("attention");
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const rows = useMemo(() => data.facilities.map((facility) => ({
+    facility,
+    snapshot: replayCockpitSnapshot(simulatedAt, facility.model_config),
+  })), [data.facilities, simulatedAt]);
+  const filtered = useMemo(() => rows
+    .filter(({ facility, snapshot }) => {
+      const matchesSearch = `${facility.name} ${facility.location} ${facility.id}`.toLowerCase().includes(query.toLowerCase().trim());
+      const matchesFilter = filter === "all" || (filter === "attention" ? snapshot.incident.open : filter === "recommendation" ? facility.recommendation_status === "PROPOSED" : !snapshot.incident.open);
+      return matchesSearch && matchesFilter;
+    })
+    .sort((a, b) => {
+      if (sort === "risk" || sort === "attention") return portfolioRisk(b.snapshot) - portfolioRisk(a.snapshot) || b.snapshot.peakInletC - a.snapshot.peakInletC;
+      if (sort === "power") return b.snapshot.itPowerKw - a.snapshot.itPowerKw;
+      if (sort === "cooling") return b.snapshot.fanPercent - a.snapshot.fanPercent;
+      if (sort === "recommendation") return Number(b.facility.recommendation_status === "PROPOSED") - Number(a.facility.recommendation_status === "PROPOSED");
+      return a.snapshot.pue - b.snapshot.pue;
+    }), [rows, query, filter, sort]);
+  const fleet = rows.reduce((total, row) => ({
+    headroom: total.headroom + row.snapshot.headroomKw,
+    incidents: total.incidents + (row.snapshot.incident.open ? 1 : 0),
+    itPower: total.itPower + row.snapshot.itPowerKw,
+    totalPower: total.totalPower + row.snapshot.totalPowerKw,
+  }), { headroom: 0, incidents: 0, itPower: 0, totalPower: 0 });
+  const toggleCompare = (id: string) => setCompareIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : ids.length < 3 ? [...ids, id] : ids);
+  const compared = rows.filter((row) => compareIds.includes(row.facility.id));
+  return <Shell data={data}>
+    <PageHead eyebrow={`PORTFOLIO COMMAND / ${data.facilities.length.toString().padStart(2, "0")} AUTHORIZED`} title="Facility health" detail="Ranked operating context from your authorized sites." action={<Status>{formatSimulatedAt(simulatedAt).slice(0, 16)} UTC</Status>}/>
+    <div className="grid gap-3 md:grid-cols-4">
+      <Metric label="Sites monitored" value={String(rows.length).padStart(2, "0")} sub="permission-filtered"/>
+      <Metric label="Fleet headroom" value={fleet.headroom.toLocaleString()} unit="kW" sub="rated capacity less IT load"/>
+      <Metric label="Open incidents" value={String(fleet.incidents).padStart(2, "0")} sub={fleet.incidents ? "requires review" : "no active forecast"} warn={fleet.incidents > 0}/>
+      <Metric label="Fleet PUE" value={fleet.itPower ? (fleet.totalPower / fleet.itPower).toFixed(3) : "—"} sub="aggregate total ÷ aggregate IT"/>
+    </div>
+    <section className="panel mt-5 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-800 p-4">
+        <div className="relative min-w-[220px] flex-1"><Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-slate-500"/><input aria-label="Search authorized facilities" className="input w-full pl-9" placeholder="Search sites or locations" value={query} onChange={(event) => setQuery(event.target.value)}/></div>
+        <div className="flex gap-1" role="group" aria-label="Facility status filter">{(["all", "attention", "nominal", "recommendation"] as PortfolioFilter[]).map((item) => <button key={item} className={`speed ${filter === item ? "selected" : ""}`} onClick={() => setFilter(item)}>{item === "all" ? "All sites" : item === "attention" ? "Needs attention" : item === "recommendation" ? "Advisory ready" : "Nominal"}</button>)}</div>
+        <label className="flex items-center gap-2 text-xs text-slate-500">Rank by <select aria-label="Rank facilities by" className="select" value={sort} onChange={(event) => setSort(event.target.value as PortfolioSort)}><option value="attention">Attention</option><option value="risk">Forecast risk</option><option value="power">IT power</option><option value="cooling">Cooling load</option><option value="efficiency">PUE efficiency</option><option value="recommendation">Recommendation status</option></select></label>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-[#0d1722] px-4 py-3 text-xs text-slate-400"><span><b className="text-slate-200">{filtered.length}</b> of {rows.length} authorized sites shown</span><span className="flex items-center gap-2"><Layers3 size={14} className="text-cyan-300"/>Compare up to 3 sites</span></div>
+      <div className="hidden overflow-x-auto md:block"><table className="data-table min-w-[980px]"><caption className="sr-only">Authorized facility ranking</caption><thead><tr><th>Compare</th><th>Facility</th><th><ArrowDownUp size={12} className="inline"/> Health</th><th>IT power</th><th>Peak inlet</th><th>Cooling</th><th>PUE</th><th>Recommendation</th><th>Model</th><th/></tr></thead><tbody>{filtered.map(({ facility, snapshot }) => <tr key={facility.id} className="hover:bg-slate-800/30"><td><input aria-label={`Compare ${facility.name}`} type="checkbox" checked={compareIds.includes(facility.id)} onChange={() => toggleCompare(facility.id)} disabled={!compareIds.includes(facility.id) && compareIds.length >= 3}/></td><td><b>{facility.name}</b><small className="mt-1 block text-slate-500">{facility.location} · {facility.id}</small></td><td><Status tone={snapshot.forecast.risk === "critical" ? "bad" : snapshot.incident.open ? "warn" : "good"}>{snapshot.forecast.risk === "clear" ? "Nominal" : snapshot.forecast.risk}</Status><small className="mt-1 block text-slate-500">{snapshot.forecast.baselinePeakC.toFixed(1)}°C forecast</small></td><td>{snapshot.itPowerKw.toLocaleString()} kW</td><td className={snapshot.peakInletC >= snapshot.incident.limitC ? "text-amber-300" : ""}>{snapshot.peakInletC.toFixed(1)}°C</td><td>{snapshot.fanPercent.toFixed(0)}%</td><td>{snapshot.pue.toFixed(3)}</td><td><Status tone={facility.recommendation_status === "PROPOSED" ? "warn" : "good"}>{facility.recommendation_status}</Status></td><td><span className={`${mono} text-[10px] text-slate-500`}>{facility.model_version}</span></td><td><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/operations`)}>Open <ArrowRight size={14}/></button></td></tr>)}</tbody></table></div>
+      <div className="space-y-2 p-3 md:hidden">{filtered.map(({ facility, snapshot }) => <article key={facility.id} className="rounded-md border border-slate-800 p-4"><div className="flex items-start justify-between gap-3"><div><b>{facility.name}</b><p className="mt-1 text-xs text-slate-500">{facility.location}</p></div><Status tone={snapshot.incident.open ? "warn" : "good"}>{snapshot.incident.open ? "Attention" : "Nominal"}</Status></div><div className="mt-4 grid grid-cols-2 gap-3 text-xs"><span className="text-slate-500">Peak <b className="ml-1 text-slate-200">{snapshot.peakInletC.toFixed(1)}°C</b></span><span className="text-slate-500">PUE <b className="ml-1 text-slate-200">{snapshot.pue.toFixed(3)}</b></span><span className="text-slate-500">Power <b className="ml-1 text-slate-200">{snapshot.itPowerKw.toLocaleString()} kW</b></span><span className="text-slate-500">Cooling <b className="ml-1 text-slate-200">{snapshot.fanPercent.toFixed(0)}%</b></span><span className="col-span-2 text-slate-500">Recommendation <b className="ml-1 text-slate-200">{facility.recommendation_status}</b></span></div><div className="mt-4 flex items-center justify-between"><label className="text-xs text-slate-500"><input type="checkbox" checked={compareIds.includes(facility.id)} onChange={() => toggleCompare(facility.id)} className="mr-2"/>Compare</label><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/operations`)}>Open <ArrowRight size={14}/></button></div></article>)}</div>
+      {!filtered.length && <p className="p-8 text-center text-sm text-slate-500">No authorized facilities match those filters.</p>}
+    </section>
+    {compared.length > 0 && <section className="panel mt-4 overflow-hidden"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-4"><div><div className="eyebrow">SIDE-BY-SIDE REVIEW</div><h2 className="mt-1 font-semibold">{compared.length} selected {compared.length === 1 ? "site" : "sites"}</h2></div><button className="button secondary" onClick={() => setCompareIds([])}>Clear comparison</button></div><div className="grid gap-3 p-4 md:grid-cols-3">{compared.map(({ facility, snapshot }) => <div key={facility.id} className="rounded-md border border-slate-800 p-4"><div className="flex items-center justify-between"><b>{facility.name}</b><Status tone={snapshot.incident.open ? "warn" : "good"}>{snapshot.incident.open ? "Watch" : "Nominal"}</Status></div><div className="mt-4 grid grid-cols-2 gap-3 text-xs"><Metric label="Risk" value={snapshot.forecast.baselinePeakC.toFixed(1)} unit="°C" sub={`${snapshot.forecast.horizonS / 60}m forecast`}/><Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub="current load"/><Metric label="Cooling" value={snapshot.fanPercent.toFixed(0)} unit="%" sub="fan / pump command"/><Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="physical balance"/></div><p className="mt-3 text-xs text-slate-500">Recommendation <b className="ml-1 text-slate-200">{facility.recommendation_status}</b></p></div>)}</div></section>}
+  </Shell>;
 }
 function useScenarioClock() {
   const playing = useScenarioSession((s) => s.playing), speed = useScenarioSession((s) => s.speed);
@@ -81,11 +137,75 @@ function useScenarioClock() {
 }
 function ReplayBar({ onReset = () => {} }: { onReset?: () => void }) {
   const s = useScenarioSession();
-  return <div className="mb-4 flex flex-wrap items-center gap-3 border-y border-slate-800 py-2.5"><Clock3 size={15} className="text-cyan-300"/><span className={mono}>{formatSimulatedAt(s.simulatedAt)}</span><div className="ml-auto flex gap-1">{([1,5,10,30,60] as const).map(v => <button key={v} onClick={() => s.setSpeed(v)} className={`speed ${s.speed === v ? "selected" : ""}`}>{v}×</button>)}</div><button className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15}/> : <Play size={15}/>} {s.playing ? "Pause" : "Play"}</button><button className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15}/>Reset</button><Status tone={s.mode === "Advisory" ? "warn" : "good"}>{s.mode} mode</Status></div>;
+  const elapsed = s.simulation.snapshot.elapsedS;
+  return <section className="replay-bar mb-4" aria-label="Canonical replay controls">
+    <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><div className="ml-auto flex items-center gap-1"><span className="mr-1 text-[10px] uppercase tracking-[.12em] text-slate-500">Speed</span>{([1,5,10,30,60] as const).map(v => <button aria-label={`Replay speed ${v} times`} key={v} onClick={() => s.setSpeed(v)} className={`speed ${s.speed === v ? "selected" : ""}`}>{v}×</button>)}</div><button className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15}/> : <Play size={15}/>} {s.playing ? "Pause" : "Play"}</button></div>
+    <div className="mt-3 flex flex-wrap items-center gap-2"><button className="button secondary" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={14}/>Step 30s</button><button className="button secondary" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}>−5m</button><button className="button secondary" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}>+5m</button><button className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button><input aria-label="Replay position" className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/><span className={`${mono} text-[10px] text-slate-500`}>{Math.round(elapsed / 60)}m</span><button className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15}/>Reset</button><Status tone={s.mode === "Advisory" ? "warn" : "good"}>{s.mode} · human-in-loop</Status></div>
+  </section>;
 }
-function Operations({ data, facility }: { data: SessionData; facility: Facility }) {
+function LegacyOperations({ data, facility }: { data: SessionData; facility: Facility }) {
   const s = useScenarioSession(), snapshot = s.simulation.snapshot;
   return <Shell data={data} facility={facility}><PageHead eyebrow={`FACILITY / ${facility.id.toUpperCase()} / OPERATIONS`} title={facility.name} detail={`${facility.location} · deterministic GPU Training Ramp · ${facility.provenance}`}/><ReplayBar/><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}%`}/><Metric label="Total facility" value={snapshot.totalPowerKw.toLocaleString()} unit="kW" sub="physical power balance"/><Metric label="Peak inlet" value={snapshot.peakInletC.toFixed(1)} unit="°C" sub={`limit ${snapshot.incident.limitC.toFixed(1)}°C`} warn={snapshot.peakInletC >= snapshot.incident.limitC}/><Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="physical simulation"/><Metric label="Headroom" value={snapshot.headroomKw.toLocaleString()} unit="kW" sub="rated capacity"/></div><div className="mt-4 grid gap-4 xl:grid-cols-[1.5fr_.8fr]"><section className="panel min-h-[430px] overflow-hidden"><div className="border-b border-slate-800 p-5"><h2 className="font-semibold">Synchronized facility twin</h2><p className="text-xs text-slate-500">Workload → power → heat → CDU-03 response · {snapshot.coolingUnitCount} cooling unit</p></div><div className="twin-canvas"><div className="twin-grid"/><div className="twin-core"><Cpu size={28}/><b>GPU HALL</b><small>CLUSTER B · {snapshot.itPowerKw.toLocaleString()} kW</small></div>{snapshot.racks.map((rack,i)=><button key={rack.id} aria-label={`Inspect rack ${rack.id}`} onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)} className={`rack rack-${i} ${rack.atRisk?"hot":""}`}><span>{rack.id}</span><i style={{height:`${Math.min(100, Math.max(20, ((rack.inletC - 20) / (rack.limitC - 20)) * 100))}%`}}/></button>)}</div></section><aside className="space-y-4"><section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><h2 className={`mt-2 text-xl font-semibold ${snapshot.forecast.risk === "clear" ? "text-teal-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : `${snapshot.incident.severity} condition`}</h2><p className="mt-4 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section><section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={e=>s.setMode(e.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">Human approval is always required. No OT commands are issued.</p></section></aside></div></Shell>;
+}
+
+function Transparency({ facility, snapshot }: { facility: Facility; snapshot: CockpitSnapshot }) {
+  return <section className="panel p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2"><div className="eyebrow">DATA TRANSPARENCY</div><Status>SYNTHETIC / GOOD</Status></div>
+    <div className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
+      <div><span className="text-slate-500">Provenance</span><b className="mt-1 block">Deterministic simulation</b></div>
+      <div><span className="text-slate-500">Model version</span><b className={`${mono} mt-1 block`}>{facility.model_version}</b></div>
+      <div><span className="text-slate-500">Freshness</span><b className="mt-1 block">{formatSimulatedAt(snapshot.simulatedAt)}</b></div>
+      <div><span className="text-slate-500">Confidence domain</span><b className="mt-1 block">≤ {snapshot.plant.modelDomainMaxC.toFixed(0)}°C</b></div>
+    </div>
+    <p className="mt-3 border-t border-slate-800 pt-3 text-[11px] leading-5 text-slate-500">Values are not measured telemetry. Quality is GOOD within the disclosed model domain; no control command is sent to facility equipment.</p>
+  </section>;
+}
+
+type TwinView = "physical" | "thermal";
+type TwinOverlay = "thermal" | "flow" | "incident";
+
+function Operations({ data, facility }: { data: SessionData; facility: Facility }) {
+  const s = useScenarioSession(), snapshot = s.simulation.snapshot;
+  const [view, setView] = useState<TwinView>("physical");
+  const [selectedAsset, setSelectedAsset] = useState("gpu-b");
+  const [overlays, setOverlays] = useState<TwinOverlay[]>(["thermal", "flow", "incident"]);
+  useEffect(() => { useScenarioSession.getState().setModelConfig(facility.model_config); }, [facility.id, facility.model_version]);
+  const selectedRack = snapshot.racks.find((rack) => rack.id === selectedAsset);
+  const selectedLabel = selectedRack ? `Rack ${selectedRack.id}` : selectedAsset === "cdu-03" ? "CDU-03" : selectedAsset === "chiller-01" ? "Chiller-01" : "GPU Cluster B";
+  const toggleOverlay = (overlay: TwinOverlay) => setOverlays((items) => items.includes(overlay) ? items.filter((item) => item !== overlay) : [...items, overlay]);
+  const riskTone = snapshot.forecast.risk === "critical" ? "bad" : snapshot.incident.open ? "warn" : "good";
+  return <Shell data={data} facility={facility}>
+    <PageHead eyebrow={`FACILITY / ${facility.id.toUpperCase()} / OPERATIONS`} title={facility.name} detail={`${facility.location} · deterministic GPU Training Ramp · ${facility.provenance}`} action={<Status tone="warn">REPLAY-CONTROLLED</Status>}/>
+    <ReplayBar/>
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}%`}/>
+      <Metric label="Total facility" value={snapshot.totalPowerKw.toLocaleString()} unit="kW" sub="physical power balance"/>
+      <Metric label="Peak inlet" value={snapshot.peakInletC.toFixed(1)} unit="°C" sub={`limit ${snapshot.incident.limitC.toFixed(1)}°C`} warn={snapshot.peakInletC >= snapshot.incident.limitC}/>
+      <Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="total ÷ IT power"/>
+      <Metric label="Headroom" value={snapshot.headroomKw.toLocaleString()} unit="kW" sub={`of ${snapshot.plant.ratedCapacityKw.toLocaleString()} kW rated`}/>
+    </div>
+    <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,.8fr)]">
+      <section className="panel min-w-0 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-5"><div><h2 className="font-semibold">Synchronized facility twin</h2><p className="mt-1 text-xs text-slate-500">Select an asset to inspect its replay state and dependencies.</p></div><div className="flex gap-1" role="group" aria-label="Twin view">{(["physical", "thermal"] as TwinView[]).map((item) => <button key={item} className={`speed ${view === item ? "selected" : ""}`} onClick={() => setView(item)}>{item === "physical" ? "Physical" : "Thermal overlay"}</button>)}</div></div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-800 px-5 py-3 text-xs text-slate-400">{(["thermal", "flow", "incident"] as TwinOverlay[]).map((overlay) => <label key={overlay} className="flex items-center gap-2"><input type="checkbox" checked={overlays.includes(overlay)} onChange={() => toggleOverlay(overlay)}/>{overlay === "thermal" ? "Heat map" : overlay === "flow" ? "Flow paths" : "Incident focus"}</label>)}</div>
+        <div className={`twin-canvas ${view === "thermal" && overlays.includes("thermal") ? "thermal-view" : ""}`} aria-label={`Facility twin in ${view} view. ${snapshot.rackCount} racks, peak inlet ${snapshot.peakInletC.toFixed(1)} degrees.`}>
+          <div className="twin-grid"/>
+          {overlays.includes("flow") && <><div className="twin-pipe p1"/><div className="twin-pipe p2"/><div className="twin-label l1">LIQUID LOOP<small>ACTIVE</small></div></>}
+          <button className={`twin-core ${selectedAsset === "gpu-b" ? "selected" : ""}`} onClick={() => setSelectedAsset("gpu-b")} aria-pressed={selectedAsset === "gpu-b"}><Cpu size={28}/><b>GPU HALL</b><small>CLUSTER B · {snapshot.itPowerKw.toLocaleString()} kW</small></button>
+          {snapshot.racks.map((rack, i) => <button key={rack.id} aria-label={`Inspect rack ${rack.id}`} aria-pressed={selectedAsset === rack.id} onClick={() => setSelectedAsset(rack.id)} className={`rack rack-${i} ${rack.atRisk && overlays.includes("incident") ? "hot" : ""} ${selectedAsset === rack.id ? "selected" : ""}`}><span>{rack.id}</span><i style={{height: `${Math.min(100, Math.max(20, ((rack.inletC - 20) / (rack.limitC - 20)) * 100))}%`}}/></button>)}
+          <button aria-label="Inspect CDU-03" aria-pressed={selectedAsset === "cdu-03"} onClick={() => setSelectedAsset("cdu-03")} className={`twin-system cdu ${selectedAsset === "cdu-03" ? "selected" : ""}`}><Thermometer size={17}/>CDU-03<small>{snapshot.fanPercent.toFixed(0)}% flow</small></button>
+          <button aria-label="Inspect Chiller-01" aria-pressed={selectedAsset === "chiller-01"} onClick={() => setSelectedAsset("chiller-01")} className={`twin-system chiller ${selectedAsset === "chiller-01" ? "selected" : ""}`}><Gauge size={17}/>CHILLER-01<small>{snapshot.chilledWaterC.toFixed(1)}°C supply</small></button>
+        </div>
+        <div className="border-t border-slate-800 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="eyebrow">REPLAY TIMELINE</div><p className="mt-1 text-xs text-slate-500">Every panel reads the same canonical clock.</p></div><span className={`${mono} text-xs text-cyan-300`}>{Math.round(snapshot.elapsedS / 60)}m / 30m</span></div><div className="timeline mt-4"><div className="timeline-axis"/>{[0, 300, 900, 1800].map((at) => <button key={at} className={`timeline-event ${Math.abs(snapshot.elapsedS - at) < 30 ? "current" : ""}`} onClick={() => s.jump(at)}><span className={`dot ${at >= 900 ? "amber" : ""}`}/><small>{at / 60}m</small><b>{at === 0 ? "Baseline" : at === 900 ? "Forecast" : at === 1800 ? "Ramp end" : "Power rise"}</b></button>)}</div></div>
+      </section>
+      <aside className="min-w-0 space-y-4">
+        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAsset === "cdu-03" ? `Cooling distribution is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit online.` : selectedAsset === "chiller-01" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}</section>
+        <section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><div className="mt-2 flex items-center justify-between gap-3"><h2 className={`text-xl font-semibold ${riskTone === "good" ? "text-teal-300" : riskTone === "bad" ? "text-red-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : `${snapshot.incident.severity} condition`}</h2><Status tone={riskTone}>{snapshot.forecast.risk}</Status></div><p className="mt-3 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section>
+        <section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={(event) => s.setMode(event.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">{s.mode === "Observe" ? "Read-only view. No advisory is proposed." : s.mode === "Shadow" ? "Recommendations are simulated for comparison; no action is sent." : "Advisories may be reviewed, but human approval is required. No OT commands are issued."}</p></section>
+        <Transparency facility={facility} snapshot={snapshot}/>
+      </aside>
+    </div>
+  </Shell>;
 }
 
 function Recommendation({ data, facility }: { data: SessionData; facility: Facility }) {

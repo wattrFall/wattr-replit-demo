@@ -272,6 +272,11 @@ app.get("/api/me", requireAuth, async (req: AuthedRequest, res) => {
 app.get("/api/facilities", requireAuth, async (req: AuthedRequest, res) => {
   const result = await pool.query(
     `SELECT f.id, f.name, f.location, f.model_version, f.provenance, mv.config AS model_config,
+            COALESCE((
+              SELECT r.status FROM recommendations r
+              WHERE r.facility_id = f.id
+              ORDER BY r.created_at DESC LIMIT 1
+            ), 'NONE') AS recommendation_status,
             p.can_view,
             (p.can_operate AND m.role = 'OPERATOR') AS can_operate,
             (p.can_edit_model AND m.role = 'MODEL_ADMIN') AS can_edit_model,

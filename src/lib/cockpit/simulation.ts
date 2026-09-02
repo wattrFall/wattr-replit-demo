@@ -8,6 +8,7 @@ import {
 } from "@/lib/sandbox/model";
 import type { SandboxItem, SandboxLayout } from "@/lib/sandbox/types";
 
+export { SIM_DT_S };
 export const SCENARIO_START_S = 1_752_676_800;
 export const SCENARIO_DURATION_S = 1_800;
 export const FORECAST_HORIZON_S = 300;

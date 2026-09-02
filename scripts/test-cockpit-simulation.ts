@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  DEFAULT_FACILITY_MODEL,
   SCENARIO_START_S,
   advanceCockpitSimulation,
   createCockpitSimulation,
@@ -7,6 +8,7 @@ import {
   scenarioLayout,
   snapshotForAudit,
 } from "../src/lib/cockpit/simulation";
+import { useScenarioSession } from "../src/lib/cockpit/session";
 import { readTelemetry } from "../src/lib/sandbox/model";
 
 function replay(secondsPerTick: 1 | 5 | 10 | 30 | 60, targetSeconds: number) {
@@ -117,5 +119,20 @@ const capped = advanceCockpitSimulation(
 );
 assert.equal(capped.simulatedAt, SCENARIO_START_S + 1_800);
 assert.equal(capped.snapshot.elapsedS, 1_800);
+
+const alternateModel = { ...DEFAULT_FACILITY_MODEL, seed: DEFAULT_FACILITY_MODEL.seed + 1 };
+useScenarioSession.getState().reset();
+useScenarioSession.getState().jump(900);
+useScenarioSession.getState().setModelConfig(alternateModel);
+const switched = useScenarioSession.getState();
+assert.equal(switched.simulation.snapshot.elapsedS, 900, "facility model switch reset replay position");
+assert.equal(switched.simulatedAt, SCENARIO_START_S + 900, "facility model switch changed canonical clock");
+assert.deepEqual(
+  switched.simulation.snapshot,
+  replayCockpitSnapshot(SCENARIO_START_S + 900, alternateModel),
+  "facility model switch did not reconstruct the canonical snapshot",
+);
+useScenarioSession.getState().setModelConfig(DEFAULT_FACILITY_MODEL);
+useScenarioSession.getState().reset();
 
 console.log("Cockpit simulation golden and replay tests passed.");
