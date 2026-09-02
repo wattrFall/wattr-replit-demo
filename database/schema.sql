@@ -201,6 +201,9 @@ CREATE TABLE IF NOT EXISTS incidents (
   raw_signal_count integer NOT NULL DEFAULT 0,
   likely_cause text NOT NULL,
   forecast_minutes integer NOT NULL,
+  correlated_signals jsonb NOT NULL DEFAULT '[]'::jsonb,
+  thermal_path jsonb NOT NULL DEFAULT '[]'::jsonb,
+  deduplication_key text NOT NULL DEFAULT gen_random_uuid()::text,
   model_version text NOT NULL DEFAULT 'sfo-rom-1.0.0',
   model_version_id text REFERENCES model_versions(id) ON DELETE RESTRICT,
   model_config jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -219,10 +222,15 @@ CREATE TABLE IF NOT EXISTS recommendations (
   scenario_id text REFERENCES scenarios(id) ON DELETE SET NULL,
   incident_id text REFERENCES incidents(id) ON DELETE SET NULL,
   kind text NOT NULL CHECK (kind IN ('ADVISORY','ACTION')),
-  status text NOT NULL CHECK (status IN ('PROPOSED','APPROVED','REJECTED','EXPIRED')),
+  status text NOT NULL CHECK (status IN ('PROPOSED','APPROVED','REJECTED','DEFERRED','ALTERNATIVE_REQUESTED','EXPIRED')),
   title text NOT NULL,
   rationale text NOT NULL,
   command jsonb NOT NULL,
+  version integer NOT NULL DEFAULT 1 CHECK (version > 0),
+  explanation jsonb NOT NULL DEFAULT '{}'::jsonb,
+  evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
+  confidence numeric NOT NULL DEFAULT 0 CHECK (confidence >= 0 AND confidence <= 1),
+  limitations jsonb NOT NULL DEFAULT '[]'::jsonb,
   simulated_at bigint NOT NULL,
   model_version_id text NOT NULL REFERENCES model_versions(id) ON DELETE RESTRICT,
   provenance text NOT NULL DEFAULT 'SIMULATED'
@@ -260,6 +268,9 @@ CREATE TABLE IF NOT EXISTS safety_evaluations (
   simulated_at bigint NOT NULL,
   outcome text NOT NULL CHECK (outcome IN ('PASS', 'WARNING', 'BLOCK')),
   checks jsonb NOT NULL,
+  command jsonb NOT NULL DEFAULT '{}'::jsonb,
+  recommendation_version integer NOT NULL DEFAULT 1 CHECK (recommendation_version > 0),
+  snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
   model_version text NOT NULL DEFAULT 'sfo-rom-1.0.0',
   model_version_id text REFERENCES model_versions(id) ON DELETE RESTRICT,
   model_config jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -281,8 +292,8 @@ CREATE TABLE IF NOT EXISTS operator_decisions (
   recommendation_id text NOT NULL REFERENCES recommendations(id) ON DELETE RESTRICT,
   safety_evaluation_id uuid REFERENCES safety_evaluations(id) ON DELETE RESTRICT,
   user_id text NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-  decision text NOT NULL CHECK (decision IN ('APPROVE','REJECT','ACKNOWLEDGE')),
-  outcome text NOT NULL CHECK (outcome IN ('ALLOWED_AS_ADVISORY','REJECTED','ACKNOWLEDGED')),
+  decision text NOT NULL CHECK (decision IN ('APPROVE','REJECT','DEFER','REQUEST_ALTERNATIVE','ACKNOWLEDGE')),
+  outcome text NOT NULL CHECK (outcome IN ('ALLOWED_AS_ADVISORY','REJECTED','DEFERRED','ALTERNATIVE_REQUESTED','ACKNOWLEDGED')),
   simulated_at bigint NOT NULL,
   model_version_id text NOT NULL REFERENCES model_versions(id) ON DELETE RESTRICT,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -362,6 +373,8 @@ CREATE INDEX IF NOT EXISTS saved_views_user_idx ON saved_views(user_id, updated_
 CREATE INDEX IF NOT EXISTS audit_records_facility_created_idx ON audit_records(facility_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS safety_evaluations_lookup_idx ON safety_evaluations(user_id, facility_id, recommendation_id, expires_at DESC);
 CREATE INDEX IF NOT EXISTS administrative_audit_org_created_idx ON administrative_audit_records(organization_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS incidents_deduplication_idx
+  ON incidents(facility_id, scenario_id, model_version_id, deduplication_key);
 
 CREATE OR REPLACE FUNCTION reject_administrative_audit_mutation()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -373,6 +386,29 @@ DROP TRIGGER IF EXISTS administrative_audit_records_immutable ON administrative_
 CREATE TRIGGER administrative_audit_records_immutable
 BEFORE UPDATE OR DELETE ON administrative_audit_records
 FOR EACH ROW EXECUTE FUNCTION reject_administrative_audit_mutation();
+
+CREATE OR REPLACE FUNCTION reject_decision_history_mutation()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'decision history records are immutable';
+END;
+$$;
+DROP TRIGGER IF EXISTS audit_records_immutable ON audit_records;
+CREATE TRIGGER audit_records_immutable
+BEFORE UPDATE OR DELETE ON audit_records
+FOR EACH ROW EXECUTE FUNCTION reject_decision_history_mutation();
+DROP TRIGGER IF EXISTS audit_records_no_truncate ON audit_records;
+CREATE TRIGGER audit_records_no_truncate
+BEFORE TRUNCATE ON audit_records
+FOR EACH STATEMENT EXECUTE FUNCTION reject_decision_history_mutation();
+DROP TRIGGER IF EXISTS operator_decisions_immutable ON operator_decisions;
+CREATE TRIGGER operator_decisions_immutable
+BEFORE UPDATE OR DELETE ON operator_decisions
+FOR EACH ROW EXECUTE FUNCTION reject_decision_history_mutation();
+DROP TRIGGER IF EXISTS operator_decisions_no_truncate ON operator_decisions;
+CREATE TRIGGER operator_decisions_no_truncate
+BEFORE TRUNCATE ON operator_decisions
+FOR EACH STATEMENT EXECUTE FUNCTION reject_decision_history_mutation();
 
 -- These ALTERs make the baseline safe for databases created by the previous
 -- cockpit release before the canonical tables were introduced.
@@ -474,26 +510,44 @@ ON CONFLICT (facility_id, from_asset_id, to_asset_id, relation) DO NOTHING;
 
 INSERT INTO incidents
   (id, facility_id, scenario_id, title, severity, status, simulated_at, affected_assets,
-   raw_signal_count, likely_cause, forecast_minutes, model_version, model_version_id, model_config)
+   raw_signal_count, likely_cause, forecast_minutes, correlated_signals, thermal_path,
+   deduplication_key, model_version, model_version_id, model_config)
 VALUES (
   'inc-204', 'sfo-01', 'gpu-training-ramp-v1', 'CDU-03 thermal response degradation', 'HIGH', 'OPEN',
   1752677460, '["GPU Hall B","Rows 12–16","CDU-03"]'::jsonb, 17,
-  'Reduced CDU flow response during the workload ramp', 11, 'sfo-rom-1.0.0', 'sfo-rom-1.0.0',
+  'Reduced CDU flow response during the workload ramp', 11,
+  '[{"id":"signal-workload-ramp","assetId":"gpu-b","metric":"scheduled_load","direction":"rising"},{"id":"signal-rack-inlet","assetId":"rack-b02","metric":"inlet_temperature","direction":"rising"},{"id":"signal-cdu-lag","assetId":"cdu-03","metric":"pump_response","direction":"lagging"}]'::jsonb,
+  '["gpu-b","rack-b02","cdu-03","primary-loop","chiller-01"]'::jsonb,
+  'gpu-training-ramp-v1:cdu-03:thermal-response', 'sfo-rom-1.0.0', 'sfo-rom-1.0.0',
   '{"scenario":"gpu-training-ramp-v1","seed":4103,"thermalMass":0.82,"responseLag":12}'::jsonb
 )
-ON CONFLICT (id) DO UPDATE SET scenario_id = EXCLUDED.scenario_id, model_version_id = EXCLUDED.model_version_id;
+ON CONFLICT (id) DO UPDATE SET scenario_id = EXCLUDED.scenario_id,
+  model_version_id = EXCLUDED.model_version_id,
+  correlated_signals = EXCLUDED.correlated_signals,
+  thermal_path = EXCLUDED.thermal_path,
+  deduplication_key = EXCLUDED.deduplication_key;
 
 INSERT INTO recommendations
   (id, facility_id, scenario_id, incident_id, kind, status, title, rationale, command,
-   simulated_at, model_version_id)
+   version, explanation, evidence, confidence, limitations, simulated_at, model_version_id)
 VALUES (
   'rec-17', 'sfo-01', 'gpu-training-ramp-v1', 'inc-204', 'ADVISORY', 'PROPOSED',
   'Pre-emptive CDU-03 flow adjustment',
   'Increase CDU-03 flow before the workload ramp reaches the thermal constraint.',
   '{"assetId":"cdu-03","flowPercent":78,"durationMinutes":20}'::jsonb,
+  1,
+  '{"what":"Increase CDU-03 flow to 78% for 20 minutes.","why":"Pre-empt the modeled CDU-03 response lag before the workload ramp reaches the thermal constraint.","where":"GPU Hall B · GPU Training Zone · CDU-03 serving racks A01–B02.","expectedEffect":"Reduce modeled peak inlet temperature and constraint exposure.","confidence":"Forecast confidence declines with horizon and is valid only inside the disclosed model domain.","provenance":"SIMULATED"}'::jsonb,
+  '["GPU Training Ramp event stream","Rack inlet temperature trend","CDU-03 response lag","Primary-loop thermal path"]'::jsonb,
+  0.80,
+  '["Synthetic reduced-order model; values are not measured telemetry.","No command is sent to operational technology.","Results are not a claim of measured savings or calibrated customer accuracy."]'::jsonb,
   1752677460, 'sfo-rom-1.0.0'
 )
-ON CONFLICT (id) DO UPDATE SET model_version_id = EXCLUDED.model_version_id, status = EXCLUDED.status;
+ON CONFLICT (id) DO UPDATE SET model_version_id = EXCLUDED.model_version_id,
+  version = EXCLUDED.version,
+  explanation = EXCLUDED.explanation,
+  evidence = EXCLUDED.evidence,
+  confidence = EXCLUDED.confidence,
+  limitations = EXCLUDED.limitations;
 
 INSERT INTO tutorials (id, role, version, steps)
 VALUES

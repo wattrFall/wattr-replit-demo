@@ -6,10 +6,14 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { CLERK_PROXY_PATH, clerkProxyMiddleware, getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
 import {
+  COMMAND_ENVELOPE,
+  MODEL_DOMAIN_MAX_C,
   SCENARIO_DURATION_S,
   SCENARIO_START_S,
+  counterfactualCockpitSnapshot,
   replayCockpitSnapshot,
   snapshotForAudit,
+  type AdvisoryParameters,
   type FacilityModelConfig,
 } from "../src/lib/cockpit/simulation";
 import { thermalGraph } from "../src/lib/cockpit/workspaces";
@@ -40,6 +44,100 @@ const isScenarioTimestamp = (value: unknown): value is number =>
 
 function replaySnapshot(simulatedAt: number, config?: FacilityModelConfig) {
   return replayCockpitSnapshot(simulatedAt, config);
+}
+
+type AdvisoryCommand = AdvisoryParameters & { assetId: "cdu-03" };
+type SafetyCheckResult = {
+  id: string;
+  status: "PASS" | "WARNING" | "BLOCK";
+  pass: boolean;
+  detail: string;
+  evidence: Record<string, unknown>;
+};
+
+function parseAdvisoryCommand(value: unknown): AdvisoryCommand | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const command = value as Record<string, unknown>;
+  if (
+    command.assetId !== "cdu-03" ||
+    typeof command.flowPercent !== "number" || !Number.isFinite(command.flowPercent) ||
+    command.flowPercent < 0 || command.flowPercent > 100 ||
+    !Number.isInteger(command.durationMinutes) ||
+    Number(command.durationMinutes) < 1 || Number(command.durationMinutes) > 60
+  ) return undefined;
+  return {
+    assetId: "cdu-03",
+    flowPercent: command.flowPercent,
+    durationMinutes: Number(command.durationMinutes),
+  };
+}
+
+function advisoryCommandsEqual(left: unknown, right: AdvisoryCommand): boolean {
+  const parsed = parseAdvisoryCommand(left);
+  return Boolean(
+    parsed &&
+    parsed.assetId === right.assetId &&
+    parsed.flowPercent === right.flowPercent &&
+    parsed.durationMinutes === right.durationMinutes,
+  );
+}
+
+function safetyChecksFor(snapshot: ReturnType<typeof counterfactualCockpitSnapshot>, command: AdvisoryCommand): SafetyCheckResult[] {
+  const inEnvelope =
+    command.flowPercent >= COMMAND_ENVELOPE.minFlowPercent &&
+    command.flowPercent <= COMMAND_ENVELOPE.maxFlowPercent;
+  const advisoryPeak = snapshot.forecast.advisoryPeakC;
+  const threshold = snapshot.forecast.thresholdC;
+  const headroomStatus = advisoryPeak < threshold
+    ? "PASS"
+    : advisoryPeak < threshold + 1
+      ? "WARNING"
+      : "BLOCK";
+  const confidenceStatus = snapshot.forecast.baselinePeakC <= MODEL_DOMAIN_MAX_C - 0.5
+    ? "PASS"
+    : snapshot.forecast.baselinePeakC <= MODEL_DOMAIN_MAX_C
+      ? "WARNING"
+      : "BLOCK";
+  return [
+    {
+      id: "COMMAND_ENVELOPE",
+      status: inEnvelope ? "PASS" : "BLOCK",
+      pass: inEnvelope,
+      detail: `${command.flowPercent}% ${inEnvelope ? "is within" : "is outside"} the ${COMMAND_ENVELOPE.minFlowPercent}–${COMMAND_ENVELOPE.maxFlowPercent}% CDU-03 advisory envelope.`,
+      evidence: { requestedFlowPercent: command.flowPercent, envelope: COMMAND_ENVELOPE },
+    },
+    {
+      id: "COOLING_HEADROOM",
+      status: headroomStatus,
+      pass: headroomStatus !== "BLOCK",
+      detail: `Counterfactual peak is ${advisoryPeak.toFixed(1)}°C against the ${threshold.toFixed(1)}°C limit.`,
+      evidence: { advisoryPeakC: advisoryPeak, thresholdC: threshold },
+    },
+    {
+      id: "MAINTENANCE_STATE",
+      status: snapshot.plant.maintenanceLockout ? "BLOCK" : "PASS",
+      pass: !snapshot.plant.maintenanceLockout,
+      detail: snapshot.plant.maintenanceLockout ? "A maintenance lockout is active." : "No synthetic maintenance lockout is active.",
+      evidence: { maintenanceLockout: snapshot.plant.maintenanceLockout },
+    },
+    {
+      id: "MODEL_CONFIDENCE",
+      status: confidenceStatus,
+      pass: confidenceStatus !== "BLOCK",
+      detail: `Baseline peak is ${snapshot.forecast.baselinePeakC.toFixed(1)}°C; the disclosed model domain ends at ${MODEL_DOMAIN_MAX_C.toFixed(1)}°C.`,
+      evidence: {
+        baselinePeakC: snapshot.forecast.baselinePeakC,
+        domainMaximumC: MODEL_DOMAIN_MAX_C,
+        horizonConfidence: snapshot.forecast.confidence,
+      },
+    },
+  ];
+}
+
+function safetyOutcome(checks: SafetyCheckResult[]): "PASS" | "WARNING" | "BLOCK" {
+  if (checks.some((check) => check.status === "BLOCK")) return "BLOCK";
+  if (checks.some((check) => check.status === "WARNING")) return "WARNING";
+  return "PASS";
 }
 
 async function publishedModel(facilityId: string, client: pg.Pool | pg.PoolClient = pool) {
@@ -556,14 +654,16 @@ app.get("/api/facilities/:facilityId/context", requireAuth, async (req: AuthedRe
       ),
       pool.query(
         `SELECT id, scenario_id, title, severity, status, simulated_at, affected_assets,
-                raw_signal_count, likely_cause, forecast_minutes, model_version_id,
+                raw_signal_count, likely_cause, forecast_minutes, correlated_signals,
+                thermal_path, deduplication_key, model_version_id,
                 provenance, synthetic_status, quality, created_at
          FROM incidents WHERE facility_id = $1 ORDER BY created_at DESC`,
         [facilityId],
       ),
       pool.query(
         `SELECT r.id, r.scenario_id, r.incident_id, r.kind, r.status, r.title, r.rationale,
-                r.command, r.simulated_at, r.model_version_id, r.provenance,
+                r.command, r.version, r.explanation, r.evidence, r.confidence,
+                r.limitations, r.simulated_at, r.model_version_id, r.provenance,
                 r.synthetic_status, r.quality, r.created_at, mv.config AS model_config
          FROM recommendations r JOIN model_versions mv ON mv.id = r.model_version_id
          WHERE r.facility_id = $1 ORDER BY r.created_at DESC`,
@@ -731,6 +831,7 @@ app.get("/api/facilities/:facilityId/recommendations", requireAuth, async (req: 
   if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
   const result = await pool.query(
     `SELECT r.id, r.scenario_id, r.incident_id, r.kind, r.status, r.title, r.rationale, r.command,
+            r.version, r.explanation, r.evidence, r.confidence, r.limitations,
             simulated_at, r.model_version_id, r.provenance, r.synthetic_status, r.quality,
             r.created_at, mv.config AS model_config
      FROM recommendations r JOIN model_versions mv ON mv.id = r.model_version_id
@@ -811,13 +912,32 @@ app.get("/api/tutorials", requireAuth, async (req: AuthedRequest, res) => {
 app.get("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
+  const values: unknown[] = [req.userId, req.params.facilityId];
+  const filters = ["p.user_id = $1", "p.can_view = true", "a.facility_id = $2"];
+  const addFilter = (sql: string, value: unknown) => {
+    values.push(value);
+    filters.push(sql.replace("?", `$${values.length}`));
+  };
+  if (typeof req.query.action === "string" && req.query.action) addFilter("a.action = ?", req.query.action);
+  if (typeof req.query.decision === "string" && req.query.decision) {
+    addFilter("a.payload->'decision'->>'decision' = ?", req.query.decision);
+  }
+  if (typeof req.query.modelVersion === "string" && req.query.modelVersion) addFilter("a.model_version = ?", req.query.modelVersion);
+  if (typeof req.query.search === "string" && req.query.search) {
+    addFilter("(a.action ILIKE '%' || ? || '%' OR a.payload::text ILIKE '%' || ? || '%')", req.query.search);
+    values.push(req.query.search);
+    filters[filters.length - 1] = filters[filters.length - 1].replace(
+      new RegExp(`\\$${values.length - 1}(?!\\d)`, "g"),
+      `$${values.length - 1}`,
+    ).replace("?", `$${values.length}`);
+  }
   const result = await pool.query(
     `SELECT a.id, a.action, a.scenario_id, a.simulated_at, a.model_version, a.payload, a.created_at
      FROM audit_records a
      JOIN facility_permissions p ON p.facility_id = a.facility_id
-     WHERE p.user_id = $1 AND p.can_view = true AND a.facility_id = $2
+      WHERE ${filters.join(" AND ")}
      ORDER BY a.created_at DESC LIMIT 100`,
-    [req.userId, req.params.facilityId],
+    values,
   );
   res.json(result.rows);
 });
@@ -834,7 +954,18 @@ app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: A
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Audit record not found" });
   const record = result.rows[0];
-  res.json({ record, snapshot: record.payload?.snapshot ?? replaySnapshot(Number(record.simulated_at), record.payload?.modelConfig) });
+  if (!record.payload?.snapshot) {
+    return res.status(409).json({ error: "This legacy record does not contain an immutable reconstruction snapshot" });
+  }
+  res.json({
+    record,
+    snapshot: record.payload.snapshot,
+    scenario: record.payload.scenario,
+    model: record.payload.model,
+    recommendation: record.payload.recommendation,
+    safetyEvaluation: record.payload.safetyEvaluation,
+    decision: record.payload.decision,
+  });
 });
 
 app.get("/api/facilities/:facilityId/incidents", requireAuth, async (req: AuthedRequest, res) => {
@@ -842,7 +973,8 @@ app.get("/api/facilities/:facilityId/incidents", requireAuth, async (req: Authed
   if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
   const result = await pool.query(
     `SELECT i.id, i.title, i.severity, i.status, i.simulated_at, i.affected_assets,
-            i.raw_signal_count, i.likely_cause, i.forecast_minutes, i.model_version
+            i.raw_signal_count, i.likely_cause, i.forecast_minutes, i.correlated_signals,
+            i.thermal_path, i.deduplication_key, i.model_version
      FROM incidents i
      JOIN facility_permissions p ON p.facility_id = i.facility_id
      WHERE p.user_id = $1 AND p.can_view = true AND i.facility_id = $2
@@ -857,7 +989,8 @@ app.get("/api/facilities/:facilityId/incidents/:incidentId", requireAuth, async 
   if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res)) return;
   const result = await pool.query(
     `SELECT i.id, i.title, i.severity, i.status, i.simulated_at, i.affected_assets,
-            i.raw_signal_count, i.likely_cause, i.forecast_minutes, i.model_version, i.model_config
+            i.raw_signal_count, i.likely_cause, i.forecast_minutes, i.correlated_signals,
+            i.thermal_path, i.deduplication_key, i.model_version, i.model_config
      FROM incidents i
      JOIN facility_permissions p ON p.facility_id = i.facility_id
      WHERE p.user_id = $1 AND p.can_view = true AND i.facility_id = $2 AND i.id = $3`,
@@ -1024,119 +1157,315 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
   }
 });
 
-app.post("/api/facilities/:facilityId/recommendations/rec-17/evaluate", requireAuth, async (req: AuthedRequest, res) => {
+app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "assistant")) return;
+  const simulatedAt = req.body?.simulatedAt;
+  const command = parseAdvisoryCommand(req.body?.command);
+  if (!isScenarioTimestamp(simulatedAt) || !command) return res.status(400).json({ error: "Invalid counterfactual request" });
+  if (command.flowPercent < COMMAND_ENVELOPE.minFlowPercent || command.flowPercent > COMMAND_ENVELOPE.maxFlowPercent) {
+    return res.status(400).json({ error: "Alternative must remain inside the permitted advisory envelope" });
+  }
+  const recommendation = await pool.query(
+    `SELECT r.id, r.version, r.command, r.model_version_id, mv.config AS model_config
+     FROM recommendations r JOIN model_versions mv ON mv.id = r.model_version_id
+     WHERE r.id = $1 AND r.facility_id = $2`,
+    [req.params.recommendationId, req.params.facilityId],
+  );
+  if (!recommendation.rows[0]) return res.status(404).json({ error: "Recommendation not found" });
+  const row = recommendation.rows[0];
+  assertModelConfig(row.model_config);
+  const recommendedCommand = parseAdvisoryCommand(row.command);
+  if (!recommendedCommand) return res.status(409).json({ error: "Persisted recommendation command is invalid" });
+  const inaction = replaySnapshot(simulatedAt, row.model_config);
+  const recommended = counterfactualCockpitSnapshot(simulatedAt, recommendedCommand, row.model_config);
+  const alternative = counterfactualCockpitSnapshot(simulatedAt, command, row.model_config);
+  res.json({
+    scenarioId: "gpu-training-ramp-v1",
+    simulatedAt,
+    modelVersionId: row.model_version_id,
+    recommendationVersion: row.version,
+    sharedInputs: {
+      simulatedAt,
+      initialState: snapshotForAudit(inaction),
+      modelConfig: row.model_config,
+      events: ["GPU Training Ramp", "Rack heat rise", "CDU-03 modeled response lag"],
+    },
+    options: [
+      {
+        id: "inaction",
+        label: "Inaction",
+        command: null,
+        peakC: inaction.forecast.baselinePeakC,
+        constraintMinutes: inaction.forecast.baselineConstraintMinutes,
+        series: inaction.forecast.series.map((point) => ({ simulatedAt: point.simulatedAt, peakC: point.baselinePeakC })),
+      },
+      {
+        id: "recommendation",
+        label: "Wattr recommendation",
+        command: recommendedCommand,
+        peakC: recommended.forecast.advisoryPeakC,
+        constraintMinutes: recommended.forecast.advisoryConstraintMinutes,
+        series: recommended.forecast.series.map((point) => ({ simulatedAt: point.simulatedAt, peakC: point.counterfactualPeakC })),
+      },
+      {
+        id: "alternative",
+        label: "Permitted alternative",
+        command,
+        peakC: alternative.forecast.advisoryPeakC,
+        constraintMinutes: alternative.forecast.advisoryConstraintMinutes,
+        series: alternative.forecast.series.map((point) => ({ simulatedAt: point.simulatedAt, peakC: point.counterfactualPeakC })),
+      },
+    ],
+    provenance: syntheticProvenance(undefined, row.model_version_id),
+  });
+});
+
+app.post("/api/facilities/:facilityId/recommendations/:recommendationId/evaluate", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "assistant")) return;
   const simulatedAt = req.body?.simulatedAt;
   if (!isScenarioTimestamp(simulatedAt)) return res.status(400).json({ error: "Invalid simulation timestamp" });
 
+  const recommendation = await pool.query(
+    `SELECT r.id, r.version, r.command, r.model_version_id, mv.config AS model_config
+     FROM recommendations r JOIN model_versions mv ON mv.id = r.model_version_id
+     WHERE r.id = $1 AND r.facility_id = $2`,
+    [req.params.recommendationId, req.params.facilityId],
+  );
+  if (!recommendation.rows[0]) return res.status(404).json({ error: "Recommendation not found" });
+  const row = recommendation.rows[0];
+  const command = parseAdvisoryCommand(req.body?.command ?? row.command);
+  if (!command) return res.status(400).json({ error: "Invalid advisory command" });
   const model = await publishedModel(String(req.params.facilityId));
-  if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
-  const snapshot = replaySnapshot(simulatedAt, model.config);
-  const safety = snapshot.safety.checks;
-  const checks = [
-    { id: "COMMAND_ENVELOPE", pass: safety.commandEnvelope, detail: `${snapshot.recommendation.flowPercent}% is within the CDU-03 advisory envelope.` },
-    { id: "HEADROOM", pass: safety.coolingHeadroom, detail: `Advisory forecast peak is ${snapshot.forecast.advisoryPeakC.toFixed(1)}°C.` },
-    { id: "MAINTENANCE", pass: safety.maintenanceState, detail: "No synthetic maintenance lockout is active." },
-    { id: "MODEL_CONFIDENCE", pass: safety.modelConfidence, detail: `Baseline forecast peak is ${snapshot.forecast.baselinePeakC.toFixed(1)}°C.` },
-  ];
-  const outcome = checks.every((check) => check.pass) ? "PASS" : "BLOCK";
+  if (!model || model.model_version !== row.model_version_id) {
+    return res.status(409).json({ error: "Recommendation does not match the active facility model" });
+  }
+  const snapshot = counterfactualCockpitSnapshot(simulatedAt, command, model.config);
+  const checks = safetyChecksFor(snapshot, command);
+  const outcome = safetyOutcome(checks);
   const id = randomUUID();
   await pool.query(
     `INSERT INTO safety_evaluations
       (id, user_id, facility_id, recommendation_id, simulated_at, outcome, checks,
-       model_version, model_version_id, model_config, provenance, synthetic_status, expires_at)
-     VALUES ($1, $2, $3, 'rec-17', $4, $5, $6::jsonb, $7, $7, $8::jsonb,
-             'SIMULATED', 'SYNTHETIC', now() + interval '10 minutes')`,
-    [id, req.userId, req.params.facilityId, simulatedAt, outcome, JSON.stringify(checks), model.model_version, JSON.stringify(model.config)],
+       command, recommendation_version, snapshot, model_version, model_version_id,
+       model_config, provenance, synthetic_status, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb,
+             $11, $11, $12::jsonb, 'SIMULATED', 'SYNTHETIC', now() + interval '10 minutes')`,
+    [
+      id,
+      req.userId,
+      req.params.facilityId,
+      req.params.recommendationId,
+      simulatedAt,
+      outcome,
+      JSON.stringify(checks),
+      JSON.stringify(command),
+      row.version,
+      JSON.stringify(snapshotForAudit(snapshot)),
+      model.model_version,
+      JSON.stringify(model.config),
+    ],
   );
-  res.status(201).json({ id, outcome, checks, simulatedAt });
+  res.status(201).json({
+    id,
+    outcome,
+    checks,
+    command,
+    simulatedAt,
+    recommendationVersion: row.version,
+    modelVersionId: model.model_version,
+    expiresInSeconds: 600,
+  });
 });
 
-app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequest, res) => {
+app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decisions", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "operate");
   if (!permission) return;
-  const { action, simulatedAt, payload, safetyEvaluationId } = req.body ?? {};
-  const validPayload =
-    payload &&
-    payload.recommendationId === "rec-17" &&
-    payload.outcome === "ALLOWED_AS_ADVISORY" &&
-    payload.provenance === "SIMULATED" &&
-    payload.command?.assetId === "cdu-03" &&
-    payload.command?.flowPercent === 78 &&
-    payload.command?.durationMinutes === 20;
-  if (action !== "APPROVE_ADVISORY" || !isScenarioTimestamp(simulatedAt) || !validPayload || typeof safetyEvaluationId !== "string") {
-    return res.status(400).json({ error: "Invalid audit record" });
-  }
+  const simulatedAt = req.body?.simulatedAt;
+  const decision = req.body?.decision;
+  const note = req.body?.note;
+  if (
+    !isScenarioTimestamp(simulatedAt) ||
+    !["APPROVE", "REJECT", "DEFER", "REQUEST_ALTERNATIVE", "ACKNOWLEDGE"].includes(decision) ||
+    (note !== undefined && (typeof note !== "string" || note.length > 500))
+  ) return res.status(400).json({ error: "Invalid operator disposition" });
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const evaluation = await client.query(
-      `SELECT id, model_version, model_version_id, model_config FROM safety_evaluations
-       WHERE id = $1 AND user_id = $2 AND facility_id = $3
-         AND recommendation_id = 'rec-17' AND simulated_at = $4
-         AND outcome = 'PASS' AND used_at IS NULL AND expires_at > now()
-       FOR UPDATE`,
-      [safetyEvaluationId, req.userId, req.params.facilityId, simulatedAt],
+    const recommendationResult = await client.query(
+      `SELECT r.id, r.version, r.status, r.title, r.rationale, r.command, r.explanation,
+              r.evidence, r.confidence, r.limitations, r.model_version_id,
+              mv.config AS model_config
+       FROM recommendations r JOIN model_versions mv ON mv.id = r.model_version_id
+       WHERE r.id = $1 AND r.facility_id = $2 FOR UPDATE OF r`,
+      [req.params.recommendationId, req.params.facilityId],
     );
-    if (!evaluation.rowCount) {
+    const recommendation = recommendationResult.rows[0];
+    if (!recommendation) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Recommendation not found" });
+    }
+    const command = parseAdvisoryCommand(req.body?.command ?? recommendation.command);
+    if (!command) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Invalid advisory command" });
+    }
+    const activeModel = await publishedModel(String(req.params.facilityId), client);
+    if (!activeModel || activeModel.model_version !== recommendation.model_version_id) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Recommendation model is no longer active; request a new recommendation" });
+    }
+    assertModelConfig(recommendation.model_config);
+    const snapshot = counterfactualCockpitSnapshot(simulatedAt, command, recommendation.model_config);
+
+    let evaluation;
+    const suppliedEvaluationId = req.body?.safetyEvaluationId;
+    if (typeof suppliedEvaluationId === "string") {
+      const evaluationResult = await client.query(
+        `SELECT id, outcome, checks, command, recommendation_version, model_version_id,
+                model_config, snapshot
+         FROM safety_evaluations
+         WHERE id = $1 AND user_id = $2 AND facility_id = $3 AND recommendation_id = $4
+           AND simulated_at = $5 AND used_at IS NULL AND expires_at > now()
+         FOR UPDATE`,
+        [suppliedEvaluationId, req.userId, req.params.facilityId, req.params.recommendationId, simulatedAt],
+      );
+      evaluation = evaluationResult.rows[0];
+      if (
+        !evaluation ||
+        evaluation.model_version_id !== recommendation.model_version_id ||
+        evaluation.recommendation_version !== recommendation.version ||
+        !advisoryCommandsEqual(evaluation.command, command)
+      ) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "Safety Shield result does not match this recommendation version, command, model, and replay instant" });
+      }
+    } else if (decision === "APPROVE") {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "A current server-verified Safety Shield PASS is required" });
+    } else {
+      const checks = safetyChecksFor(snapshot, command);
+      const id = randomUUID();
+      const outcome = safetyOutcome(checks);
+      const inserted = await client.query(
+        `INSERT INTO safety_evaluations
+          (id, user_id, facility_id, recommendation_id, simulated_at, outcome, checks,
+           command, recommendation_version, snapshot, model_version, model_version_id,
+           model_config, provenance, synthetic_status, expires_at, used_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb,
+                 $11, $11, $12::jsonb, 'SIMULATED', 'SYNTHETIC', now() + interval '10 minutes', now())
+         RETURNING id, outcome, checks, command, recommendation_version, model_version_id,
+                   model_config, snapshot`,
+        [
+          id, req.userId, req.params.facilityId, req.params.recommendationId,
+          simulatedAt, outcome, JSON.stringify(checks), JSON.stringify(command),
+          recommendation.version, JSON.stringify(snapshotForAudit(snapshot)),
+          activeModel.model_version, JSON.stringify(activeModel.config),
+        ],
+      );
+      evaluation = inserted.rows[0];
     }
-    const facilityModel = await publishedModel(String(req.params.facilityId), client);
-    if (!facilityModel) {
+    if (decision === "APPROVE" && evaluation.outcome !== "PASS") {
       await client.query("ROLLBACK");
-      return res.status(409).json({ error: "Published facility model is unavailable" });
+      return res.status(409).json({ error: `Safety Shield ${evaluation.outcome} cannot be approved` });
     }
-    if (facilityModel.model_version !== evaluation.rows[0].model_version) {
-      await client.query("ROLLBACK");
-      return res.status(409).json({ error: "The facility model changed after Safety Shield evaluation; run it again" });
-    }
-    const evaluatedConfig = evaluation.rows[0].model_config as FacilityModelConfig;
-    const snapshot = replaySnapshot(simulatedAt, evaluatedConfig);
+
+    const outcomes: Record<string, string> = {
+      APPROVE: "ALLOWED_AS_ADVISORY",
+      REJECT: "REJECTED",
+      DEFER: "DEFERRED",
+      REQUEST_ALTERNATIVE: "ALTERNATIVE_REQUESTED",
+      ACKNOWLEDGE: "ACKNOWLEDGED",
+    };
+    const statuses: Record<string, string> = {
+      APPROVE: "APPROVED",
+      REJECT: "REJECTED",
+      DEFER: "DEFERRED",
+      REQUEST_ALTERNATIVE: "ALTERNATIVE_REQUESTED",
+      ACKNOWLEDGE: recommendation.status,
+    };
+    const outcome = outcomes[decision];
     const decisionId = randomUUID();
+    const decisionSnapshot = {
+      recommendationId: recommendation.id,
+      recommendationVersion: recommendation.version,
+      decision,
+      outcome,
+      note: note ?? "",
+      command,
+    };
     await client.query(
       `INSERT INTO operator_decisions
         (id, facility_id, scenario_id, recommendation_id, safety_evaluation_id, user_id,
          decision, outcome, simulated_at, model_version_id, payload, provenance,
          synthetic_status, quality)
-       VALUES ($1, $2, 'gpu-training-ramp-v1', 'rec-17', $3, $4, 'APPROVE',
-               'ALLOWED_AS_ADVISORY', $5, $6, $7::jsonb, 'SIMULATED', 'SYNTHETIC', 'GOOD')`,
+       VALUES ($1, $2, 'gpu-training-ramp-v1', $3, $4, $5, $6, $7, $8, $9,
+               $10::jsonb, 'SIMULATED', 'SYNTHETIC', 'GOOD')`,
       [
-        decisionId,
-        req.params.facilityId,
-        safetyEvaluationId,
-        req.userId,
-        simulatedAt,
-        facilityModel.model_version,
-        JSON.stringify(payload),
+        decisionId, req.params.facilityId, recommendation.id, evaluation.id,
+        req.userId, decision, outcome, simulatedAt, activeModel.model_version,
+        JSON.stringify(decisionSnapshot),
       ],
     );
-    const result = await client.query(
+    const auditPayload = {
+      scenario: { id: "gpu-training-ramp-v1", simulatedAt },
+      model: { version: activeModel.model_version, config: activeModel.config },
+      recommendation: {
+        id: recommendation.id,
+        version: recommendation.version,
+        title: recommendation.title,
+        rationale: recommendation.rationale,
+        explanation: recommendation.explanation,
+        evidence: recommendation.evidence,
+        confidence: Number(recommendation.confidence),
+        limitations: recommendation.limitations,
+      },
+      safetyEvaluation: {
+        id: evaluation.id,
+        outcome: evaluation.outcome,
+        checks: evaluation.checks,
+        command: evaluation.command,
+      },
+      decision: { id: decisionId, ...decisionSnapshot },
+      snapshot: snapshotForAudit(snapshot),
+      provenance: "SIMULATED",
+    };
+    const auditResult = await client.query(
       `INSERT INTO audit_records
         (organization_id, facility_id, user_id, action, scenario_id, simulated_at,
-         model_version, model_version_id, payload, provenance, synthetic_status)
+         model_version, model_version_id, payload, provenance, synthetic_status, quality)
        VALUES ($1, $2, $3, $4, 'gpu-training-ramp-v1', $5, $6, $6, $7::jsonb,
-               'SIMULATED', 'SYNTHETIC')
-       RETURNING id, action, created_at`,
-      [permission.organization_id, req.params.facilityId, req.userId, action, simulatedAt, facilityModel.model_version, JSON.stringify({
-        ...payload,
-        operatorDecisionId: decisionId,
-        safetyEvaluationId,
-        modelConfig: evaluatedConfig,
-        snapshot: snapshotForAudit(snapshot),
-      })],
+               'SIMULATED', 'SYNTHETIC', 'GOOD')
+       RETURNING id, action, scenario_id, simulated_at, model_version, payload, created_at`,
+      [
+        permission.organization_id, req.params.facilityId, req.userId,
+        `DECISION_${decision}`, simulatedAt, activeModel.model_version,
+        JSON.stringify(auditPayload),
+      ],
     );
-    await client.query("UPDATE safety_evaluations SET used_at = now() WHERE id = $1", [safetyEvaluationId]);
+    await client.query("UPDATE recommendations SET status = $1 WHERE id = $2", [statuses[decision], recommendation.id]);
+    if (typeof suppliedEvaluationId === "string") {
+      await client.query("UPDATE safety_evaluations SET used_at = now() WHERE id = $1", [suppliedEvaluationId]);
+    }
     await client.query("COMMIT");
-    res.status(201).json(result.rows[0]);
+    res.status(201).json(auditResult.rows[0]);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
+});
+
+app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "operate")) return;
+  res.status(410).json({
+    error: "Legacy approval endpoint retired; use the recommendation decision endpoint so Safety Shield evidence remains fully bound",
+  });
 });
 
 if (process.env.NODE_ENV === "production") {

@@ -16,7 +16,30 @@ type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model:
 type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number };
 type Facility = { id: string; name: string; location: string; model_version: string; model_config: FacilityModelConfig; provenance: "SIMULATED"; recommendation_status: "PROPOSED" | "APPROVED" | "REJECTED" | "EXPIRED" | "NONE"; can_view: boolean; can_operate: boolean; can_edit_model: boolean; can_engineer: boolean; can_assistant: boolean };
 type Audit = { id: number; action: string; scenario_id: string; simulated_at: number; model_version: string; payload: Record<string, any>; created_at: string };
-type Incident = { id: string; title: string; severity: "WATCH" | "HIGH"; status: "OPEN" | "RESOLVED"; simulated_at: number; affected_assets: string[]; raw_signal_count: number; likely_cause: string; forecast_minutes: number; model_version: string };
+type IncidentSignal = { id: string; assetId: string; metric: string; direction: string };
+type Incident = { id: string; title: string; severity: "WATCH" | "HIGH"; status: "OPEN" | "RESOLVED"; simulated_at: number; affected_assets: string[]; raw_signal_count: number; likely_cause: string; forecast_minutes: number; correlated_signals: IncidentSignal[]; thermal_path: string[]; deduplication_key: string; model_version: string };
+type SafetyEvaluation = {
+  id: string;
+  outcome: "PASS" | "WARNING" | "BLOCK";
+  checks: Array<{ id: string; status: "PASS" | "WARNING" | "BLOCK"; pass: boolean; detail: string; evidence: Record<string, unknown> }>;
+  command: { assetId: "cdu-03"; flowPercent: number; durationMinutes: number };
+  simulatedAt: number;
+  recommendationVersion: number;
+  modelVersionId: string;
+};
+type WhatIfComparison = {
+  simulatedAt: number;
+  modelVersionId: string;
+  recommendationVersion: number;
+  options: Array<{
+    id: "inaction" | "recommendation" | "alternative";
+    label: string;
+    command: { assetId: "cdu-03"; flowPercent: number; durationMinutes: number } | null;
+    peakC: number;
+    constraintMinutes: number;
+    series: Array<{ simulatedAt: number; peakC: number }>;
+  }>;
+};
 type ModelVersion = { id: string; facility_id: string; status: "DRAFT" | "VALIDATED" | "PUBLISHED" | "ARCHIVED"; config: Record<string, unknown>; published_at: string | null; created_by: string | null; created_at: string };
 type MemberFacility = { facility_id: string; facility_name: string; can_view: boolean; can_operate: boolean; can_edit_model: boolean };
 type Member = { id: string; email: string | null; display_name: string | null; role: Role; is_admin: boolean; is_owner: boolean; facilities: MemberFacility[] };
@@ -209,10 +232,120 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
 }
 
 function Recommendation({ data, facility }: { data: SessionData; facility: Facility }) {
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot), [evaluation, setEvaluation] = useState<any>(null), [error, setError] = useState(""), [saved, setSaved] = useState(false);
-  const evaluate = async () => { setError(""); try { setEvaluation(await post(`/api/facilities/${facility.id}/recommendations/rec-17/evaluate`, { simulatedAt: snapshot.simulatedAt })); } catch (e) { setError(String(e)); } };
-  const approve = async () => { if (!evaluation || evaluation.outcome !== "PASS") return; setError(""); try { await post(`/api/facilities/${facility.id}/audit`, { action: "APPROVE_ADVISORY", simulatedAt: snapshot.simulatedAt, safetyEvaluationId: evaluation.id, payload: { recommendationId: "rec-17", outcome: "ALLOWED_AS_ADVISORY", provenance: "SIMULATED", command: { assetId: "cdu-03", flowPercent: 78, durationMinutes: 20 } } }); setSaved(true); } catch (e) { setError(String(e)); } };
-  return <Shell data={data} facility={facility}><PageHead eyebrow="RECOMMENDATION / REC-17" title="Pre-emptive CDU-03 flow adjustment" detail={`Same ${formatSimulatedAt(snapshot.simulatedAt)} replay context as Operations and the audit trail.`}/><ReplayBar/><div className="grid gap-4 xl:grid-cols-[1fr_.8fr]"><section className="panel p-6"><div className="flex items-start justify-between"><div><Status tone="warn">ADVISORY</Status><h2 className="mt-3 text-xl font-semibold">Increase CDU-03 flow to 78% for 20 minutes</h2></div><ShieldCheck className="text-cyan-300"/></div><p className="copy">The controller sees the workload ramp before the reactive thermal response. Simulate first, then approve only as an advisory; no command is sent to facility equipment.</p><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Baseline peak" value={snapshot.recommendation.baselinePeakC.toFixed(1)} unit="°C" sub="forecast path" warn/><Metric label="Advisory peak" value={snapshot.recommendation.advisoryPeakC.toFixed(1)} unit="°C" sub={`${snapshot.recommendation.reductionC.toFixed(1)}°C reduction`}/><Metric label="Avoided constraint" value={String(snapshot.recommendation.constraintMinutesAvoided)} unit="min" sub="synthetic forecast"/></div>{facility.can_assistant?<div className="mt-6 flex flex-wrap gap-2"><button className="button primary" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button>{facility.can_operate&&<button className="button secondary" disabled={!evaluation || evaluation.outcome !== "PASS" || saved} onClick={approve}><Check size={15}/>{saved ? "Recorded in audit" : "Approve advisory"}</button>}</div>:<p className="mt-6 text-sm text-slate-500">Read-only access: simulations and operator decisions are unavailable for this role.</p>}{error&&<p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}{saved&&<p role="status" className="mt-4 text-sm text-teal-300">Decision recorded with the replay snapshot and model version.</p>}</section><section className="panel p-6"><div className="eyebrow">SAFETY SHIELD</div>{evaluation ? <><h2 className={`mt-2 text-xl font-semibold ${evaluation.outcome === "PASS" ? "text-teal-300" : "text-red-300"}`}>{evaluation.outcome}</h2><ul className="mt-5 space-y-3">{evaluation.checks.map((check: any)=><li key={check.id} className="flex gap-3 text-sm"><span className={check.pass?"text-teal-300":"text-red-300"}>{check.pass?<Check size={16}/>:<X size={16}/>}</span><span><b>{check.id.replace(/_/g," ")}</b><small className="mt-1 block text-slate-500">{check.detail}</small></span></li>)}</ul></> : <p className="copy">{facility.can_assistant ? "Run the server-side evaluation to verify command envelope, cooling headroom, maintenance state, and model confidence." : "Safety evaluation details are available to authorized managers, operators, and engineers."}</p>}</section></div></Shell>;
+  const snapshot = useScenarioSession((state) => state.simulation.snapshot);
+  const [flowPercent, setFlowPercent] = useState(snapshot.recommendation.flowPercent);
+  const [durationMinutes, setDurationMinutes] = useState(snapshot.recommendation.durationMinutes);
+  const [comparison, setComparison] = useState<WhatIfComparison | null>(null);
+  const [evaluation, setEvaluation] = useState<SafetyEvaluation | null>(null);
+  const [note, setNote] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const command = { assetId: "cdu-03" as const, flowPercent, durationMinutes };
+
+  useEffect(() => {
+    setComparison(null);
+    setEvaluation(null);
+    setMessage("");
+  }, [snapshot.simulatedAt, flowPercent, durationMinutes]);
+
+  const compare = async () => {
+    setError("");
+    try {
+      setComparison(await post<WhatIfComparison>(
+        `/api/facilities/${facility.id}/recommendations/rec-17/what-if`,
+        { simulatedAt: snapshot.simulatedAt, command },
+      ));
+    } catch (cause) { setError(String(cause)); }
+  };
+  const evaluate = async () => {
+    setError("");
+    try {
+      setEvaluation(await post<SafetyEvaluation>(
+        `/api/facilities/${facility.id}/recommendations/rec-17/evaluate`,
+        { simulatedAt: snapshot.simulatedAt, command },
+      ));
+    } catch (cause) { setError(String(cause)); }
+  };
+  const decide = async (decision: "APPROVE" | "REJECT" | "DEFER" | "REQUEST_ALTERNATIVE" | "ACKNOWLEDGE") => {
+    setError("");
+    try {
+      const record = await post<Audit>(
+        `/api/facilities/${facility.id}/recommendations/rec-17/decisions`,
+        {
+          decision,
+          simulatedAt: snapshot.simulatedAt,
+          safetyEvaluationId: evaluation?.id,
+          command,
+          note,
+        },
+      );
+      setMessage(`${decision.replace(/_/g, " ")} recorded as immutable decision #${record.id}.`);
+      setEvaluation(null);
+    } catch (cause) { setError(String(cause)); }
+  };
+  const evaluationTone = evaluation?.outcome === "PASS" ? "text-teal-300" : evaluation?.outcome === "WARNING" ? "text-amber-300" : "text-red-300";
+
+  return <Shell data={data} facility={facility}>
+    <PageHead eyebrow="RECOMMENDATION / REC-17 / VERSION 1" title="Pre-emptive CDU-03 flow adjustment" detail={`Bound to ${formatSimulatedAt(snapshot.simulatedAt)}, GPU Training Ramp, and ${facility.model_version}.`}/>
+    <ReplayBar/>
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(330px,.75fr)]">
+      <div className="space-y-4">
+        <section className="panel p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone="warn">ADVISORY · SYNTHETIC</Status><h2 className="mt-3 text-xl font-semibold">{snapshot.recommendation.what}</h2></div><ShieldCheck className="text-cyan-300"/></div>
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            {[
+              ["WHY", snapshot.recommendation.why],
+              ["WHERE", snapshot.recommendation.where],
+              ["EXPECTED EFFECT", snapshot.recommendation.expectedEffect],
+              ["CONFIDENCE", `${Math.round(snapshot.recommendation.confidence * 100)}% at the ${snapshot.forecast.horizonS / 60}-minute horizon; quality GOOD inside the disclosed domain.`],
+            ].map(([label, value]) => <div key={label} className="subpanel"><span className="eyebrow">{label}</span><p className="text-sm leading-6 text-slate-300">{value}</p></div>)}
+          </div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <Metric label="Inaction peak" value={snapshot.recommendation.baselinePeakC.toFixed(1)} unit="°C" sub="same initial state" warn/>
+            <Metric label="Recommended peak" value={snapshot.recommendation.advisoryPeakC.toFixed(1)} unit="°C" sub={`${snapshot.recommendation.reductionC.toFixed(1)}°C modeled reduction`}/>
+            <Metric label="Constraint avoided" value={String(snapshot.recommendation.constraintMinutesAvoided)} unit="min" sub="same events and model"/>
+          </div>
+          <div className="mt-5 border-t border-slate-800 pt-4"><div className="eyebrow">PROVENANCE & LIMITATIONS</div><p className="mt-2 text-xs text-slate-400">{snapshot.recommendation.provenance} · deterministic reduced-order model · {facility.model_version}</p><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-500">{snapshot.recommendation.limitations.map((item) => <li key={item}>{item}</li>)}</ul></div>
+        </section>
+
+        <section className="panel p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">WHAT-IF COMPARISON</div><h2 className="mt-2 text-lg font-semibold">Adjust a permitted advisory</h2><p className="copy">Only the advisory parameters change. Initial state, event stream, replay instant, and model version stay fixed.</p></div><SlidersHorizontal className="text-cyan-300"/></div>
+          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+            <label className="field">CDU-03 flow: <b>{flowPercent}%</b><input aria-label="Alternative CDU flow percent" type="range" min="60" max="85" step="1" value={flowPercent} onChange={(event) => setFlowPercent(Number(event.target.value))}/></label>
+            <label className="field">Duration: <b>{durationMinutes} minutes</b><input aria-label="Alternative duration minutes" type="range" min="1" max="30" step="1" value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}/></label>
+          </div>
+          <button className="button secondary mt-5" onClick={compare}><Layers3 size={15}/>Compare identical-input outcomes</button>
+          {comparison && <div className="mt-5 grid gap-3 md:grid-cols-3">{comparison.options.map((option) => <article key={option.id} className={`subpanel ${option.id === "alternative" ? "border-cyan-500/60" : ""}`}><div className="flex items-center justify-between gap-2"><b>{option.label}</b>{option.id === "alternative" && <Status>EDITED</Status>}</div><span className="text-2xl font-semibold">{option.peakC.toFixed(1)}<small className="ml-1 text-xs text-slate-500">°C peak</small></span><small>{option.constraintMinutes.toFixed(1)} modeled constraint minutes</small><small>{option.command ? `${option.command.flowPercent}% · ${option.command.durationMinutes} min` : "No advisory action"}</small></article>)}</div>}
+        </section>
+      </div>
+
+      <aside className="space-y-4">
+        <section className="panel p-6">
+          <div className="eyebrow">SAFETY SHIELD · SERVER VERIFIED</div>
+          {evaluation ? <>
+            <div className="mt-2 flex items-center justify-between"><h2 className={`text-2xl font-semibold ${evaluationTone}`}>{evaluation.outcome}</h2><Status tone={evaluation.outcome === "PASS" ? "good" : evaluation.outcome === "WARNING" ? "warn" : "bad"}>{evaluation.modelVersionId}</Status></div>
+            <p className="mt-2 text-xs text-slate-500">Bound to recommendation v{evaluation.recommendationVersion}, this command, user, model, and replay instant.</p>
+            <ul className="mt-5 space-y-3">{evaluation.checks.map((check) => <li key={check.id} className="flex gap-3 text-sm"><span className={check.status === "PASS" ? "text-teal-300" : check.status === "WARNING" ? "text-amber-300" : "text-red-300"}>{check.status === "PASS" ? <Check size={16}/> : <X size={16}/>}</span><span><span className="flex items-center gap-2"><b>{check.id.replace(/_/g, " ")}</b><Status tone={check.status === "PASS" ? "good" : check.status === "WARNING" ? "warn" : "bad"}>{check.status}</Status></span><small className="mt-1 block leading-5 text-slate-500">{check.detail}</small></span></li>)}</ul>
+          </> : <p className="copy">Run the server-side evaluation after choosing the command. A changed parameter, replay instant, model, or reused result invalidates approval.</p>}
+          {facility.can_assistant && <button className="button primary mt-5 w-full justify-center" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button>}
+        </section>
+        {facility.can_operate ? <section className="panel p-6">
+          <div className="eyebrow">OPERATOR DISPOSITION</div>
+          <label className="field">Decision note (optional)<textarea className="textarea mt-2 min-h-[76px] w-full" maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record operational context"/></label>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <button className="button primary justify-center" disabled={evaluation?.outcome !== "PASS"} onClick={() => decide("APPROVE")}><Check size={14}/>Approve</button>
+            <button className="button secondary justify-center" onClick={() => decide("REJECT")}><X size={14}/>Reject</button>
+            <button className="button secondary justify-center" onClick={() => decide("DEFER")}><Clock3 size={14}/>Defer</button>
+            <button className="button secondary justify-center" onClick={() => decide("REQUEST_ALTERNATIVE")}><RotateCcw size={14}/>Request alternative</button>
+          </div>
+          {evaluation?.outcome === "WARNING" && <button className="button secondary mt-2 w-full justify-center" onClick={() => decide("ACKNOWLEDGE")}>Acknowledge warning without approval</button>}
+          <p className="mt-3 text-[11px] leading-5 text-slate-500">Approval is available only for an unused, unexpired PASS. This records an advisory disposition; it never sends an equipment command.</p>
+        </section> : <section className="panel p-6 text-sm text-slate-500">Read-only access: operator dispositions are unavailable for this role.</section>}
+        {error && <p role="alert" className="panel p-4 text-sm text-red-300">{error}</p>}
+        {message && <p role="status" className="panel p-4 text-sm text-teal-300">{message}</p>}
+      </aside>
+    </div>
+  </Shell>;
 }
 
 function IncidentPage({ data, facility, incidentId }: { data: SessionData; facility: Facility; incidentId: string }) {
@@ -230,15 +363,69 @@ function IncidentPage({ data, facility, incidentId }: { data: SessionData; facil
   const incident = selected ?? incidents[0];
   const reconstruct = async (item: Incident) => { setSelected(item); try { const result = await api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`); setReconstructed(result.snapshot); } catch (e) { setError(String(e)); } };
   const current = reconstructed ?? snapshot;
-  return <Shell data={data} facility={facility}><PageHead eyebrow="INCIDENTS / CORRELATED EVENTS" title="Incident investigation" detail="Persisted incidents retain their scenario timestamp so operators can reconstruct what was known."/><div className="grid gap-4 xl:grid-cols-[300px_1fr]"><section className="panel overflow-hidden"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold">Open incidents</h2></div>{incidents.map(item => <button key={item.id} onClick={() => reconstruct(item)} className={`w-full border-b border-slate-800 p-4 text-left ${incident?.id === item.id ? "bg-slate-800/60" : ""}`}><div className="flex justify-between"><b>{item.id}</b><Status tone={item.severity === "HIGH" ? "bad" : "warn"}>{item.severity}</Status></div><p className="mt-2 text-xs text-slate-400">{item.title}</p><p className="mt-2 text-[10px] text-slate-500">{item.raw_signal_count} raw signals · {item.forecast_minutes}m forecast</p></button>)}{!incidents.length&&!error&&<p className="p-4 text-sm text-slate-500">No persisted incidents.</p>}{error&&<p role="alert" className="p-4 text-sm text-red-300">{error}</p>}</section><section className="space-y-4">{incident ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={incident.severity === "HIGH" ? "bad" : "warn"}>{incident.status}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Generated at {formatSimulatedAt(incident.simulated_at)} from the GPU Training Ramp.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="not a single alarm"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=cdu-03`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">Choose an incident to inspect its correlated signals.</section>}</section></div></Shell>;
+  return <Shell data={data} facility={facility}><PageHead eyebrow="INCIDENTS / CORRELATED EVENTS" title="Incident investigation" detail="Persisted incidents retain their scenario timestamp so operators can reconstruct what was known."/><div className="grid gap-4 xl:grid-cols-[300px_1fr]"><section className="panel overflow-hidden"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold">Open incidents</h2></div>{incidents.map(item => <button key={item.id} onClick={() => reconstruct(item)} className={`w-full border-b border-slate-800 p-4 text-left ${incident?.id === item.id ? "bg-slate-800/60" : ""}`}><div className="flex justify-between"><b>{item.id}</b><Status tone={item.severity === "HIGH" ? "bad" : "warn"}>{item.severity}</Status></div><p className="mt-2 text-xs text-slate-400">{item.title}</p><p className="mt-2 text-[10px] text-slate-500">{item.raw_signal_count} raw signals · {item.forecast_minutes}m forecast</p></button>)}{!incidents.length&&!error&&<p className="p-4 text-sm text-slate-500">No persisted incidents.</p>}{error&&<p role="alert" className="p-4 text-sm text-red-300">{error}</p>}</section><section className="space-y-4">{incident ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={incident.severity === "HIGH" ? "bad" : "warn"}>{incident.status}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Generated at {formatSimulatedAt(incident.simulated_at)} from the GPU Training Ramp.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="deduplicated into one incident"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 grid gap-3 md:grid-cols-2"><div className="subpanel"><span className="eyebrow">CORRELATED EVIDENCE</span>{(incident.correlated_signals ?? []).map(signal => <div key={signal.id} className="text-xs text-slate-300"><b>{signal.assetId}</b> · {signal.metric.replace(/_/g, " ")} · {signal.direction}</div>)}</div><div className="subpanel"><span className="eyebrow">THERMAL PATH</span><div className="flex flex-wrap items-center gap-2 text-xs">{(incident.thermal_path ?? []).map((asset, index) => <span key={asset} className="flex items-center gap-2"><b>{asset}</b>{index < incident.thermal_path.length - 1 && <ArrowRight size={12} className="text-cyan-300"/>}</span>)}</div><small>Dedup key: {incident.deduplication_key}</small></div></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=cdu-03`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">Choose an incident to inspect its correlated signals.</section>}</section></div></Shell>;
 }
 
 function AuditPage({ data, facility }: { data: SessionData; facility: Facility }) {
-  const current = useScenarioSession((s) => s.simulation.snapshot), [records, setRecords] = useState<Audit[]>([]), [selected, setSelected] = useState<Audit | null>(null), [reconstructed, setReconstructed] = useState<CockpitSnapshot | null>(null), [error, setError] = useState("");
-  useEffect(() => { api<Audit[]>(`/api/facilities/${facility.id}/audit`).then(setRecords).catch(e => setError(String(e))); }, [facility.id]);
-  const select = async (record: Audit) => { setSelected(record); try { const result = await api<{ record: Audit; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/audit/${record.id}`); setReconstructed(result.snapshot); } catch (e) { setError(String(e)); } };
-  const snapshot = reconstructed ?? current;
-  return <Shell data={data} facility={facility}><PageHead eyebrow="AUDIT HISTORY / DECISIONS" title="Audit history" detail="Every approved advisory carries its scenario, model, Safety Shield result, and operator response."/><section className="panel mb-4 p-5"><div className="eyebrow">CURRENT REPLAY SNAPSHOT</div><div className="mt-3 grid gap-3 sm:grid-cols-4"><Metric label="Simulated at" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`}/><Metric label="Forecast" value={current.forecast.baselinePeakC.toFixed(1)} unit="°C" sub={`${current.forecast.horizonS / 60}m horizon`}/></div></section><div className="grid gap-4 xl:grid-cols-[1fr_.8fr]"><section className="panel overflow-hidden">{records.map(r=><button key={r.id} onClick={() => select(r)} className={`facility-row w-full text-left ${selected?.id === r.id ? "bg-slate-800/60" : ""}`}><div><Status>{r.action.replace(/_/g," ")}</Status><h2 className="mt-2 font-semibold">Recommendation {r.payload.recommendationId}</h2><p className="mt-1 text-xs text-slate-500">{new Date(r.created_at).toLocaleString()} · {r.model_version}</p></div><div className="text-right"><b>{r.payload.outcome}</b><p className={`${mono} mt-1 text-[10px] text-slate-500`}>{formatSimulatedAt(r.simulated_at)}</p></div></button>)}{records.length===0&&!error&&<p className="p-6 text-sm text-slate-500">No operator decisions have been recorded yet.</p>}{error&&<p role="alert" className="p-6 text-red-300">{error}</p>}</section><section className="panel p-6"><div className="eyebrow">RECONSTRUCTED RECORD</div>{selected ? <><h2 className="mt-2 text-lg font-semibold">Decision #{selected.id}</h2><p className="mt-2 text-xs text-slate-500">{selected.scenario_id} · {selected.model_version} · {formatSimulatedAt(selected.simulated_at)}</p><div className="mt-5 grid gap-3 sm:grid-cols-2"><Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub="historical replay"/><Metric label="Peak inlet" value={snapshot.peakInletC.toFixed(1)} unit="°C" sub={`PUE ${snapshot.pue.toFixed(3)}`}/><Metric label="Safety" value={snapshot.safety.outcome} sub="server-verified evaluation"/><Metric label="Advisory" value={`${snapshot.recommendation.flowPercent}%`} sub={`${snapshot.recommendation.durationMinutes} minute command envelope`}/></div><button className="button secondary mt-5" onClick={() => navigate(`/facilities/${facility.id}/operations`)}>Open current operations <ArrowRight size={15}/></button></> : <p className="copy">Select a record to reconstruct the facility state at the decision timestamp.</p>}</section></div></Shell>;
+  const current = useScenarioSession((state) => state.simulation.snapshot);
+  const [records, setRecords] = useState<Audit[]>([]);
+  const [selected, setSelected] = useState<Audit | null>(null);
+  const [detail, setDetail] = useState<any>(null);
+  const [decisionFilter, setDecisionFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+  const load = () => {
+    const query = new URLSearchParams();
+    if (decisionFilter) query.set("decision", decisionFilter);
+    if (search.trim()) query.set("search", search.trim());
+    api<Audit[]>(`/api/facilities/${facility.id}/audit?${query}`).then(setRecords).catch((cause) => setError(String(cause)));
+  };
+  useEffect(() => { load(); }, [facility.id, decisionFilter]);
+  const select = async (record: Audit) => {
+    setSelected(record);
+    setError("");
+    try {
+      setDetail(await api(`/api/facilities/${facility.id}/audit/${record.id}`));
+    } catch (cause) { setError(String(cause)); }
+  };
+  const snapshot = detail?.snapshot;
+  const decision = detail?.decision ?? selected?.payload?.decision;
+  const safety = detail?.safetyEvaluation ?? selected?.payload?.safetyEvaluation;
+  const recommendation = detail?.recommendation ?? selected?.payload?.recommendation;
+  return <Shell data={data} facility={facility}>
+    <PageHead eyebrow="AUDIT HISTORY / IMMUTABLE DECISIONS" title="Audit history" detail="Filter decisions and reconstruct the exact recorded scenario, model, evidence, Safety Shield evaluation, and disposition."/>
+    <section className="panel mb-4 p-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="field m-0 flex-1">Search evidence or action<input className="input mt-2 w-full" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => event.key === "Enter" && load()} placeholder="e.g. deferred, CDU-03, PASS"/></label>
+        <label className="field m-0">Disposition<select className="select mt-2 block" value={decisionFilter} onChange={(event) => setDecisionFilter(event.target.value)}><option value="">All dispositions</option><option value="APPROVE">Approved</option><option value="REJECT">Rejected</option><option value="DEFER">Deferred</option><option value="REQUEST_ALTERNATIVE">Alternative requested</option><option value="ACKNOWLEDGE">Warning acknowledged</option></select></label>
+        <button className="button secondary" onClick={load}><Search size={14}/>Apply filters</button>
+      </div>
+    </section>
+    <section className="panel mb-4 p-5"><div className="eyebrow">CURRENT REPLAY · NOT USED FOR HISTORY</div><div className="mt-3 grid gap-3 sm:grid-cols-4"><Metric label="Simulated at" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`}/><Metric label="Forecast" value={current.forecast.baselinePeakC.toFixed(1)} unit="°C" sub={`${current.forecast.horizonS / 60}m horizon`}/></div></section>
+    <div className="grid gap-4 xl:grid-cols-[minmax(380px,.85fr)_minmax(0,1.15fr)]">
+      <section className="panel overflow-hidden">
+        {records.map((record) => {
+          const recordDecision = record.payload?.decision;
+          return <button key={record.id} onClick={() => select(record)} className={`facility-row w-full text-left ${selected?.id === record.id ? "bg-slate-800/60" : ""}`}><div><Status tone={recordDecision?.decision === "APPROVE" ? "good" : recordDecision?.decision === "REJECT" ? "bad" : "warn"}>{record.action.replace("DECISION_", "").replace(/_/g, " ")}</Status><h2 className="mt-2 font-semibold">Recommendation {record.payload?.recommendation?.id ?? record.payload?.recommendationId}</h2><p className="mt-1 text-xs text-slate-500">{new Date(record.created_at).toLocaleString()} · {record.model_version}</p></div><div className="text-right"><b>{recordDecision?.outcome ?? record.payload?.outcome}</b><p className={`${mono} mt-1 text-[10px] text-slate-500`}>{formatSimulatedAt(record.simulated_at)}</p></div></button>;
+        })}
+        {!records.length && !error && <p className="p-6 text-sm text-slate-500">No decisions match these filters.</p>}
+        {error && <p role="alert" className="p-6 text-red-300">{error}</p>}
+      </section>
+      <section className="panel p-6">
+        <div className="eyebrow">RECONSTRUCTED IMMUTABLE RECORD</div>
+        {selected && snapshot ? <>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Decision #{selected.id}</h2><p className="mt-1 text-xs text-slate-500">{selected.scenario_id} · {selected.model_version} · {formatSimulatedAt(selected.simulated_at)}</p></div><Status tone={safety?.outcome === "PASS" ? "good" : safety?.outcome === "WARNING" ? "warn" : "bad"}>{safety?.outcome ?? "RECORDED"}</Status></div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="IT power" value={Number(snapshot.itPowerKw).toLocaleString()} unit="kW" sub="stored snapshot"/><Metric label="Peak inlet" value={Number(snapshot.peakInletC).toFixed(1)} unit="°C" sub={`PUE ${Number(snapshot.pue).toFixed(3)}`}/><Metric label="Forecast" value={Number(snapshot.forecast.baselinePeakC).toFixed(1)} unit="°C" sub={`${snapshot.forecast.horizonS / 60}m stored horizon`}/><Metric label="Advisory" value={`${snapshot.recommendation.flowPercent}%`} sub={`${snapshot.recommendation.durationMinutes} minute alternative`}/></div>
+          <div className="mt-5 grid gap-3 md:grid-cols-2">
+            <div className="subpanel"><span className="eyebrow">DECISION SNAPSHOT</span><b>{decision?.decision?.replace(/_/g, " ")} → {decision?.outcome}</b><small>{decision?.note || "No operator note"}</small><small>Command: {decision?.command?.flowPercent}% for {decision?.command?.durationMinutes} min</small></div>
+            <div className="subpanel"><span className="eyebrow">RECOMMENDATION & MODEL</span><b>{recommendation?.title}</b><small>Recommendation v{recommendation?.version} · model {detail?.model?.version ?? selected.model_version}</small><small>Confidence {Math.round(Number(recommendation?.confidence ?? 0) * 100)}% · SIMULATED</small></div>
+          </div>
+          <div className="mt-5"><div className="eyebrow">RECORDED SAFETY EVIDENCE</div><ul className="mt-3 space-y-2">{(safety?.checks ?? []).map((check: any) => <li key={check.id} className="flex items-start justify-between gap-3 border-b border-slate-800 pb-2 text-xs"><span><b>{check.id.replace(/_/g, " ")}</b><small className="mt-1 block text-slate-500">{check.detail}</small></span><Status tone={check.status === "PASS" ? "good" : check.status === "WARNING" ? "warn" : "bad"}>{check.status}</Status></li>)}</ul></div>
+          <p className="mt-5 text-[11px] leading-5 text-slate-500">This view renders the JSON snapshot stored with the decision. It does not replay the active model or substitute current facility state.</p>
+        </> : <p className="copy">Select a record to load its exact stored reconstruction.</p>}
+      </section>
+    </div>
+  </Shell>;
 }
 
 function GraphPage({ data, facility }: { data: SessionData; facility: Facility }) {

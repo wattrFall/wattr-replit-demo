@@ -56,6 +56,8 @@ try {
     "0003_canonical_completion_gates",
     "0004_role_security",
     "0005_immutable_administrative_audit",
+    "0006_decision_workflow",
+    "0007_decision_history_hardening",
   ]);
 
   const counts = await pool.query(`

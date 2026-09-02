@@ -48,6 +48,14 @@ try {
       version: "0005_immutable_administrative_audit",
       file: new URL("../database/migrations/0005_immutable_administrative_audit.sql", import.meta.url),
     },
+    {
+      version: "0006_decision_workflow",
+      file: new URL("../database/migrations/0006_decision_workflow.sql", import.meta.url),
+    },
+    {
+      version: "0007_decision_history_hardening",
+      file: new URL("../database/migrations/0007_decision_history_hardening.sql", import.meta.url),
+    },
   ];
 
   for (const migration of migrations) {
