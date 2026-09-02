@@ -11,6 +11,7 @@
     "check": "tsc --noEmit",
     "test:simulation": "tsx scripts/test-cockpit-simulation.ts",
     "test:workspaces": "tsx scripts/test-operating-workspaces.ts",
+    "test:contracts": "npm run db:setup && tsx scripts/test-canonical-contracts.ts",
     "demo:validate": "tsx scripts/validate-demo-scenario.ts"
   },
   "dependencies": {

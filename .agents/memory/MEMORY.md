@@ -1,2 +1,3 @@
 - [Deterministic replay cadence](deterministic-replay-cadence.md) — align time-varying inputs globally, then batch unchanged fixed physics slices across every replay path.
 - [Model-bound decisions](model-bound-decisions.md) — bind safety, incidents, and audits to immutable model config; reject approval after an active-version change.
+- [Forward migration parity](forward-migration-parity.md) — legacy upgrades must explicitly converge column types, nullability, checks, and FKs with clean installs.

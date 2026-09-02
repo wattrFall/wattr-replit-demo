@@ -130,6 +130,11 @@ function rampAt(simulatedAt: number, startAt: number): number {
   return clamp01(scenarioElapsed(simulatedAt, startAt) / SCENARIO_DURATION_S);
 }
 
+function seededLoadScale(seed: number): number {
+  const canonicalBucket = DEFAULT_FACILITY_MODEL.seed % 97;
+  return 1 + ((seed % 97) - canonicalBucket) / 10_000;
+}
+
 function rack(id: string, loadMultiplier: number): SandboxItem {
   return {
     id: `rack-${id.toLowerCase()}`,
@@ -150,7 +155,10 @@ function rack(id: string, loadMultiplier: number): SandboxItem {
  */
 export function scenarioLayout(simulatedAt: number, startAt: number, variant: SimulationVariant, config: FacilityModelConfig = DEFAULT_FACILITY_MODEL): SandboxLayout {
   const ramp = rampAt(simulatedAt, startAt);
-  const loadMultiplier = 1 + RAMP_INCREASE * ramp * (DEFAULT_FACILITY_MODEL.thermalMass / config.thermalMass);
+  const loadMultiplier =
+    1 + RAMP_INCREASE * ramp *
+    (DEFAULT_FACILITY_MODEL.thermalMass / config.thermalMass) *
+    seededLoadScale(config.seed);
   const lagAdjustment = (DEFAULT_FACILITY_MODEL.responseLag - config.responseLag) / 120;
   const cduPumpPercent = variant === "advisory" ? RECOMMENDATION_FLOW_PERCENT : 70 + 6 * lagAdjustment * ramp;
 

@@ -13,6 +13,12 @@ import {
   type FacilityModelConfig,
 } from "../src/lib/cockpit/simulation";
 import { thermalGraph } from "../src/lib/cockpit/workspaces";
+import {
+  assertModelConfig,
+  CONTRACT_VERSION,
+  provenanceForRecord,
+  syntheticProvenance,
+} from "../src/lib/cockpit/contracts";
 
 const app = express();
 const port = Number(process.env.PORT || 5000);
@@ -36,6 +42,51 @@ async function publishedModel(facilityId: string, client: pg.Pool | pg.PoolClien
     [facilityId],
   );
   return result.rows[0] as { model_version: string; config: FacilityModelConfig } | undefined;
+}
+
+async function facilityPermission(userId: string, facilityId: string, capability = "can_view") {
+  const result = await pool.query(
+    `SELECT p.can_view, p.can_operate, p.can_edit_model, f.organization_id
+     FROM facility_permissions p
+     JOIN facilities f ON f.id = p.facility_id
+     WHERE p.user_id = $1 AND p.facility_id = $2`,
+    [userId, facilityId],
+  );
+  const row = result.rows[0];
+  return row && row[capability] ? row : undefined;
+}
+
+function canonicalProvenance(row: {
+  provenance?: string;
+  synthetic_status?: string;
+  created_at?: string;
+  generated_at?: string;
+  model_version_id?: string;
+}) {
+  return provenanceForRecord(row);
+}
+
+function canonical(row: Record<string, any>, facilityId: string) {
+  const serialized: Record<string, unknown> = {};
+  const numericFields = new Set([
+    "rated_capacity_kw", "simulated_start_at", "duration_s", "seed", "simulated_at",
+    "horizon_s", "baseline_peak_c", "advisory_peak_c", "baseline_constraint_minutes",
+    "advisory_constraint_minutes", "elapsed_s", "sample_period_s", "forecast_minutes",
+    "raw_signal_count",
+  ]);
+  for (const [key, value] of Object.entries(row)) {
+    if (["provenance", "synthetic_status", "quality", "model_version_id"].includes(key)) continue;
+    const camelKey = key.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
+    serialized[camelKey] = numericFields.has(key) && value !== null ? Number(value) : value;
+  }
+  return {
+    contractVersion: CONTRACT_VERSION,
+    ...serialized,
+    facilityId,
+    modelVersionId: row.model_version_id ?? row.modelVersionId ?? "unknown",
+    provenance: canonicalProvenance(row),
+    quality: row.quality ?? "GOOD",
+  };
 }
 
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
@@ -132,6 +183,300 @@ app.get("/api/facilities", requireAuth, async (req: AuthedRequest, res) => {
   res.json(result.rows);
 });
 
+/**
+ * The context endpoint is the canonical read model. Each collection is
+ * permission-filtered and references the same published model version; the
+ * simulation snapshot is reconstructed on request rather than copied into
+ * every high-frequency telemetry row.
+ */
+app.get("/api/facilities/:facilityId/context", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) {
+    return res.status(403).json({ error: "Facility permission required" });
+  }
+  const [facility, hierarchy, assets, sensors, topology, scenarios, forecasts, incidents, recommendations, decisions, checkpoints] =
+    await Promise.all([
+      pool.query(
+        `SELECT f.id, f.organization_id, f.name, f.location, f.model_version AS model_version_id,
+                f.provenance, f.synthetic_status, f.quality, f.created_at, mv.config AS model_config
+         FROM facilities f JOIN model_versions mv ON mv.id = f.model_version WHERE f.id = $1`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, parent_id, kind, name, path, model_version_id, provenance, synthetic_status,
+                quality, metadata, created_at
+         FROM facility_hierarchy WHERE facility_id = $1 ORDER BY path`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, hierarchy_id, parent_asset_id, kind, name, status, rated_capacity_kw,
+                unit_metadata, model_version_id, provenance, synthetic_status, quality, metadata, created_at
+         FROM assets WHERE facility_id = $1 ORDER BY id`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, asset_id, hierarchy_id, name, metric, unit, sample_period_s, quality,
+                model_version_id, provenance, synthetic_status, metadata, created_at
+         FROM sensors WHERE facility_id = $1 ORDER BY id`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, from_asset_id, to_asset_id, relation, model_version_id, provenance,
+                synthetic_status, quality, metadata, created_at
+         FROM topology_edges WHERE facility_id = $1 ORDER BY id`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, scenario_key, name, status, simulated_start_at, duration_s, seed,
+                model_version_id, config, provenance, synthetic_status, quality, created_at
+         FROM scenarios WHERE facility_id = $1 ORDER BY created_at DESC`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, scenario_id, simulated_at, horizon_s, baseline_peak_c, advisory_peak_c,
+                baseline_constraint_minutes, advisory_constraint_minutes, risk, model_version_id,
+                provenance, synthetic_status, quality, generated_at
+         FROM forecasts WHERE facility_id = $1 ORDER BY simulated_at`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, scenario_id, title, severity, status, simulated_at, affected_assets,
+                raw_signal_count, likely_cause, forecast_minutes, model_version_id,
+                provenance, synthetic_status, quality, created_at
+         FROM incidents WHERE facility_id = $1 ORDER BY created_at DESC`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT r.id, r.scenario_id, r.incident_id, r.kind, r.status, r.title, r.rationale,
+                r.command, r.simulated_at, r.model_version_id, r.provenance,
+                r.synthetic_status, r.quality, r.created_at, mv.config AS model_config
+         FROM recommendations r JOIN model_versions mv ON mv.id = r.model_version_id
+         WHERE r.facility_id = $1 ORDER BY r.created_at DESC`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, scenario_id, recommendation_id, safety_evaluation_id, user_id, decision,
+                outcome, simulated_at, model_version_id, payload, provenance, synthetic_status,
+                quality, created_at
+         FROM operator_decisions WHERE facility_id = $1 ORDER BY created_at DESC`,
+        [facilityId],
+      ),
+      pool.query(
+        `SELECT id, scenario_id, simulated_at, elapsed_s, state, model_version_id,
+                provenance, synthetic_status, quality, created_at
+         FROM replay_checkpoints WHERE facility_id = $1 ORDER BY simulated_at`,
+        [facilityId],
+      ),
+    ]);
+  if (!facility.rows[0]) return res.status(404).json({ error: "Facility not found" });
+  const mapRows = (rows: Record<string, any>[]) => rows.map((row) => canonical(row, facilityId));
+  const facilityRow = facility.rows[0];
+  const scenario = scenarios.rows[0];
+  const simulatedAt = scenario?.simulated_start_at ?? SCENARIO_START_S;
+  const modelConfig = facilityRow.model_config as FacilityModelConfig;
+  assertModelConfig(modelConfig);
+  return res.json({
+    contractVersion: CONTRACT_VERSION,
+    facility: canonical(facilityRow, facilityId),
+    hierarchy: mapRows(hierarchy.rows),
+    assets: mapRows(assets.rows),
+    sensors: mapRows(sensors.rows),
+    topology: mapRows(topology.rows),
+    scenarios: mapRows(scenarios.rows),
+    forecasts: mapRows(forecasts.rows),
+    incidents: mapRows(incidents.rows),
+    recommendations: recommendations.rows.map((row) => ({
+      ...canonical(row, facilityId),
+      command: row.command,
+      snapshot: replaySnapshot(row.simulated_at, row.model_config),
+    })),
+    decisions: mapRows(decisions.rows),
+    checkpoints: mapRows(checkpoints.rows),
+    snapshot: {
+      contractVersion: CONTRACT_VERSION,
+      scenarioId: scenario?.id ?? "gpu-training-ramp-v1",
+      simulatedAt,
+      modelVersionId: facilityRow.model_version_id,
+      provenance: canonicalProvenance({
+        provenance: "SIMULATED",
+        synthetic_status: "SYNTHETIC",
+        created_at: facilityRow.created_at,
+        model_version_id: facilityRow.model_version_id,
+      }),
+      quality: "GOOD",
+      value: replaySnapshot(simulatedAt, modelConfig),
+    },
+  });
+});
+
+app.get("/api/facilities/:facilityId/hierarchy", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const result = await pool.query(
+    `SELECT id, parent_id, kind, name, path, model_version_id, provenance, synthetic_status,
+            quality, metadata, created_at
+     FROM facility_hierarchy WHERE facility_id = $1 ORDER BY path`,
+    [facilityId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
+});
+
+app.get("/api/facilities/:facilityId/assets", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const result = await pool.query(
+    `SELECT id, hierarchy_id, parent_asset_id, kind, name, status, rated_capacity_kw,
+            unit_metadata, model_version_id, provenance, synthetic_status, quality, metadata, created_at
+     FROM assets WHERE facility_id = $1 ORDER BY id`,
+    [facilityId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
+});
+
+app.get("/api/facilities/:facilityId/sensors", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const result = await pool.query(
+    `SELECT id, asset_id, hierarchy_id, name, metric, unit, sample_period_s, quality,
+            model_version_id, provenance, synthetic_status, metadata, created_at
+     FROM sensors WHERE facility_id = $1 ORDER BY id`,
+    [facilityId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
+});
+
+app.get("/api/facilities/:facilityId/scenarios", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const result = await pool.query(
+    `SELECT id, scenario_key, name, status, simulated_start_at, duration_s, seed,
+            model_version_id, config, provenance, synthetic_status, quality, created_at
+     FROM scenarios WHERE facility_id = $1 ORDER BY created_at DESC`,
+    [facilityId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
+});
+
+app.get("/api/facilities/:facilityId/scenarios/:scenarioId/snapshot", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const scenarioResult = await pool.query(
+    `SELECT s.id, s.simulated_start_at, s.duration_s, s.model_version_id,
+            mv.config AS model_config
+     FROM scenarios s JOIN model_versions mv ON mv.id = s.model_version_id
+     WHERE s.facility_id = $1 AND s.id = $2`,
+    [facilityId, req.params.scenarioId],
+  );
+  const scenario = scenarioResult.rows[0];
+  if (!scenario) return res.status(404).json({ error: "Scenario not found" });
+  const simulatedAt = req.query.simulatedAt === undefined
+    ? Number(scenario.simulated_start_at)
+    : Number(req.query.simulatedAt);
+  if (!Number.isSafeInteger(simulatedAt) ||
+      simulatedAt < Number(scenario.simulated_start_at) ||
+      simulatedAt > Number(scenario.simulated_start_at) + scenario.duration_s) {
+    return res.status(400).json({ error: "Invalid simulation timestamp" });
+  }
+  assertModelConfig(scenario.model_config);
+  res.json({
+    contractVersion: CONTRACT_VERSION,
+    scenarioId: scenario.id,
+    simulatedAt,
+    modelVersionId: scenario.model_version_id,
+    provenance: syntheticProvenance(undefined, scenario.model_version_id),
+    quality: "GOOD",
+    snapshot: replaySnapshot(simulatedAt, scenario.model_config),
+  });
+});
+
+app.get("/api/facilities/:facilityId/forecasts", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const result = await pool.query(
+    `SELECT id, scenario_id, simulated_at, horizon_s, baseline_peak_c, advisory_peak_c,
+            baseline_constraint_minutes, advisory_constraint_minutes, risk, model_version_id,
+            provenance, synthetic_status, quality, generated_at
+     FROM forecasts WHERE facility_id = $1 ORDER BY simulated_at`,
+    [facilityId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
+});
+
+app.get("/api/facilities/:facilityId/recommendations", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const model = await publishedModel(facilityId);
+  if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
+  const result = await pool.query(
+    `SELECT r.id, r.scenario_id, r.incident_id, r.kind, r.status, r.title, r.rationale, r.command,
+            simulated_at, r.model_version_id, r.provenance, r.synthetic_status, r.quality,
+            r.created_at, mv.config AS model_config
+     FROM recommendations r JOIN model_versions mv ON mv.id = r.model_version_id
+     WHERE r.facility_id = $1 ORDER BY r.created_at DESC`,
+    [facilityId],
+  );
+  res.json({
+    contractVersion: CONTRACT_VERSION,
+    items: result.rows.map((row) => ({
+      ...canonical(row, facilityId),
+      snapshot: replaySnapshot(row.simulated_at, row.model_config),
+    })),
+  });
+});
+
+app.get("/api/facilities/:facilityId/decisions", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const result = await pool.query(
+    `SELECT id, scenario_id, recommendation_id, safety_evaluation_id, user_id, decision,
+            outcome, simulated_at, model_version_id, payload, provenance, synthetic_status,
+            quality, created_at
+     FROM operator_decisions WHERE facility_id = $1 ORDER BY created_at DESC`,
+    [facilityId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
+});
+
+app.get("/api/facilities/:facilityId/replay/checkpoints", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await facilityPermission(req.userId!, facilityId)) return res.status(403).json({ error: "Facility permission required" });
+  const result = await pool.query(
+    `SELECT id, scenario_id, simulated_at, elapsed_s, state, model_version_id,
+            provenance, synthetic_status, quality, created_at
+     FROM replay_checkpoints WHERE facility_id = $1 ORDER BY simulated_at`,
+    [facilityId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
+});
+
+app.get("/api/me/saved-views", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const result = await pool.query(
+    `SELECT id, facility_id, name, view_type, state, created_at, updated_at
+     FROM saved_views WHERE user_id = $1 ORDER BY updated_at DESC`,
+    [req.userId],
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows });
+});
+
+app.get("/api/tutorials", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const result = await pool.query(
+    `SELECT id, role, version, steps, provenance, created_at FROM tutorials ORDER BY role, version DESC`,
+  );
+  res.json({ contractVersion: CONTRACT_VERSION, items: result.rows });
+});
+
 app.get("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const result = await pool.query(
@@ -194,7 +539,23 @@ app.get("/api/facilities/:facilityId/topology", requireAuth, async (req: AuthedR
     [req.userId, req.params.facilityId],
   );
   if (!permission.rows[0]?.can_view) return res.status(403).json({ error: "Facility permission required" });
-  res.json(thermalGraph(replaySnapshot(SCENARIO_START_S)));
+  const [model, persisted] = await Promise.all([
+    publishedModel(String(req.params.facilityId)),
+    pool.query(
+      `SELECT id, from_asset_id, to_asset_id, relation, model_version_id,
+              provenance, synthetic_status, quality, metadata, created_at
+       FROM topology_edges WHERE facility_id = $1 ORDER BY id`,
+      [req.params.facilityId],
+    ),
+  ]);
+  if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
+  res.json({
+    contractVersion: CONTRACT_VERSION,
+    modelVersionId: model.model_version,
+    provenance: syntheticProvenance(undefined, model.model_version),
+    ...thermalGraph(replaySnapshot(SCENARIO_START_S, model.config)),
+    persistedEdges: persisted.rows.map((row) => canonical(row, String(req.params.facilityId))),
+  });
 });
 
 app.patch("/api/me/tutorial", requireAuth, async (req: AuthedRequest, res) => {
@@ -368,8 +729,10 @@ app.post("/api/facilities/:facilityId/recommendations/rec-17/evaluate", requireA
   const id = randomUUID();
   await pool.query(
     `INSERT INTO safety_evaluations
-      (id, user_id, facility_id, recommendation_id, simulated_at, outcome, checks, model_version, model_config, expires_at)
-     VALUES ($1, $2, $3, 'rec-17', $4, $5, $6::jsonb, $7, $8::jsonb, now() + interval '10 minutes')`,
+      (id, user_id, facility_id, recommendation_id, simulated_at, outcome, checks,
+       model_version, model_version_id, model_config, provenance, synthetic_status, expires_at)
+     VALUES ($1, $2, $3, 'rec-17', $4, $5, $6::jsonb, $7, $7, $8::jsonb,
+             'SIMULATED', 'SYNTHETIC', now() + interval '10 minutes')`,
     [id, req.userId, req.params.facilityId, simulatedAt, outcome, JSON.stringify(checks), model.model_version, JSON.stringify(model.config)],
   );
   res.status(201).json({ id, outcome, checks, simulatedAt });
@@ -378,7 +741,9 @@ app.post("/api/facilities/:facilityId/recommendations/rec-17/evaluate", requireA
 app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const permission = await pool.query(
-    "SELECT can_operate FROM facility_permissions WHERE user_id = $1 AND facility_id = $2",
+    `SELECT p.can_operate, f.organization_id
+     FROM facility_permissions p JOIN facilities f ON f.id = p.facility_id
+     WHERE p.user_id = $1 AND p.facility_id = $2`,
     [req.userId, req.params.facilityId],
   );
   if (!permission.rows[0]?.can_operate) return res.status(403).json({ error: "Facility operation permission required" });
@@ -398,7 +763,7 @@ app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedReq
   try {
     await client.query("BEGIN");
     const evaluation = await client.query(
-      `SELECT id, model_version, model_config FROM safety_evaluations
+      `SELECT id, model_version, model_version_id, model_config FROM safety_evaluations
        WHERE id = $1 AND user_id = $2 AND facility_id = $3
          AND recommendation_id = 'rec-17' AND simulated_at = $4
          AND outcome = 'PASS' AND used_at IS NULL AND expires_at > now()
@@ -420,13 +785,34 @@ app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedReq
     }
     const evaluatedConfig = evaluation.rows[0].model_config as FacilityModelConfig;
     const snapshot = replaySnapshot(simulatedAt, evaluatedConfig);
+    const decisionId = randomUUID();
+    await client.query(
+      `INSERT INTO operator_decisions
+        (id, facility_id, scenario_id, recommendation_id, safety_evaluation_id, user_id,
+         decision, outcome, simulated_at, model_version_id, payload, provenance,
+         synthetic_status, quality)
+       VALUES ($1, $2, 'gpu-training-ramp-v1', 'rec-17', $3, $4, 'APPROVE',
+               'ALLOWED_AS_ADVISORY', $5, $6, $7::jsonb, 'SIMULATED', 'SYNTHETIC', 'GOOD')`,
+      [
+        decisionId,
+        req.params.facilityId,
+        safetyEvaluationId,
+        req.userId,
+        simulatedAt,
+        facilityModel.model_version,
+        JSON.stringify(payload),
+      ],
+    );
     const result = await client.query(
       `INSERT INTO audit_records
-        (organization_id, facility_id, user_id, action, scenario_id, simulated_at, model_version, payload)
-       VALUES ('wattr-demo', $1, $2, $3, 'gpu-training-ramp-v1', $4, $5, $6::jsonb)
+        (organization_id, facility_id, user_id, action, scenario_id, simulated_at,
+         model_version, model_version_id, payload, provenance, synthetic_status)
+       VALUES ($1, $2, $3, $4, 'gpu-training-ramp-v1', $5, $6, $6, $7::jsonb,
+               'SIMULATED', 'SYNTHETIC')
        RETURNING id, action, created_at`,
-      [req.params.facilityId, req.userId, action, simulatedAt, facilityModel.model_version, JSON.stringify({
+      [permission.rows[0].organization_id, req.params.facilityId, req.userId, action, simulatedAt, facilityModel.model_version, JSON.stringify({
         ...payload,
+        operatorDecisionId: decisionId,
         safetyEvaluationId,
         modelConfig: evaluatedConfig,
         snapshot: snapshotForAudit(snapshot),
