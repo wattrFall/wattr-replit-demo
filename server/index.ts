@@ -1043,6 +1043,22 @@ app.patch("/api/me/tutorial", requireAuth, async (req: AuthedRequest, res) => {
   res.json(result.rows[0]);
 });
 
+app.patch("/api/me/preferences", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const theme = req.body?.theme;
+  if (theme !== "light" && theme !== "dark" && theme !== "system") {
+    return res.status(400).json({ error: "Theme must be light, dark, or system" });
+  }
+  const result = await pool.query(
+    `UPDATE user_preferences
+     SET theme = $2, updated_at = now()
+     WHERE user_id = $1
+     RETURNING theme, updated_at`,
+    [req.userId, theme],
+  );
+  res.json(result.rows[0]);
+});
+
 app.get("/api/facilities/:facilityId/model/versions", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   if (!await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "model")) return;

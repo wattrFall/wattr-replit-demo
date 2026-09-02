@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Show, SignIn, SignUp, useUser } from "@clerk/react";
 import {
   Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ArrowDownUp, BookOpen, BrainCircuit, Check,
   CircleHelp, Clock3, Cpu, Gauge, GitBranch, History, LayoutDashboard, Layers3, Menu, MousePointer2,
-  Pause, Play, RotateCcw, Search, Save, ShieldCheck, SkipForward, SlidersHorizontal, Thermometer, Trash2, UserCog, X,
+  Pause, Play, RotateCcw, Search, Save, ShieldCheck, SkipForward, SlidersHorizontal, Sun, Moon, Monitor, Thermometer, Trash2, UserCog, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { SandboxShell } from "@/components/sandbox/SandboxShell";
@@ -44,6 +44,7 @@ type ModelVersion = { id: string; facility_id: string; status: "DRAFT" | "VALIDA
 type MemberFacility = { facility_id: string; facility_name: string; can_view: boolean; can_operate: boolean; can_edit_model: boolean };
 type Member = { id: string; email: string | null; display_name: string | null; role: Role; is_admin: boolean; is_owner: boolean; facilities: MemberFacility[] };
 type SessionData = { me: Me; facilities: Facility[] };
+type ThemePreference = "light" | "dark" | "system";
 
 const mono = "font-[family-name:var(--font-mono)]";
 const navigate = (path: string) => {
@@ -61,18 +62,84 @@ const post = <T,>(path: string, body: unknown) => api<T>(path, { method: "POST",
 const patch = <T,>(path: string, body: unknown) => api<T>(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const remove = (path: string) => api<void>(path, { method: "DELETE" });
 
+const ThemeContext = createContext<{
+  theme: ThemePreference;
+  setTheme: (theme: ThemePreference) => void;
+}>({ theme: "system", setTheme: () => {} });
+
+function useTheme() {
+  return useContext(ThemeContext);
+}
+
+function ThemeProvider({ initialTheme, children }: { initialTheme: string; children: ReactNode }) {
+  const [theme, setThemeState] = useState<ThemePreference>(
+    initialTheme === "light" || initialTheme === "dark" ? initialTheme : "system",
+  );
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+  }, [theme]);
+  const setTheme = (next: ThemePreference) => {
+    setThemeState(next);
+    setNotice(`Appearance set to ${next}.`);
+    patch("/api/me/preferences", { theme: next }).catch(() => {
+      setNotice("Appearance changed locally; it could not be saved.");
+    });
+  };
+  return <ThemeContext.Provider value={{ theme, setTheme }}>
+    {children}
+    <span className="sr-only" role="status" aria-live="polite">{notice}</span>
+  </ThemeContext.Provider>;
+}
+
+function ContextualHelp({ title, children }: { title: string; children: ReactNode }) {
+  return <details className="context-help">
+    <summary><CircleHelp size={14} aria-hidden="true"/><span>{title}</span></summary>
+    <div className="context-help-content">{children}</div>
+  </details>;
+}
+
+function DisclosureSection({ label, children, engineering = false }: { label: string; children: ReactNode; engineering?: boolean }) {
+  return <details className={`disclosure ${engineering ? "engineering" : ""}`}>
+    <summary>{label}<ArrowRight size={13} aria-hidden="true"/></summary>
+    <div className="disclosure-content">{children}</div>
+  </details>;
+}
+
+function ThemeControl() {
+  const { theme, setTheme } = useTheme();
+  return <fieldset className="theme-control">
+    <legend>Appearance</legend>
+    {([
+      ["system", "System", Monitor],
+      ["light", "Light", Sun],
+      ["dark", "Dark", Moon],
+    ] as const).map(([value, label, Icon]) => <button
+      key={value}
+      type="button"
+      className={theme === value ? "selected" : ""}
+      aria-pressed={theme === value}
+      aria-label={`${label} appearance`}
+      onClick={() => setTheme(value)}
+    ><Icon size={13} aria-hidden="true"/><span>{label}</span></button>)}
+  </fieldset>;
+}
+
 function Brand() {
   return <button onClick={() => navigate("/")} className="flex items-center gap-2.5 text-left"><span className="grid h-8 w-8 place-items-center rounded-md bg-cyan-400 text-slate-950"><Activity size={18}/></span><span><b className="block text-sm tracking-[.18em]">WATTR</b><small className="block text-[9px] tracking-[.2em] text-slate-500">OPERATOR COCKPIT</small></span></button>;
 }
 function Status({ children, tone = "good" }: { children: ReactNode; tone?: "good" | "warn" | "bad" }) { return <span className={`status ${tone}`}>{children}</span>; }
-function Metric({ label, value, unit, sub, warn }: { label: string; value: string; unit?: string; sub: string; warn?: boolean }) {
-  return <div className="panel metric"><div className="text-[10px] uppercase tracking-[.16em] text-slate-500">{label}</div><div className={`mt-3 text-2xl font-semibold ${warn ? "text-amber-300" : "text-slate-100"}`}>{value}<small className="ml-1 text-xs font-normal text-slate-500">{unit}</small></div><div className="mt-2 text-[11px] text-slate-500">{sub}</div></div>;
+function Metric({ label, value, unit, sub, warn, help }: { label: string; value: string; unit?: string; sub: string; warn?: boolean; help?: string }) {
+  return <article className="panel metric" aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. ${sub}`}><div className="text-[10px] uppercase tracking-[.16em] text-slate-500">{label}</div><div className={`mt-3 text-2xl font-semibold ${warn ? "text-amber-300" : "text-slate-100"}`}>{value}<small className="ml-1 text-xs font-normal text-slate-500">{unit}</small></div><div className="mt-2 text-[11px] text-slate-500">{sub}</div>{help && <ContextualHelp title={`About ${label}`}><p>{help}</p></ContextualHelp>}</article>;
 }
 function PageHead({ eyebrow, title, detail, action }: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
   return <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><div className={`${mono} mb-2 text-[10px] tracking-[.2em] text-cyan-400`}>{eyebrow}</div><h1 className="text-2xl font-semibold tracking-tight text-slate-100 md:text-3xl">{title}</h1><p className="mt-1 text-sm text-slate-500">{detail}</p></div>{action}</div>;
 }
 function Shell({ data, facility, children }: { data: SessionData; facility?: Facility; children: ReactNode }) {
   const [mobile, setMobile] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const active = facility ?? data.facilities[0];
   const nav: Array<[LucideIcon, string, string]> = [
     ...(data.me.role === "PORTFOLIO_MANAGER" ? [[LayoutDashboard, "Portfolio", "/portfolio"] as [LucideIcon, string, string]] : []),
@@ -87,10 +154,17 @@ function Shell({ data, facility, children }: { data: SessionData; facility?: Fac
     ] : []),
     ...(data.me.is_admin ? [[UserCog, "Access administration", "/admin"] as [LucideIcon, string, string]] : []),
   ];
-  return <div className="min-h-[100dvh] bg-[#0a1018] text-slate-200">
-    <header className="fixed inset-x-0 top-0 z-30 flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4"><div className="flex items-center gap-4"><button className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"}><Menu size={20}/></button><Brand/></div><div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><Status>{data.me.role.replace(/_/g, " ")}</Status></div></header>
-    <aside className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><div className="space-y-1">{nav.map(([Icon, label, path]) => <button key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`}><Icon size={16}/>{label}</button>)}</div><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button onClick={() => navigate("/help")} className="cockpit-nav"><CircleHelp size={16}/>Help & tutorials</button></div></aside>
-    <main className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}</div></main>
+  return <div className="cockpit min-h-[100dvh] bg-[#0a1018] text-slate-200">
+    <a className="skip-link" href="#main-content">Skip to main content</a>
+    <header className="fixed inset-x-0 top-0 z-30 flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4">
+      <div className="flex items-center gap-4">
+        <button ref={menuButtonRef} type="button" className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"} aria-expanded={mobile} aria-controls="cockpit-navigation"><Menu size={20} aria-hidden="true"/></button><Brand/>
+      </div>
+      <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><Status>{data.me.role.replace(/_/g, " ")}</Status><ThemeControl/></div>
+    </header>
+    {mobile && <button type="button" className="mobile-scrim md:hidden" aria-label="Close navigation" onClick={() => { setMobile(false); menuButtonRef.current?.focus(); }}/>}
+    <aside id="cockpit-navigation" aria-label="Primary navigation" className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><nav className="space-y-1">{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/>{label}</button>)}</nav><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className="cockpit-nav"><CircleHelp size={16} aria-hidden="true"/>Help & tutorials</button></div></aside>
+    <main id="main-content" tabIndex={-1} className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}</div></main>
   </div>;
 }
 
@@ -162,8 +236,9 @@ function ReplayBar({ onReset = () => {} }: { onReset?: () => void }) {
   const s = useScenarioSession();
   const elapsed = s.simulation.snapshot.elapsedS;
   return <section className="replay-bar mb-4" aria-label="Canonical replay controls">
-    <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><div className="ml-auto flex items-center gap-1"><span className="mr-1 text-[10px] uppercase tracking-[.12em] text-slate-500">Speed</span>{([1,5,10,30,60] as const).map(v => <button aria-label={`Replay speed ${v} times`} key={v} onClick={() => s.setSpeed(v)} className={`speed ${s.speed === v ? "selected" : ""}`}>{v}×</button>)}</div><button className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15}/> : <Play size={15}/>} {s.playing ? "Pause" : "Play"}</button></div>
-    <div className="mt-3 flex flex-wrap items-center gap-2"><button className="button secondary" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={14}/>Step 30s</button><button className="button secondary" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}>−5m</button><button className="button secondary" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}>+5m</button><button className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button><input aria-label="Replay position" className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/><span className={`${mono} text-[10px] text-slate-500`}>{Math.round(elapsed / 60)}m</span><button className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15}/>Reset</button><Status tone={s.mode === "Advisory" ? "warn" : "good"}>{s.mode} · human-in-loop</Status></div>
+    <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300" aria-hidden="true"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><div className="ml-auto flex items-center gap-1" role="group" aria-label="Replay speed"><span className="mr-1 text-[10px] uppercase tracking-[.12em] text-slate-500">Speed</span>{([1,5,10,30,60] as const).map(v => <button type="button" aria-label={`Replay speed ${v} times`} aria-pressed={s.speed === v} key={v} onClick={() => s.setSpeed(v)} className={`speed ${s.speed === v ? "selected" : ""}`}>{v}×</button>)}</div><button type="button" className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15} aria-hidden="true"/> : <Play size={15} aria-hidden="true"/>} {s.playing ? "Pause" : "Play"}</button></div>
+    <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" className="button secondary" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={14} aria-hidden="true"/>Step 30s</button><button type="button" className="button secondary" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}>−5m</button><button type="button" className="button secondary" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}>+5m</button><button type="button" className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button><input aria-label="Replay position" aria-valuetext={`${Math.round(elapsed / 60)} minutes into the 30 minute scenario`} className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/><span className={`${mono} text-[10px] text-slate-500`}>{Math.round(elapsed / 60)}m</span><button type="button" className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15} aria-hidden="true"/>Reset</button><Status tone={s.mode === "Advisory" ? "warn" : "good"}>{s.mode} · human-in-loop</Status></div>
+    <p className="sr-only" role="status" aria-live="polite">Replay at {Math.round(elapsed / 60)} minutes. {s.playing ? `Playing at ${s.speed} times speed.` : "Paused."}</p>
   </section>;
 }
 function LegacyOperations({ data, facility }: { data: SessionData; facility: Facility }) {
@@ -180,7 +255,11 @@ function Transparency({ facility, snapshot }: { facility: Facility; snapshot: Co
       <div><span className="text-slate-500">Freshness</span><b className="mt-1 block">{formatSimulatedAt(snapshot.simulatedAt)}</b></div>
       <div><span className="text-slate-500">Confidence domain</span><b className="mt-1 block">≤ {snapshot.plant.modelDomainMaxC.toFixed(0)}°C</b></div>
     </div>
-    <p className="mt-3 border-t border-slate-800 pt-3 text-[11px] leading-5 text-slate-500">Values are not measured telemetry. Quality is GOOD within the disclosed model domain; no control command is sent to facility equipment.</p>
+    <ContextualHelp title="Provenance, confidence, and limitations">
+      <p><b>Provenance</b> tells you where a value came from. Here every value is generated by a deterministic simulation, not a live sensor.</p>
+      <p className="mt-2"><b>Confidence domain</b> is the temperature range the model is intended to represent. Outside it, treat forecasts as unsupported rather than merely less precise.</p>
+      <p className="mt-2"><b>Decision authority</b> remains with the operator. Wattr records advisory decisions but sends no equipment command.</p>
+    </ContextualHelp>
   </section>;
 }
 
@@ -201,12 +280,13 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
     <PageHead eyebrow={`FACILITY / ${facility.id.toUpperCase()} / OPERATIONS`} title={facility.name} detail={`${facility.location} · deterministic GPU Training Ramp · ${facility.provenance}`} action={<Status tone="warn">REPLAY-CONTROLLED</Status>}/>
     <ReplayBar/>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-      <Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}%`}/>
-      <Metric label="Total facility" value={snapshot.totalPowerKw.toLocaleString()} unit="kW" sub="physical power balance"/>
-      <Metric label="Peak inlet" value={snapshot.peakInletC.toFixed(1)} unit="°C" sub={`limit ${snapshot.incident.limitC.toFixed(1)}°C`} warn={snapshot.peakInletC >= snapshot.incident.limitC}/>
-      <Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="total ÷ IT power"/>
-      <Metric label="Headroom" value={snapshot.headroomKw.toLocaleString()} unit="kW" sub={`of ${snapshot.plant.ratedCapacityKw.toLocaleString()} kW rated`}/>
+      <Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}%`} help="The modeled electrical load used by computing equipment. It is the main heat input to this scenario."/>
+      <Metric label="Total facility" value={snapshot.totalPowerKw.toLocaleString()} unit="kW" sub="physical power balance" help="IT power plus modeled cooling and facility overhead at this replay instant."/>
+      <Metric label="Peak inlet" value={snapshot.peakInletC.toFixed(1)} unit="°C" sub={`limit ${snapshot.incident.limitC.toFixed(1)}°C`} warn={snapshot.peakInletC >= snapshot.incident.limitC} help="The warmest modeled rack inlet. A forecast may raise attention before this current value reaches its limit."/>
+      <Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="total ÷ IT power" help="Power usage effectiveness: total facility power divided by IT power. Lower is more efficient, but this synthetic value is not a measured savings claim."/>
+      <Metric label="Headroom" value={snapshot.headroomKw.toLocaleString()} unit="kW" sub={`of ${snapshot.plant.ratedCapacityKw.toLocaleString()} kW rated`} help="Remaining modeled electrical capacity before the facility rating is reached."/>
     </div>
+    <div className="mt-3"><DisclosureSection label="Advanced operating context"><p>All KPI cards, the facility twin, incident forecast, and recommendation read from the same deterministic replay instant. Move the canonical clock once to compare like with like across the workflow.</p></DisclosureSection></div>
     <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,.8fr)]">
       <section className="panel min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-5"><div><h2 className="font-semibold">Synchronized facility twin</h2><p className="mt-1 text-xs text-slate-500">Select an asset to inspect its replay state and dependencies.</p></div><div className="flex gap-1" role="group" aria-label="Twin view">{(["physical", "thermal"] as TwinView[]).map((item) => <button key={item} className={`speed ${view === item ? "selected" : ""}`} onClick={() => setView(item)}>{item === "physical" ? "Physical" : "Thermal overlay"}</button>)}</div></div>
@@ -222,9 +302,9 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
         <div className="border-t border-slate-800 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="eyebrow">REPLAY TIMELINE</div><p className="mt-1 text-xs text-slate-500">Every panel reads the same canonical clock.</p></div><span className={`${mono} text-xs text-cyan-300`}>{Math.round(snapshot.elapsedS / 60)}m / 30m</span></div><div className="timeline mt-4"><div className="timeline-axis"/>{[0, 300, 900, 1800].map((at) => <button key={at} className={`timeline-event ${Math.abs(snapshot.elapsedS - at) < 30 ? "current" : ""}`} onClick={() => s.jump(at)}><span className={`dot ${at >= 900 ? "amber" : ""}`}/><small>{at / 60}m</small><b>{at === 0 ? "Baseline" : at === 900 ? "Forecast" : at === 1800 ? "Ramp end" : "Power rise"}</b></button>)}</div></div>
       </section>
       <aside className="min-w-0 space-y-4">
-        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAsset === "cdu-03" ? `Cooling distribution is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit online.` : selectedAsset === "chiller-01" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}</section>
-        <section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><div className="mt-2 flex items-center justify-between gap-3"><h2 className={`text-xl font-semibold ${riskTone === "good" ? "text-teal-300" : riskTone === "bad" ? "text-red-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : `${snapshot.incident.severity} condition`}</h2><Status tone={riskTone}>{snapshot.forecast.risk}</Status></div><p className="mt-3 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section>
-        <section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={(event) => s.setMode(event.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">{s.mode === "Observe" ? "Read-only view. No advisory is proposed." : s.mode === "Shadow" ? "Recommendations are simulated for comparison; no action is sent." : "Advisories may be reviewed, but human approval is required. No OT commands are issued."}</p></section>
+        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAsset === "cdu-03" ? `Cooling distribution is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit online.` : selectedAsset === "chiller-01" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}<ContextualHelp title="Why select an asset?"><p>Selection adds local state and dependencies without replacing the facility-wide summary. Use it when a site-level signal needs asset context.</p></ContextualHelp></section>
+        <section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><div className="mt-2 flex items-center justify-between gap-3"><h2 className={`text-xl font-semibold ${riskTone === "good" ? "text-teal-300" : riskTone === "bad" ? "text-red-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : `${snapshot.incident.severity} condition`}</h2><Status tone={riskTone}>{snapshot.forecast.risk}</Status></div><p className="mt-3 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><ContextualHelp title="How to read this forecast"><p>The forecast extends the current replay state through the disclosed horizon. Risk describes whether modeled temperature approaches or crosses the limit; it is not a live alarm or certainty statement.</p></ContextualHelp><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section>
+        <section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={(event) => s.setMode(event.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">{s.mode === "Observe" ? "Read-only view. No advisory is proposed." : s.mode === "Shadow" ? "Recommendations are simulated for comparison; no action is sent." : "Advisories may be reviewed, but human approval is required. No OT commands are issued."}</p><ContextualHelp title="What changes by mode?"><p><b>Observe</b> shows state only. <b>Shadow</b> computes recommendations for comparison. <b>Advisory</b> lets authorized operators review and record a disposition. None of these modes sends an OT command.</p></ContextualHelp></section>
         <Transparency facility={facility} snapshot={snapshot}/>
       </aside>
     </div>
@@ -305,10 +385,14 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
             <Metric label="Recommended peak" value={snapshot.recommendation.advisoryPeakC.toFixed(1)} unit="°C" sub={`${snapshot.recommendation.reductionC.toFixed(1)}°C modeled reduction`}/>
             <Metric label="Constraint avoided" value={String(snapshot.recommendation.constraintMinutesAvoided)} unit="min" sub="same events and model"/>
           </div>
-          <div className="mt-5 border-t border-slate-800 pt-4"><div className="eyebrow">PROVENANCE & LIMITATIONS</div><p className="mt-2 text-xs text-slate-400">{snapshot.recommendation.provenance} · deterministic reduced-order model · {facility.model_version}</p><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-500">{snapshot.recommendation.limitations.map((item) => <li key={item}>{item}</li>)}</ul></div>
+          <div className="mt-5 grid gap-2">
+            <DisclosureSection label="Advanced: confidence and limitations"><p>Confidence is scoped to this replay state, horizon, and model domain; it is not a probability that an operator decision is correct.</p><ul className="mt-2 list-disc space-y-1 pl-5">{snapshot.recommendation.limitations.map((item) => <li key={item}>{item}</li>)}</ul></DisclosureSection>
+            <DisclosureSection label="Engineering: provenance and model binding" engineering><p>{snapshot.recommendation.provenance} · deterministic reduced-order model · {facility.model_version}. The recommendation, Safety Shield result, and recorded decision remain bound to this exact model version and replay instant.</p></DisclosureSection>
+          </div>
         </section>
 
-        <section className="panel p-6">
+        <DisclosureSection label="Advanced: compare a permitted alternative">
+        <section className="p-5">
           <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">WHAT-IF COMPARISON</div><h2 className="mt-2 text-lg font-semibold">Adjust a permitted advisory</h2><p className="copy">Only the advisory parameters change. Initial state, event stream, replay instant, and model version stay fixed.</p></div><SlidersHorizontal className="text-cyan-300"/></div>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <label className="field">CDU-03 flow: <b>{flowPercent}%</b><input aria-label="Alternative CDU flow percent" type="range" min="60" max="85" step="1" value={flowPercent} onChange={(event) => setFlowPercent(Number(event.target.value))}/></label>
@@ -317,6 +401,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
           <button className="button secondary mt-5" onClick={compare}><Layers3 size={15}/>Compare identical-input outcomes</button>
           {comparison && <div className="mt-5 grid gap-3 md:grid-cols-3">{comparison.options.map((option) => <article key={option.id} className={`subpanel ${option.id === "alternative" ? "border-cyan-500/60" : ""}`}><div className="flex items-center justify-between gap-2"><b>{option.label}</b>{option.id === "alternative" && <Status>EDITED</Status>}</div><span className="text-2xl font-semibold">{option.peakC.toFixed(1)}<small className="ml-1 text-xs text-slate-500">°C peak</small></span><small>{option.constraintMinutes.toFixed(1)} modeled constraint minutes</small><small>{option.command ? `${option.command.flowPercent}% · ${option.command.durationMinutes} min` : "No advisory action"}</small></article>)}</div>}
         </section>
+        </DisclosureSection>
       </div>
 
       <aside className="space-y-4">
@@ -327,6 +412,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
             <p className="mt-2 text-xs text-slate-500">Bound to recommendation v{evaluation.recommendationVersion}, this command, user, model, and replay instant.</p>
             <ul className="mt-5 space-y-3">{evaluation.checks.map((check) => <li key={check.id} className="flex gap-3 text-sm"><span className={check.status === "PASS" ? "text-teal-300" : check.status === "WARNING" ? "text-amber-300" : "text-red-300"}>{check.status === "PASS" ? <Check size={16}/> : <X size={16}/>}</span><span><span className="flex items-center gap-2"><b>{check.id.replace(/_/g, " ")}</b><Status tone={check.status === "PASS" ? "good" : check.status === "WARNING" ? "warn" : "bad"}>{check.status}</Status></span><small className="mt-1 block leading-5 text-slate-500">{check.detail}</small></span></li>)}</ul>
           </> : <p className="copy">Run the server-side evaluation after choosing the command. A changed parameter, replay instant, model, or reused result invalidates approval.</p>}
+          <ContextualHelp title="Who has decision authority?"><p>The Safety Shield verifies constraints but does not approve the advisory. Only an authorized operator can record a disposition, and approval never sends an equipment command.</p></ContextualHelp>
           {facility.can_assistant && <button className="button primary mt-5 w-full justify-center" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button>}
         </section>
         {facility.can_operate ? <section className="panel p-6">
@@ -514,19 +600,90 @@ function Help({ data }: { data: SessionData }) {
     if (current.route === "/portfolio") navigate("/portfolio");
     else if (facility) navigate(`/facilities/${facility.id}${current.route}`);
   };
-  return <Shell data={data}><PageHead eyebrow={`HELP / ${data.me.role.replace(/_/g, " ")}`} title="Operator guide" detail="A role-specific, restartable tutorial for the Wattr operating thread."/><div className="grid gap-4 lg:grid-cols-[1fr_.8fr]"><section className="panel p-6"><div className="flex items-center gap-3"><BookOpen className="text-cyan-300"/><div><h2 className="font-semibold">{done ? "Tutorial complete" : "Welcome to Wattr"}</h2><p className="text-xs text-slate-500">Step {done ? steps.length : step + 1} of {steps.length}</p></div></div>{done ? <p className="copy">You can restart this guide any time. The cockpit always keeps human authority and synthetic provenance visible.</p> : <><div className="mt-8 rounded-md border border-cyan-400/30 bg-cyan-400/5 p-5"><div className="eyebrow">STEP {step + 1}</div><h3 className="mt-2 text-xl font-semibold">{current.title}</h3><p className="mt-3 text-sm leading-6 text-slate-400">{current.body}</p></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" disabled={step===0} onClick={() => update(Math.max(0, step - 1))}>Back</button><button className="button primary" onClick={() => update(step + 1 >= steps.length ? step : step + 1, step + 1 >= steps.length)}>Next <ArrowRight size={15}/></button><button className="button secondary" onClick={() => update(step, true)}>Skip tutorial</button><button className="button secondary" onClick={openTutorialRoute}>Open this workspace</button></div></>}{error&&<p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}</section><section className="panel p-6"><div className="eyebrow">ROLE LENS</div><h2 className="mt-2 text-xl font-semibold">{data.me.role.replace(/_/g, " ")}</h2><p className="copy">The same deterministic scenario is disclosed progressively: portfolio outcomes first, asset relationships next, and model-level details only when your role needs them.</p><button className="button secondary" onClick={() => update(0, false)}><RotateCcw size={15}/>Restart tutorial</button></section></div></Shell>;
+  return <Shell data={data}><PageHead eyebrow={`HELP / ${data.me.role.replace(/_/g, " ")}`} title="Operator guide" detail="A role-specific, restartable tutorial for the Wattr operating thread."/><div className="grid gap-4 lg:grid-cols-[1fr_.8fr]"><section className="panel p-6"><div className="flex items-center gap-3"><BookOpen className="text-cyan-300" aria-hidden="true"/><div><h2 className="font-semibold">{done ? "Tutorial complete" : "Welcome to Wattr"}</h2><p className="text-xs text-slate-500">Step {done ? steps.length : step + 1} of {steps.length}</p></div></div>{done ? <p className="copy">You can restart this guide any time. The cockpit always keeps human authority and synthetic provenance visible.</p> : <><div className="mt-8 rounded-md border border-cyan-400/30 bg-cyan-400/5 p-5"><div className="eyebrow">STEP {step + 1}</div><h3 className="mt-2 text-xl font-semibold">{current.title}</h3><p className="mt-3 text-sm leading-6 text-slate-400">{current.body}</p></div><div className="mt-5 flex flex-wrap gap-2"><button type="button" className="button secondary" disabled={step===0} onClick={() => update(Math.max(0, step - 1))}>Back</button><button type="button" className="button primary" onClick={() => update(step + 1 >= steps.length ? step : step + 1, step + 1 >= steps.length)}>Next <ArrowRight size={15}/></button><button type="button" className="button secondary" onClick={() => update(step, true)}>Skip tutorial</button><button type="button" className="button secondary" onClick={openTutorialRoute}>Open this workspace</button></div></>}{error&&<p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}</section><section className="panel p-6"><div className="eyebrow">ROLE LENS</div><h2 className="mt-2 text-xl font-semibold">{data.me.role.replace(/_/g, " ")}</h2><p className="copy">The same deterministic scenario is disclosed progressively: portfolio outcomes first, asset relationships next, and model-level details only when your role needs them.</p><button type="button" className="button secondary" onClick={() => update(0, false)}><RotateCcw size={15}/>Restart tutorial</button><div className="mt-6 border-t border-slate-800 pt-5"><ThemeControl/></div></section></div></Shell>;
+}
+
+function TutorialOverlay({ data, onProgress }: { data: SessionData; onProgress: (step: number, complete: boolean) => void }) {
+  const steps = tutorialSteps[data.me.role];
+  const [step, setStep] = useState(Math.min(data.me.tutorial_step ?? 0, steps.length - 1));
+  const [open, setOpen] = useState(!data.me.tutorial_complete);
+  const [error, setError] = useState("");
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const current = steps[step];
+
+  useEffect(() => {
+    if (!open) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    closeButtonRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary")];
+      if (!focusable.length) return;
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [open]);
+
+  const update = async (next: number, complete = false) => {
+    setStep(Math.min(next, steps.length - 1));
+    try {
+      await patch("/api/me/tutorial", { step: next, complete });
+      onProgress(next, complete);
+      if (complete) setOpen(false);
+      setError("");
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+  const openWorkspace = () => {
+    setOpen(false);
+    if (current.route === "/portfolio") navigate("/portfolio");
+    else if (data.facilities[0]) navigate(`/facilities/${data.facilities[0].id}${current.route}`);
+  };
+  if (!open) return null;
+  return <div className="cockpit tutorial-backdrop" role="presentation">
+    <section ref={dialogRef} className="tutorial-dialog" role="dialog" aria-modal="true" aria-labelledby="tutorial-title" aria-describedby="tutorial-body">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3"><span className="tutorial-icon"><BookOpen size={18} aria-hidden="true"/></span><div><div className="eyebrow">WELCOME / {data.me.role.replace(/_/g, " ")}</div><h2 id="tutorial-title" className="mt-1 text-xl font-semibold">{current.title}</h2></div></div>
+        <button ref={closeButtonRef} type="button" className="icon-button" aria-label="Continue later" onClick={() => setOpen(false)}><X size={16} aria-hidden="true"/></button>
+      </div>
+      <div className="tutorial-progress" aria-label={`Tutorial step ${step + 1} of ${steps.length}`}>{steps.map((item, index) => <span key={item.title} className={index <= step ? "complete" : ""}/>)}</div>
+      <p id="tutorial-body" className="mt-5 text-sm leading-6 text-slate-300">{current.body}</p>
+      <p className="mt-3 text-xs text-slate-500">Step {step + 1} of {steps.length}. Your progress is saved after each step.</p>
+      {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
+      <div className="mt-6 flex flex-wrap justify-end gap-2">
+        <button type="button" className="button secondary" disabled={step === 0} onClick={() => update(step - 1)}>Back</button>
+        <button type="button" className="button secondary" onClick={openWorkspace}>Open workspace</button>
+        <button type="button" className="button primary" onClick={() => update(step + 1, step + 1 >= steps.length)}>{step + 1 >= steps.length ? "Finish tutorial" : "Next"} <ArrowRight size={15} aria-hidden="true"/></button>
+      </div>
+      <button type="button" className="tutorial-later" onClick={() => setOpen(false)}>Continue later</button>
+    </section>
+  </div>;
 }
 
 function Landing(){return <div className="min-h-screen bg-[#0a1018] text-slate-200"><header className="flex justify-between border-b border-slate-800 p-5"><Brand/><button onClick={()=>navigate("/sign-in")} className="button secondary">Operator sign in</button></header><main className="mx-auto max-w-6xl px-6 py-24"><div className="eyebrow text-cyan-400">THERMAL OPERATIONS / COMMAND ENVIRONMENT</div><h1 className="mt-5 max-w-4xl text-5xl font-semibold tracking-[-.04em] md:text-7xl">Make the cooling decision before the constraint arrives.</h1><p className="mt-7 max-w-2xl text-lg leading-8 text-slate-400">Wattr turns workload intent into power, heat, forecast risk, a safety-checked advisory, and an auditable operator decision.</p><div className="mt-9 flex gap-3"><button onClick={()=>navigate("/sign-in")} className="button primary">Enter cockpit <ArrowRight size={15}/></button><button onClick={()=>navigate("/demo/sandbox")} className="button secondary">Explore sandbox</button></div></main></div>}
 function Auth({up=false}:{up?:boolean}){return <div className="grid min-h-screen place-items-center bg-[#0a1018] p-5"><div className="w-full max-w-[460px]"><Brand/><div className="mt-8">{up?<SignUp routing="path" path="/sign-up" signInUrl="/sign-in" fallbackRedirectUrl="/portfolio"/>:<SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/portfolio"/>}</div></div></div>}
 
-function ProtectedApp({path}:{path:string}){
-  const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState("");
-  useEffect(()=>{Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch(e=>setError(String(e)));},[]);
-  const defaultPath = data ? data.me.default_path.replace("{facilityId}", data.facilities[0]?.id ?? "") : "/portfolio";
-  useEffect(()=>{if(data&&path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])navigate(defaultPath)},[data,path,defaultPath]);
-  if(error)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-red-300">{error}</div>;
-  if(!data)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Loading authorized facility context…</div>;
+function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
+  const defaultPath = data.me.default_path.replace("{facilityId}", data.facilities[0]?.id ?? "");
+  useEffect(()=>{if(path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])navigate(defaultPath)},[data.me.role,data.facilities,path,defaultPath]);
   if(path==="/admin"&&!data.me.is_admin)return <Shell data={data}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This workspace is not present in your authorized navigation."/></Shell>;
   if(path==="/admin")return <AccessAdministration data={data}/>;
   if(path==="/portfolio"&&data.me.role!=="PORTFOLIO_MANAGER"&&data.facilities[0])return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Opening your authorized workspace…</div>;
@@ -546,6 +703,13 @@ function ProtectedApp({path}:{path:string}){
   if(section==="model"&&!facility.can_edit_model)return <Shell data={data} facility={facility}><PageHead eyebrow="FORBIDDEN" title="Model Studio access required" detail="Your role cannot edit or publish facility models."/></Shell>;
   if(section==="model")return <ModelStudio data={data} facility={facility}/>;
   return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Choose an operating workspace from the facility navigation."/></Shell>;
+}
+function ProtectedApp({path}:{path:string}){
+  const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState("");
+  useEffect(()=>{Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch(e=>setError(String(e)));},[]);
+  if(error)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-red-300">{error}</div>;
+  if(!data)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Loading authorized facility context…</div>;
+  return <ThemeProvider initialTheme={data.me.theme}><TutorialOverlay data={data} onProgress={(step, complete) => setData(current => current ? ({ ...current, me: { ...current.me, tutorial_step: step, tutorial_complete: complete } }) : current)}/><ProtectedRoutes path={path} data={data}/></ThemeProvider>;
 }
 export function CockpitApp(){
   const [path,setPath]=useState(location.pathname),{isSignedIn}=useUser();

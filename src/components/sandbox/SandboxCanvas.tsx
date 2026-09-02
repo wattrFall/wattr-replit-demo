@@ -35,7 +35,7 @@ export default function SandboxCanvas({ reducedMotion }: { reducedMotion: boolea
       aria-hidden="true"
       dpr={[1, 1.75]}
       gl={{ antialias: true, powerPreference: "high-performance" }}
-      style={{ background: SBX.surface0 }}
+      style={{ background: "var(--sbx-surface-0)" }}
     >
       {/* Flat, even key light. The look comes from colour and line, not shading. */}
       <ambientLight intensity={1.15} />
