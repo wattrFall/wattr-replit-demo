@@ -10,6 +10,7 @@
     "start": "npm run db:setup && NODE_ENV=production tsx server/index.ts",
     "check": "tsc --noEmit",
     "test:simulation": "tsx scripts/test-cockpit-simulation.ts",
+    "test:workspaces": "tsx scripts/test-operating-workspaces.ts",
     "demo:validate": "tsx scripts/validate-demo-scenario.ts"
   },
   "dependencies": {

@@ -24,6 +24,18 @@ const MODEL_DOMAIN_MAX_C = 35;
 const MAINTENANCE_LOCKOUT = false;
 
 export type SimulationVariant = "baseline" | "advisory";
+export type FacilityModelConfig = {
+  scenario: "gpu-training-ramp-v1";
+  seed: number;
+  thermalMass: number;
+  responseLag: number;
+};
+export const DEFAULT_FACILITY_MODEL: FacilityModelConfig = {
+  scenario: "gpu-training-ramp-v1",
+  seed: 4103,
+  thermalMass: 0.82,
+  responseLag: 12,
+};
 
 export interface CockpitRackSnapshot {
   id: string;
@@ -136,10 +148,11 @@ function rack(id: string, loadMultiplier: number): SandboxItem {
  * The cockpit and the public sandbox use the same physical kernel. This is
  * the fixed, versioned facility topology used by the GPU Training Ramp.
  */
-export function scenarioLayout(simulatedAt: number, startAt: number, variant: SimulationVariant): SandboxLayout {
+export function scenarioLayout(simulatedAt: number, startAt: number, variant: SimulationVariant, config: FacilityModelConfig = DEFAULT_FACILITY_MODEL): SandboxLayout {
   const ramp = rampAt(simulatedAt, startAt);
-  const loadMultiplier = 1 + RAMP_INCREASE * ramp;
-  const cduPumpPercent = variant === "advisory" ? RECOMMENDATION_FLOW_PERCENT : 70;
+  const loadMultiplier = 1 + RAMP_INCREASE * ramp * (DEFAULT_FACILITY_MODEL.thermalMass / config.thermalMass);
+  const lagAdjustment = (DEFAULT_FACILITY_MODEL.responseLag - config.responseLag) / 120;
+  const cduPumpPercent = variant === "advisory" ? RECOMMENDATION_FLOW_PERCENT : 70 + 6 * lagAdjustment * ramp;
 
   const racks = RACK_IDS.map((id) => rack(id, loadMultiplier));
   const cdu: SandboxItem = {
@@ -187,6 +200,7 @@ function constraintMinutes(
   startAt: number,
   fromAt: number,
   variant: SimulationVariant,
+  config: FacilityModelConfig,
 ): { peakC: number; minutes: number } {
   let state = thermal;
   let peakC = -Infinity;
@@ -195,7 +209,7 @@ function constraintMinutes(
 
   for (let i = 0; i < seconds; i += 1) {
     const simulatedAt = fromAt + i + 1;
-    const layout = scenarioLayout(simulatedAt, startAt, variant);
+    const layout = scenarioLayout(simulatedAt, startAt, variant, config);
     state = stepSim(state, layout, "baseline", fixedSliceCount(1));
     const telemetry = readTelemetry(state, layout, "baseline");
     peakC = Math.max(peakC, telemetry.maxInletC ?? RACK_LIMIT_C);
@@ -217,13 +231,14 @@ function deriveSnapshot(
   thermal: SimState,
   simulatedAt: number,
   startAt: number,
+  config: FacilityModelConfig,
 ): CockpitSnapshot {
-  const baselineLayout = scenarioLayout(simulatedAt, startAt, "baseline");
-  const advisoryLayout = scenarioLayout(simulatedAt, startAt, "advisory");
+  const baselineLayout = scenarioLayout(simulatedAt, startAt, "baseline", config);
+  const advisoryLayout = scenarioLayout(simulatedAt, startAt, "advisory", config);
   const baselineTelemetry = readTelemetry(thermal, baselineLayout, "baseline");
   const advisoryTelemetry = readTelemetry(thermal, advisoryLayout, "baseline");
-  const baselineForecast = constraintMinutes(thermal, startAt, simulatedAt, "baseline");
-  const advisoryForecast = constraintMinutes(thermal, startAt, simulatedAt, "advisory");
+  const baselineForecast = constraintMinutes(thermal, startAt, simulatedAt, "baseline", config);
+  const advisoryForecast = constraintMinutes(thermal, startAt, simulatedAt, "advisory", config);
   const currentRacks = baselineLayout.items
     .filter((item) => item.kind === "rack")
     .map((item) => {
@@ -313,14 +328,14 @@ function deriveSnapshot(
   };
 }
 
-export function createCockpitSimulation(startAt: number): CockpitSimulationState {
-  const layout = scenarioLayout(startAt, startAt, "baseline");
+export function createCockpitSimulation(startAt: number, config: FacilityModelConfig = DEFAULT_FACILITY_MODEL): CockpitSimulationState {
+  const layout = scenarioLayout(startAt, startAt, "baseline", config);
   const thermal = createSimState(layout);
   return {
     elapsedSlices: 0,
     simulatedAt: startAt,
     thermal,
-    snapshot: deriveSnapshot(thermal, startAt, startAt),
+    snapshot: deriveSnapshot(thermal, startAt, startAt, config),
   };
 }
 
@@ -333,6 +348,7 @@ export function advanceCockpitSimulation(
   simulation: CockpitSimulationState,
   seconds: number,
   startAt: number,
+  config: FacilityModelConfig = DEFAULT_FACILITY_MODEL,
 ): CockpitSimulationState {
   const maximumSlices = fixedSliceCount(SCENARIO_DURATION_S);
   const slices = Math.min(
@@ -350,7 +366,7 @@ export function advanceCockpitSimulation(
     const sampledAt = startAt + (cursor + batch) * SIM_DT_S;
     thermal = stepSim(
       thermal,
-      scenarioLayout(sampledAt, startAt, "baseline"),
+      scenarioLayout(sampledAt, startAt, "baseline", config),
       "baseline",
       batch,
     );
@@ -366,18 +382,19 @@ export function advanceCockpitSimulation(
     elapsedSlices,
     simulatedAt,
     thermal,
-    snapshot: deriveSnapshot(thermal, simulatedAt, startAt),
+    snapshot: deriveSnapshot(thermal, simulatedAt, startAt, config),
   };
 }
 
-export function replayCockpitSnapshot(simulatedAt: number): CockpitSnapshot {
+export function replayCockpitSnapshot(simulatedAt: number, config: FacilityModelConfig = DEFAULT_FACILITY_MODEL): CockpitSnapshot {
   if (!Number.isInteger(simulatedAt) || simulatedAt < SCENARIO_START_S || simulatedAt > SCENARIO_START_S + SCENARIO_DURATION_S) {
     throw new RangeError("Simulation timestamp is outside the GPU Training Ramp");
   }
   return advanceCockpitSimulation(
-    createCockpitSimulation(SCENARIO_START_S),
+    createCockpitSimulation(SCENARIO_START_S, config),
     simulatedAt - SCENARIO_START_S,
     SCENARIO_START_S,
+    config,
   ).snapshot;
 }
 
