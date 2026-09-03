@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { availableTestPort } from "./test-port";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import type { Role } from "../src/lib/security/rolePolicy";
@@ -18,7 +19,7 @@ const users: Record<Role, string> = {
 const emptyFacilityId = `${prefix}-empty`;
 const emptyModelId = `${prefix}-model`;
 const emptyScenarioId = `${prefix}-scenario`;
-const port = 5002;
+const port = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 async function request(userId: string, path: string, init: RequestInit = {}) {

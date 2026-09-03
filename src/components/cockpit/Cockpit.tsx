@@ -64,9 +64,14 @@ const navigate = (path: string) => {
   history.pushState({}, "", path);
   dispatchEvent(new PopStateEvent("popstate"));
 };
+const e2eTestUserId = () =>
+  (globalThis as typeof globalThis & { __WATTR_E2E_USER_ID__?: string }).__WATTR_E2E_USER_ID__;
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  const headers = new Headers(init?.headers);
+  const testUserId = e2eTestUserId();
+  if (testUserId) headers.set("x-test-user-id", testUserId);
+  const response = await fetch(path, { ...init, headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (!path.startsWith("/api/learning/")) {
@@ -987,9 +992,11 @@ function ProtectedApp({path}:{path:string}){
 }
 export function CockpitApp(){
   const [path,setPath]=useState(location.pathname),{isSignedIn}=useUser();
+  const testSignedIn = Boolean(e2eTestUserId());
   useScenarioClock();
   useEffect(()=>{const on=()=>setPath(location.pathname);addEventListener("popstate",on);return()=>removeEventListener("popstate",on)},[]);
-  useEffect(()=>{if(path==="/"&&isSignedIn)navigate("/portfolio")},[path,isSignedIn]);
+  useEffect(()=>{if(path==="/"&&(isSignedIn||testSignedIn))navigate("/portfolio")},[path,isSignedIn,testSignedIn]);
   if(path==="/demo/sandbox")return <SandboxShell/>; if(path.startsWith("/sign-in"))return <Auth/>; if(path.startsWith("/sign-up"))return <Auth up/>; if(path==="/")return <Landing/>;
+  if(testSignedIn)return <ProtectedApp path={path}/>;
   return <><Show when="signed-in"><ProtectedApp path={path}/></Show><Show when="signed-out"><div className="grid min-h-screen place-items-center bg-[#0a1018]"><button onClick={()=>navigate("/sign-in")} className="button primary">Sign in for authorized access</button></div></Show></>;
 }

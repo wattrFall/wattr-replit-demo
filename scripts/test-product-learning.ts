@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { availableTestPort } from "./test-port";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { SCENARIO_START_S } from "../src/lib/cockpit/simulation";
@@ -13,7 +14,7 @@ const managerId = `learning-manager-${suffix}`;
 const restrictedManagerId = `learning-restricted-manager-${suffix}`;
 const viewerId = `learning-viewer-${suffix}`;
 const users = [operatorId, managerId, restrictedManagerId, viewerId];
-const port = 5004;
+const port = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 async function request(userId: string, path: string, init: RequestInit = {}) {

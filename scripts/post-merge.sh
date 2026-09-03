@@ -2,6 +2,4 @@
 set -euo pipefail
 
 npm ci --no-audit --no-fund
-npm run db:setup
-npm run check
-npm run build
+npm run release:gates

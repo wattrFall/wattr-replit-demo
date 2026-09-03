@@ -2740,7 +2740,13 @@ if (process.env.NODE_ENV === "production") {
   app.use((_req, res) => res.sendFile(resolve("dist/index.html")));
 } else {
   const { createServer } = await import("vite");
-  const vite = await createServer({ server: { middlewareMode: true }, appType: "spa" });
+  const vite = await createServer({
+    server: {
+      middlewareMode: true,
+      hmr: process.env.NODE_ENV === "test" ? false : undefined,
+    },
+    appType: "spa",
+  });
   app.use(vite.middlewares);
 }
 

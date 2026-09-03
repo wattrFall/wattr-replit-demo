@@ -3,6 +3,7 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { ROLES, type Role } from "../src/lib/security/rolePolicy";
+import { availableTestPort } from "./test-port";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -12,7 +13,7 @@ const adminId = `${prefix}-admin`;
 const targetId = `${prefix}-target`;
 const outsiderId = `${prefix}-outsider`;
 const outsiderOrganizationId = `${prefix}-organization`;
-const port = 5001;
+const port = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 async function request(userId: string, path: string, init: RequestInit = {}) {

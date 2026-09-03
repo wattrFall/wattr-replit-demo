@@ -9,11 +9,12 @@ import {
   counterfactualCockpitSnapshot,
   replayCockpitSnapshot,
 } from "../src/lib/cockpit/simulation";
+import { availableTestPort } from "./test-port";
 
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const userId = `decision-workflow-${randomUUID().slice(0, 8)}`;
-const port = 5002;
+const port = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 async function request(path: string, init: RequestInit = {}) {
