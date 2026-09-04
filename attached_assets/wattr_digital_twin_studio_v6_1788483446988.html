@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Wattr Data Center Twin v6</title>
+<style>
+  :root{
+    --bg:#0a0f14; --panel:#0f1720; --panel2:#151f2b; --panel3:#0c131b; --line:#273446;
+    --text:#e9f2fb; --muted:#90a3b8; --accent:#58a6ff; --good:#39b86f; --warn:#e4b23b; --danger:#f26161;
+  }
+  *{box-sizing:border-box}
+  html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  button,input,select{font:inherit}
+  #app{display:grid;grid-template-columns:280px 1fr 336px;height:100vh}
+  aside{background:rgba(14,21,29,.96);backdrop-filter:blur(10px);border-color:var(--line);overflow:auto;padding:14px 12px}
+  #left{border-right:1px solid var(--line)}
+  #right{border-left:1px solid var(--line)}
+  #viewportWrap{position:relative;overflow:hidden;background:#0a1017}
+  canvas{display:block;width:100%;height:100%}
+
+  .modePill{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:8;display:flex;gap:4px;padding:4px;border-radius:999px;background:rgba(10,16,24,.86);border:1px solid #2b3d51;box-shadow:0 12px 36px rgba(0,0,0,.28)}
+  .modePill button{border:0;background:transparent;color:#c5d8ea;padding:10px 18px;border-radius:999px;cursor:pointer;font-weight:700}
+  .modePill button.active{background:#e9f2fb;color:#0d1823}
+
+  .section{margin-bottom:16px}
+  h3{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:#8fa3b8;margin:8px 0 10px}
+  h4{font-size:12px;color:#d9e7f5;margin:0 0 8px}
+  .hint,.mini{font-size:12px;color:var(--muted);line-height:1.45}
+  .mini{font-size:11px}
+  .card{border:1px solid #2a3949;background:linear-gradient(180deg,#141e29,#101821);border-radius:14px;padding:12px}
+  .stack{display:grid;gap:10px}
+  .btn{background:#182333;border:1px solid #31455d;color:var(--text);padding:9px 10px;border-radius:10px;cursor:pointer}
+  .btn:hover{border-color:#55718d}
+  .btn.primary{background:#17365a;border-color:#2f81f7}
+  .btn.good{border-color:#2c6b48;color:#c4f2d3}
+  .btn.warn{border-color:#76581a;color:#ffd98c}
+  .btn.danger{border-color:#6d3333;color:#ffb9b4}
+  .row{display:flex;gap:8px;align-items:center}
+  .row.wrap{flex-wrap:wrap}
+
+  .floorTabs{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .floorBtn{padding:11px;border:1px solid #33475f;background:#14202b;color:#d5e3ef;border-radius:10px;cursor:pointer}
+  .floorBtn.active{background:#19375b;border-color:#3d91ff;color:#fff}
+
+  .viewSwitch{display:flex;gap:6px;background:#0e151d;border:1px solid #2a3948;padding:4px;border-radius:999px;width:max-content}
+  .viewSwitch button{padding:8px 12px;border:0;background:transparent;color:#b9ccde;border-radius:999px;cursor:pointer}
+  .viewSwitch button.active{background:#203247;color:#fff}
+
+  .toggleCard{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 11px;border:1px solid #263545;background:#121b24;border-radius:12px;cursor:pointer}
+  .toggleCard .name{font-size:12px;color:#d8e7f4}
+  .toggleCard .desc{font-size:11px;color:#8ea3b8;margin-top:3px}
+  .toggleCard .state{font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid #35506a;background:#102132;color:#cde5ff}
+  .toggleCard.off .state{border-color:#42505e;background:#111924;color:#9badbe}
+
+  .catalogTabs{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .catalogTab{padding:8px;border:1px solid #31465c;background:#14202b;border-radius:9px;color:#d5e5f5;cursor:pointer;font-size:12px}
+  .catalogTab.active{background:#19375b;border-color:#2f81f7}
+  .palette{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .asset{padding:10px 8px;border:1px solid #34495d;border-radius:12px;background:#151f2a;cursor:pointer;min-height:72px}
+  .asset.active{outline:2px solid #2f81f7;background:#182a3e}
+  .asset b{display:block;font-size:13px;margin-bottom:4px}
+  .asset span{font-size:11px;color:#90a3b8}
+  .tag{display:inline-block;padding:4px 8px;border-radius:999px;font-size:11px;border:1px solid #34506a;background:#0f1f30;color:#d7eaff}
+
+  .chipStrip{position:absolute;left:14px;top:66px;display:flex;gap:8px;flex-wrap:wrap;z-index:6}
+  .chip{min-width:118px;padding:9px 10px;border-radius:12px;background:rgba(10,16,24,.82);border:1px solid #233648;box-shadow:0 10px 26px rgba(0,0,0,.18)}
+  .chip .label{font-size:10px;color:#90a4b8;text-transform:uppercase;letter-spacing:.08em}
+  .chip .value{font-size:16px;font-weight:800;margin-top:2px}
+
+  #coords{position:absolute;left:14px;bottom:14px;z-index:6;font-size:11px;padding:7px 10px;border-radius:10px;background:rgba(10,16,24,.78);border:1px solid #223445;color:#b7cade}
+  #sceneModeBadge{position:absolute;right:14px;top:14px;z-index:6;font-size:11px;padding:7px 10px;border-radius:10px;background:rgba(10,16,24,.78);border:1px solid #223445;color:#cde0f3}
+  #thermalLegend{position:absolute;right:14px;bottom:14px;display:none;z-index:6;padding:10px;border-radius:12px;background:rgba(10,16,24,.84);border:1px solid #223445}
+  #thermalLegend .bar{width:180px;height:12px;border-radius:999px;background:linear-gradient(90deg,#1d4ed8 0%,#22d3ee 30%,#facc15 68%,#ef4444 100%);margin:8px 0 5px}
+  #thermalLegend .row{display:flex;justify-content:space-between;font-size:10px;color:#9fb1c3}
+  #toast{position:absolute;right:14px;top:56px;max-width:330px;padding:10px 12px;border-radius:10px;background:rgba(13,20,28,.96);border:1px solid #34465a;color:#d6e7f8;font-size:12px;display:none;z-index:8}
+
+  #walkOverlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(3,7,12,.4);backdrop-filter:blur(2px);z-index:7}
+  #walkCard{width:min(460px,calc(100% - 32px));padding:22px;border:1px solid #36516a;border-radius:16px;background:rgba(12,18,25,.96);box-shadow:0 18px 60px rgba(0,0,0,.45);text-align:center}
+  #walkCard h2{margin:0 0 8px;font-size:20px}
+  #walkCard p{margin:0 0 16px;color:#9fb0c1;font-size:13px;line-height:1.55}
+  #walkHud{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:none;z-index:6;padding:8px 12px;border-radius:999px;background:rgba(10,16,24,.84);border:1px solid #223445;font-size:11px;color:#c2d5e8}
+  #crosshair{position:absolute;left:50%;top:50%;margin-left:-8px;margin-top:-8px;width:16px;height:16px;display:none;pointer-events:none;z-index:6}
+  #crosshair:before,#crosshair:after{content:"";position:absolute;background:#fff;opacity:.9}
+  #crosshair:before{left:7px;top:1px;width:2px;height:14px}
+  #crosshair:after{left:1px;top:7px;width:14px;height:2px}
+
+  .hidden{display:none !important}
+  .divider{height:1px;background:#22313f;margin:10px 0}
+  .stat{display:flex;justify-content:space-between;border-bottom:1px solid #21303f;padding:7px 0;font-size:12px}
+  .stat span:first-child{color:#9fb1c3}
+  .field{margin:8px 0}
+  .field label{display:block;color:#96aac0;font-size:11px;margin-bottom:5px}
+  .field input,.field select{width:100%;background:#0f151d;color:#e8f0f8;border:1px solid #314153;border-radius:8px;padding:8px}
+  .statusChip{display:inline-block;padding:4px 8px;border-radius:999px;font-size:10px;border:1px solid #35506a;background:#102132;color:#cde6ff}
+  .statusChip.good{border-color:#2f6b42;background:#102317;color:#baf3c6}
+  .statusChip.warn{border-color:#7f6821;background:#2a240f;color:#ffd67f}
+  .statusChip.crit{border-color:#7a3333;background:#311416;color:#ffb1ab}
+  .inlineBtns{display:flex;gap:8px;flex-wrap:wrap}
+  #trendCanvas{width:100%;height:120px;border:1px solid #2a3b4c;background:#0d131a;border-radius:10px}
+  .alarmItem{padding:10px;border:1px solid #2e3b49;background:#131b24;border-radius:10px;margin:8px 0}
+  .alarmItem.warning{border-color:#6e5a26;background:#19160f}
+  .alarmItem.critical{border-color:#6f3434;background:#1a1214}
+  .alarmItem .title{font-size:12px;font-weight:700;margin-bottom:4px}
+  .alarmItem .meta{font-size:11px;color:#9fb0c1}
+
+  #tutorialOverlay{position:fixed;inset:0;display:none;z-index:9;pointer-events:none}
+  #tutorialFocus{position:absolute;border-radius:14px;border:2px solid #72b4ff;box-shadow:0 0 0 9999px rgba(4,8,12,.72),0 0 0 3px rgba(114,180,255,.18),0 14px 30px rgba(0,0,0,.35);transition:all .18s ease}
+  #tutorialCard{position:absolute;max-width:320px;background:#101922;border:1px solid #31506d;border-radius:14px;padding:14px;pointer-events:auto;box-shadow:0 16px 40px rgba(0,0,0,.4)}
+  #tutorialTitle{font-size:14px;font-weight:800;margin-bottom:6px}
+  #tutorialBody{font-size:12px;line-height:1.5;color:#c5d6e7}
+  .tutorialMeta{margin-top:8px;font-size:11px;color:#8ea6be}
+  .tutorialBtns{display:flex;gap:8px;margin-top:12px}
+  .tutorialBtns button{border:1px solid #35506a;background:#142130;color:#eaf3fb;padding:8px 10px;border-radius:10px;cursor:pointer}
+  .tutorialBtns button.primary{background:#1f6feb;border-color:#58a6ff}
+
+  @media(max-width:1200px){#app{grid-template-columns:250px 1fr 300px}}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="left">
+    <div class="section">
+      <h3>Floors</h3>
+      <div id="floorTabs" class="floorTabs"></div>
+    </div>
+
+    <div class="section" id="operateExploreCard">
+      <h3>Explore</h3>
+      <div class="card stack">
+        <div class="viewSwitch">
+          <button id="orbitViewBtn" class="active">Orbit</button>
+          <button id="walkViewBtn">Walkthrough</button>
+        </div>
+        <div class="mini">Orbit for planning and inspection. Walkthrough puts you at aisle level so you can move through the floor.</div>
+      </div>
+    </div>
+
+    <div class="section" id="buildStudio">
+      <h3>Build Studio</h3>
+      <div class="card stack">
+        <div class="mini">Build mode is intentionally separate. Pick an asset category, choose an object, then place it on the floor. A ghost preview follows your cursor.</div>
+        <div id="catalogTabs" class="catalogTabs"></div>
+        <div id="palette" class="palette"></div>
+        <div class="row wrap"><span id="activeToolTag" class="tag">Placing: Server Rack</span><span class="tag">Snap grid: 1 m</span></div>
+        <div class="inlineBtns">
+          <button id="rotateSelectedBtn" class="btn">Rotate Selected</button>
+          <button id="deleteSelectedBtn" class="btn danger">Delete Selected</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section" id="layersCard">
+      <h3>Facility Layers</h3>
+      <div class="stack">
+        <div id="thermalToggle" class="toggleCard off">
+          <div><div class="name">Thermal Overlay</div><div class="desc">Colours each aisle by relative heat.</div></div><div class="state">Off</div>
+        </div>
+        <div id="sensorToggle" class="toggleCard off">
+          <div><div class="name">Sensor Markers</div><div class="desc">Shows temperature / humidity sensor points.</div></div><div class="state">Off</div>
+        </div>
+        <div id="labelToggle" class="toggleCard off">
+          <div><div class="name">Room Labels</div><div class="desc">Shows aisle and plant-room labels.</div></div><div class="state">Off</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Actions</h3>
+      <div class="card stack">
+        <button id="startTutorialBtn" class="btn primary">Start Tutorial</button>
+        <button id="faultBtn" class="btn warn">Inject Fault</button>
+        <button id="resetBtn" class="btn danger">Reset Layout</button>
+      </div>
+    </div>
+  </aside>
+
+  <main id="viewportWrap">
+    <div class="modePill" id="modePill">
+      <button id="operateModeBtn" class="active">Operate</button>
+      <button id="buildModeBtn">Build</button>
+    </div>
+
+    <div id="sceneModeBadge">OPERATE · ORBIT</div>
+
+    <div class="chipStrip">
+      <div class="chip"><div class="label">Power</div><div id="chipPower" class="value">0 kW</div></div>
+      <div class="chip"><div class="label">Avg inlet</div><div id="chipTemp" class="value">0 °C</div></div>
+      <div class="chip"><div class="label">Alerts</div><div id="chipAlerts" class="value">0</div></div>
+      <div class="chip"><div class="label">Estimated PUE</div><div id="chipPue" class="value">1.20</div></div>
+    </div>
+
+    <div id="coords">x 0 · z 0</div>
+    <div id="thermalLegend">
+      <div class="mini">Thermal overlay</div>
+      <div class="bar"></div>
+      <div class="row"><span>cooler</span><span>hotter</span></div>
+    </div>
+    <div id="crosshair"></div>
+    <div id="walkHud">WASD move · Shift sprint · click for mouse capture · hold left-drag if capture fails</div>
+
+    <div id="walkOverlay">
+      <div id="walkCard">
+        <h2>Walkthrough mode</h2>
+        <p>Move through the aisles at eye level. Use WASD, hold Shift to move faster, and click inside the scene for mouse capture if your browser allows it.</p>
+        <button id="enterWalkBtn" class="btn primary">Enter walkthrough</button>
+      </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <div id="tutorialOverlay">
+      <div id="tutorialFocus"></div>
+      <div id="tutorialCard">
+        <div id="tutorialTitle"></div>
+        <div id="tutorialBody"></div>
+        <div class="tutorialMeta" id="tutorialMeta"></div>
+        <div class="tutorialBtns">
+          <button id="tutorialSkipBtn">Skip</button>
+          <button id="tutorialNextBtn" class="primary">Next</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <aside id="right">
+    <div class="section">
+      <h3>Selection / Live System</h3>
+      <div id="selectionEmpty" class="hint">Click a rack, cooling unit, power asset, or sensor point to inspect it.</div>
+      <div id="selectionPanel" class="hidden">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div>
+            <div id="selType" class="statusChip">System</div>
+            <h4 id="selTitle" style="margin-top:8px">Asset</h4>
+            <div id="selSubtitle" class="mini">Floor 1</div>
+          </div>
+          <div id="selStatusChip" class="statusChip good">Normal</div>
+        </div>
+
+        <div id="editFields">
+          <div class="divider"></div>
+          <div class="field"><label>Name</label><input id="nameInput"></div>
+          <div class="field"><label>Status</label><select id="statusInput"><option>Normal</option><option>Warning</option><option>Critical</option><option>Maintenance</option></select></div>
+          <div class="field"><label>Heat load (kW)</label><input id="heatInput" type="number" step="0.5" min="0"></div>
+          <div class="field"><label>Power draw (kW)</label><input id="powerInput" type="number" step="0.5" min="0"></div>
+        </div>
+
+        <div class="divider"></div>
+        <div id="selStats"></div>
+
+        <div class="divider"></div>
+        <canvas id="trendCanvas" width="280" height="120"></canvas>
+
+        <div class="divider"></div>
+        <div class="inlineBtns">
+          <button id="ackBtn" class="btn">Acknowledge</button>
+          <button id="rotateBtn" class="btn">Rotate 90°</button>
+          <button id="deleteBtn" class="btn danger">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Floor Telemetry</h3>
+      <div id="stats"></div>
+    </div>
+
+    <div class="section">
+      <h3>Active Alarms</h3>
+      <div id="alarmList" class="hint">No alarms.</div>
+    </div>
+  </aside>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const viewportWrap = document.getElementById('viewportWrap');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+viewportWrap.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xc6d7ea);
+scene.fog = new THREE.Fog(0xc6d7ea, 90, 220);
+
+const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 600);
+camera.position.set(34, 20, 34);
+
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+orbit.target.set(0, 1.5, 0);
+orbit.maxDistance = 120;
+orbit.minDistance = 8;
+
+const FLOOR_W=28, FLOOR_D=22, FLOOR_H=3.7, FLOOR_GAP=7, FLOOR_COUNT=4, WALK_EYE=1.68, PLAYER_RADIUS=.28, GRID=1;
+const ASSET_CATEGORIES = { compute:['rack','gpu'], cooling:['crac','chiller'], power:['pdu','ups'], structure:['wall','door'] };
+const CATEGORY_LABELS = { compute:'Compute', cooling:'Cooling', power:'Power', structure:'Structure' };
+
+const floorGroups=[], floorPlanes=[], gridHelpers=[], labelGroups=[], sensorGroups=[], heatOverlays=[], collisionBoxesByFloor=[[],[],[],[]];
+const floorModels = Array.from({length:FLOOR_COUNT}, (_,i)=>({name:`Floor ${i+1}`, objects:[]}));
+const model = {version:6, floors:floorModels};
+
+const state = { alarms:[], history:{facilityPower:[], avgTemp:[]}, time:0 };
+const layers = { thermal:false, sensors:false, labels:false };
+
+let mode='operate';
+let viewMode='orbit';
+let activeFloor=0;
+let activeCategory='compute';
+let activeTool='rack';
+let selected=null;
+let selectedSensor=null;
+let previewMesh=null;
+let dragging=null;
+let rotation=0;
+let liveTelemetry=true;
+let telemetryAccumulator=0;
+let walkStarted=false;
+let pointerLocked=false, dragLook=false, lastLookX=0, lastLookY=0, yaw=0, pitch=0;
+const dragOffset = new THREE.Vector3();
+const clock = new THREE.Clock();
+const keys = {};
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+const sensorIndicators=[];
+const assetIndicators=[];
+
+const tutorial = {
+  active:false,
+  current:0,
+  autoAdvanceTimer:null,
+  flags:{ clickedAsset:false, injectedFault:false, toggledThermal:false, switchedToBuild:false, assetChosen:false, placedAsset:false, rotated:false, returnedOperate:false },
+  steps:[
+    { target:'#viewportWrap', title:'Inspect the live twin', body:'In Operate mode, click a rack or cooling asset in the scene. The right panel updates with telemetry, alarms, and trends.', complete:()=>tutorial.flags.clickedAsset },
+    { target:'#faultBtn', title:'Simulate an incident', body:'Inject a fault to make the facility react. This is useful for demos because it immediately creates a meaningful alarm condition.', complete:()=>tutorial.flags.injectedFault },
+    { target:'#thermalToggle', title:'Turn on the thermal layer', body:'Enable Thermal Overlay. It colours each aisle from cooler to hotter so the heat pattern is obvious instead of ambiguous.', complete:()=>layers.thermal },
+    { target:'#buildModeBtn', title:'Switch into Build', body:'Build mode is intentionally separate. Operate is for using the facility. Build is for changing it.', complete:()=>mode==='build' },
+    { target:'#buildStudio', title:'Choose something to place', body:'Pick any asset from the Build Studio. A ghost preview follows your cursor over the floor.', complete:()=>tutorial.flags.assetChosen },
+    { target:'#viewportWrap', title:'Place an asset', body:'Click the floor to place the selected asset. Drag an existing asset if you want to move it.', complete:()=>tutorial.flags.placedAsset },
+    { target:'#rotateSelectedBtn', title:'Refine the layout', body:'Rotate the selected asset. This is the quick Sims-style step for adjusting orientation.', complete:()=>tutorial.flags.rotated },
+    { target:'#operateModeBtn', title:'Return to Operate', body:'Switch back to Operate to inspect the finished floor again.', complete:()=>mode==='operate' && tutorial.flags.returnedOperate }
+  ]
+};
+
+const assets = {
+  rack:{label:'Server Rack', dims:[1.2,2.25,1.2], basePower:14, heat:16},
+  gpu:{label:'GPU Rack', dims:[1.4,2.35,1.4], basePower:42, heat:50},
+  crac:{label:'CRAC Unit', dims:[2.2,2.45,1.2], basePower:8, heat:0},
+  pdu:{label:'PDU', dims:[1.0,2.0,0.8], basePower:4, heat:2},
+  ups:{label:'UPS', dims:[1.8,2.0,1.2], basePower:6, heat:3},
+  chiller:{label:'Chiller', dims:[3.2,2.1,2.1], basePower:25, heat:0},
+  wall:{label:'Wall Segment', dims:[3.0,3.0,0.22], basePower:0, heat:0},
+  door:{label:'Secure Door', dims:[1.4,2.8,0.25], basePower:0, heat:0}
+};
+
+// ---------- textures ----------
+function makeTexture(draw,w=512,h=512){
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const ctx=c.getContext('2d'); draw(ctx,w,h);
+  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.anisotropy=8; return t;
+}
+const floorTex = makeTexture((ctx,w,h)=>{
+  ctx.fillStyle='#c9ced3'; ctx.fillRect(0,0,w,h);
+  for(let y=0;y<h;y+=64){ for(let x=0;x<w;x+=64){
+    ctx.fillStyle=((x/64+y/64)%2===0)?'#d8dde1':'#ced3d8'; ctx.fillRect(x,y,64,64);
+    ctx.strokeStyle='rgba(100,110,118,.52)'; ctx.lineWidth=2; ctx.strokeRect(x+1,y+1,62,62);
+    ctx.fillStyle='rgba(76,84,91,.85)';
+    for(let py=14;py<64;py+=18){ for(let px=14;px<64;px+=18){ ctx.beginPath(); ctx.arc(x+px,y+py,2,0,Math.PI*2); ctx.fill(); } }
+  }}
+}); floorTex.repeat.set(4,3);
+const wallTex = makeTexture((ctx,w,h)=>{
+  const g=ctx.createLinearGradient(0,0,0,h); g.addColorStop(0,'#eef2f5'); g.addColorStop(1,'#c9d2db');
+  ctx.fillStyle=g; ctx.fillRect(0,0,w,h);
+  for(let y=0;y<h;y+=54){ ctx.strokeStyle='rgba(118,129,142,.20)'; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+},512,512);
+const ceilingTex = makeTexture((ctx,w,h)=>{
+  ctx.fillStyle='#f8fafc'; ctx.fillRect(0,0,w,h);
+  ctx.strokeStyle='rgba(150,160,170,.45)';
+  for(let y=0;y<h;y+=64){ for(let x=0;x<w;x+=64){ ctx.strokeRect(x+1,y+1,62,62); if((x/64+y/64)%3===0){ ctx.fillStyle='rgba(225,230,236,.9)'; ctx.fillRect(x+8,y+8,48,48);} } }
+}); ceilingTex.repeat.set(4,3);
+const glassTex = makeTexture((ctx,w,h)=>{
+  const g=ctx.createLinearGradient(0,0,w,h); g.addColorStop(0,'rgba(255,255,255,.42)'); g.addColorStop(.5,'rgba(180,225,255,.10)'); g.addColorStop(1,'rgba(255,255,255,.30)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,w,h); ctx.strokeStyle='rgba(255,255,255,.18)'; for(let i=0;i<5;i++){ ctx.beginPath(); ctx.moveTo(0,i*100+16); ctx.lineTo(w,i*100+96); ctx.stroke(); }
+});
+const aisleTex = makeTexture((ctx,w,h)=>{
+  ctx.fillStyle='#d3d9de'; ctx.fillRect(0,0,w,h); ctx.strokeStyle='rgba(90,110,125,.55)'; ctx.lineWidth=5; ctx.strokeRect(6,6,w-12,h-12);
+},512,128);
+const asphaltTex = makeTexture((ctx,w,h)=>{
+  ctx.fillStyle='#6d767f'; ctx.fillRect(0,0,w,h); for(let i=0;i<2200;i++){ const x=Math.random()*w, y=Math.random()*h, a=Math.random()*.22; ctx.fillStyle=`rgba(255,255,255,${a})`; ctx.fillRect(x,y,1,1); }
+},1024,1024); asphaltTex.repeat.set(8,8);
+const grassTex = makeTexture((ctx,w,h)=>{
+  ctx.fillStyle='#78906a'; ctx.fillRect(0,0,w,h); for(let i=0;i<3000;i++){ ctx.fillStyle=`rgba(${60+Math.random()*40|0},${90+Math.random()*70|0},${40+Math.random()*30|0},.55)`; ctx.fillRect(Math.random()*w,Math.random()*h,1,3); }
+},1024,1024); grassTex.repeat.set(8,8);
+
+const floorMat = new THREE.MeshStandardMaterial({map:floorTex, roughness:.88, metalness:.05});
+const wallMat = new THREE.MeshStandardMaterial({map:wallTex, roughness:.7, metalness:.08});
+const ceilingMat = new THREE.MeshStandardMaterial({map:ceilingTex, roughness:.58, metalness:.04});
+const glassMat = new THREE.MeshPhysicalMaterial({map:glassTex, transparent:true, opacity:.25, roughness:.08, metalness:.1, transmission:.18});
+const aisleMat = new THREE.MeshStandardMaterial({map:aisleTex, roughness:.92, metalness:.03, transparent:true, opacity:.9});
+
+// ---------- lighting ----------
+scene.add(new THREE.AmbientLight(0xffffff, .34));
+scene.add(new THREE.HemisphereLight(0xeef7ff, 0x6b7b62, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.35); sun.position.set(38,46,18); sun.castShadow=true; sun.shadow.mapSize.set(2048,2048); sun.shadow.camera.left=-120; sun.shadow.camera.right=120; sun.shadow.camera.top=120; sun.shadow.camera.bottom=-120; scene.add(sun);
+
+// ---------- site / environment ----------
+const campus = new THREE.Group(); scene.add(campus);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(220,220), new THREE.MeshStandardMaterial({map:grassTex, roughness:1})); ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; campus.add(ground);
+const road = new THREE.Mesh(new THREE.PlaneGeometry(220,26), new THREE.MeshStandardMaterial({map:asphaltTex, roughness:.94})); road.rotation.x=-Math.PI/2; road.position.set(0,.01,34); road.receiveShadow=true; campus.add(road);
+for(let x=-90;x<=90;x+=18){ const mark = new THREE.Mesh(new THREE.PlaneGeometry(8,0.35), new THREE.MeshBasicMaterial({color:0xfafafa})); mark.rotation.x=-Math.PI/2; mark.position.set(x,.03,34); campus.add(mark); }
+const lot = new THREE.Mesh(new THREE.PlaneGeometry(80,24), new THREE.MeshStandardMaterial({map:asphaltTex, roughness:.95})); lot.rotation.x=-Math.PI/2; lot.position.set(-46,.01,10); lot.receiveShadow=true; campus.add(lot);
+for(let x=-74;x<=-18;x+=8){ for(let z=2; z<=18; z+=7){ const stall = new THREE.Mesh(new THREE.PlaneGeometry(5,2.8), new THREE.MeshBasicMaterial({color:0xf6f8fa, transparent:true, opacity:.66})); stall.rotation.x=-Math.PI/2; stall.position.set(x,.03,z); campus.add(stall); } }
+const sidewalk = new THREE.Mesh(new THREE.PlaneGeometry(220,7), new THREE.MeshStandardMaterial({color:0xcfd8e3, roughness:.92})); sidewalk.rotation.x=-Math.PI/2; sidewalk.position.set(0,.02,20); sidewalk.receiveShadow=true; campus.add(sidewalk);
+function addFenceLine(z){ for(let x=-95;x<=95;x+=4){ const post = new THREE.Mesh(new THREE.BoxGeometry(.12,1.8,.12), new THREE.MeshStandardMaterial({color:0x6b7280, metalness:.42, roughness:.55})); post.position.set(x,.9,z); campus.add(post); if(x<95){ const rail = new THREE.Mesh(new THREE.BoxGeometry(4,.06,.06), new THREE.MeshStandardMaterial({color:0x94a3b8, metalness:.25, roughness:.58})); rail.position.set(x+2,1.3,z); campus.add(rail); const rail2 = rail.clone(); rail2.position.y=.6; campus.add(rail2); } } }
+addFenceLine(22); addFenceLine(-28);
+function lowBuilding(x,z,w,d,h,col=0xb8c1c9){ const g=new THREE.Group(); const body = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color:col, roughness:.78, metalness:.08})); body.position.y=h/2; body.castShadow=true; body.receiveShadow=true; g.add(body); const roof = new THREE.Mesh(new THREE.BoxGeometry(w+.8,.16,d+.8), new THREE.MeshStandardMaterial({color:0x8c98a5, roughness:.72})); roof.position.y=h+.08; g.add(roof); g.position.set(x,0,z); campus.add(g); return g; }
+lowBuilding(-72, -18, 22, 16, 8.5); lowBuilding(70,-16,26,18,9.4); lowBuilding(80,16,18,14,7.2); lowBuilding(-86,18,16,12,6.5);
+function addTree(x,z,s=1){ const g=new THREE.Group(); const trunk = new THREE.Mesh(new THREE.CylinderGeometry(.18,.24,2.2,10), new THREE.MeshStandardMaterial({color:0x7a5b42, roughness:.98})); trunk.position.y=1.1; g.add(trunk); const crown = new THREE.Mesh(new THREE.SphereGeometry(1.5*s,16,16), new THREE.MeshStandardMaterial({color:0x5e8d54, roughness:1})); crown.position.y=2.7*s; crown.scale.y=.85; g.add(crown); g.position.set(x,0,z); g.traverse(m=>{ if(m.isMesh){ m.castShadow=true; m.receiveShadow=true; }}); campus.add(g); }
+[-92,-84,-76,-68,62,74,86].forEach((x,i)=>addTree(x,26 + (i%2)*2, .9));
+function addLightPole(x,z){ const g=new THREE.Group(); const pole = new THREE.Mesh(new THREE.CylinderGeometry(.1,.12,6.2,12), new THREE.MeshStandardMaterial({color:0x8793a0, metalness:.45, roughness:.45})); pole.position.y=3.1; g.add(pole); const head = new THREE.Mesh(new THREE.BoxGeometry(.8,.16,.35), new THREE.MeshStandardMaterial({color:0xe5edf5, emissive:0xdce9f5, emissiveIntensity:.6})); head.position.set(.38,6.0,0); g.add(head); const lamp = new THREE.PointLight(0xf7fbff, .18, 10); lamp.position.set(.38,5.6,0); g.add(lamp); g.position.set(x,0,z); campus.add(g); }
+[-80,-60,-40,-20,20,40,60,80].forEach(x=>addLightPole(x,21));
+const hillMat = new THREE.MeshStandardMaterial({color:0x92a487, roughness:1});
+for(const [x,z,s] of [[-110,-70,1.1],[-40,-90,1.4],[35,-85,1.2],[105,-74,.9]]){ const hill = new THREE.Mesh(new THREE.SphereGeometry(18*s,24,16), hillMat); hill.scale.y=.4; hill.position.set(x,5,z); hill.receiveShadow=true; campus.add(hill); }
+
+// ---------- helper functions ----------
+function makeStatusChip(status){ if(status==='Critical') return 'statusChip crit'; if(status==='Warning') return 'statusChip warn'; if(status==='Maintenance') return 'statusChip'; return 'statusChip good'; }
+function rand(min,max){ return Math.random()*(max-min)+min; }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function snap(v){ return Math.round(v/GRID)*GRID; }
+function clampPos(x,z){ return [THREE.MathUtils.clamp(x,-FLOOR_W/2+1,FLOOR_W/2-1), THREE.MathUtils.clamp(z,-FLOOR_D/2+1,FLOOR_D/2-1)]; }
+function toast(msg,bad=false){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; t.style.borderColor = bad ? '#7a3333' : '#34465a'; clearTimeout(t._timer); t._timer=setTimeout(()=>t.style.display='none', 2800); }
+
+function createTextSprite(text){
+  const c=document.createElement('canvas'); c.width=256; c.height=64; const ctx=c.getContext('2d');
+  ctx.fillStyle='rgba(10,16,24,.82)'; ctx.fillRect(0,0,256,64); ctx.strokeStyle='rgba(88,166,255,.55)'; ctx.strokeRect(1,1,254,62); ctx.fillStyle='#eaf2fb'; ctx.font='bold 24px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(text,128,33);
+  const tex=new THREE.CanvasTexture(c); const mat=new THREE.SpriteMaterial({map:tex, transparent:true}); const spr=new THREE.Sprite(mat); spr.scale.set(5,1.25,1); return spr;
+}
+function addCeilingLights(group){
+  for(const z of [-7,0,7]) for(const x of [-9,0,9]){
+    const fixture = new THREE.Mesh(new THREE.BoxGeometry(6.0,.09,.58), new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xe8f2fa, emissiveIntensity:1.15}));
+    fixture.position.set(x, FLOOR_H-.22, z); group.add(fixture);
+    const p = new THREE.PointLight(0xf7fbff, .18, 13); p.position.set(x, FLOOR_H-.45, z); group.add(p);
+  }
+}
+function addCableTray(group,z){
+  const mat = new THREE.MeshStandardMaterial({color:0x3e4852, roughness:.58, metalness:.48});
+  const tray = new THREE.Group();
+  const rail1=new THREE.Mesh(new THREE.BoxGeometry(18,.08,.08), mat); const rail2=rail1.clone(); rail1.position.z=-.28; rail2.position.z=.28; tray.add(rail1,rail2);
+  for(let x=-8.5;x<=8.5;x+=1){ const rung=new THREE.Mesh(new THREE.BoxGeometry(.08,.06,.55), mat); rung.position.set(x,0,0); tray.add(rung); }
+  tray.position.set(0, FLOOR_H-.58, z); group.add(tray);
+  const blue = new THREE.Mesh(new THREE.CylinderGeometry(.08,.08,18,16), new THREE.MeshStandardMaterial({color:0x2f74e7, metalness:.3, roughness:.45})); blue.rotation.z=Math.PI/2; blue.position.set(0, FLOOR_H-.9, z+.96); group.add(blue);
+  const red = new THREE.Mesh(new THREE.CylinderGeometry(.08,.08,18,16), new THREE.MeshStandardMaterial({color:0xd9534f, metalness:.3, roughness:.45})); red.rotation.z=Math.PI/2; red.position.set(0, FLOOR_H-.9, z-.96); group.add(red);
+}
+function makeHeatOverlay(z){ const m=new THREE.MeshBasicMaterial({color:0xff6a00, transparent:true, opacity:.18, depthWrite:false}); const mesh=new THREE.Mesh(new THREE.PlaneGeometry(20,2.7), m); mesh.rotation.x=-Math.PI/2; mesh.position.set(0,.05,z); return mesh; }
+
+function addSensorNode(floor,x,z){
+  const g=new THREE.Group();
+  const base=new THREE.Mesh(new THREE.CylinderGeometry(.16,.18,.05,18), new THREE.MeshStandardMaterial({color:0x64748b, roughness:.7})); base.position.y=.025; g.add(base);
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(.03,.03,.65,12), new THREE.MeshStandardMaterial({color:0x9aa7b6, metalness:.35, roughness:.55})); stem.position.y=.35; g.add(stem);
+  const beacon=new THREE.Mesh(new THREE.SphereGeometry(.11,16,16), new THREE.MeshStandardMaterial({color:0x67e8f9, emissive:0x0c4a6e, emissiveIntensity:1.15})); beacon.position.y=.72; g.add(beacon);
+  const label=createTextSprite('T/H'); label.scale.set(1.85,.48,1); label.position.set(0,1.06,0); g.add(label);
+  g.position.set(x,0,z); g.userData.sensor={id:crypto.randomUUID(), floor, x, z, name:`Sensor ${floor+1}-${x}-${z}`, temp:22, humidity:45, airflow:2.4, status:'Normal', beacon};
+  sensorIndicators.push(beacon);
+  return g;
+}
+
+// ---------- building floors ----------
+function createFloor(index){
+  const group=new THREE.Group(); group.position.y=index*FLOOR_GAP; scene.add(group); floorGroups.push(group);
+
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(FLOOR_W,.46,FLOOR_D), floorMat); slab.position.y=-.23; slab.receiveShadow=true; group.add(slab);
+  const grid = new THREE.GridHelper(Math.max(FLOOR_W,FLOOR_D), Math.max(FLOOR_W,FLOOR_D), 0x4d6c87, 0x334353); grid.position.y=.03; grid.scale.z=FLOOR_D/FLOOR_W; grid.material.transparent=true; grid.material.opacity=.34; group.add(grid); gridHelpers.push(grid);
+
+  const heatRow=[]; for(const z of [-6,0,6]){ const aisle=new THREE.Mesh(new THREE.PlaneGeometry(20,2.8), aisleMat); aisle.rotation.x=-Math.PI/2; aisle.position.set(0,.035,z); group.add(aisle); const heat=makeHeatOverlay(z); group.add(heat); heatRow.push(heat); } heatOverlays.push(heatRow);
+
+  const back = new THREE.Mesh(new THREE.BoxGeometry(FLOOR_W,FLOOR_H,.28), wallMat); back.position.set(0,FLOOR_H/2,-FLOOR_D/2+.14); group.add(back);
+  const left = new THREE.Mesh(new THREE.BoxGeometry(.28,FLOOR_H,FLOOR_D), wallMat); left.position.set(-FLOOR_W/2+.14, FLOOR_H/2,0); group.add(left);
+  const right = new THREE.Mesh(new THREE.BoxGeometry(.28,FLOOR_H,FLOOR_D), wallMat); right.position.set(FLOOR_W/2-.14, FLOOR_H/2,0); group.add(right);
+  const frontL = new THREE.Mesh(new THREE.BoxGeometry(6,FLOOR_H,.28), wallMat); frontL.position.set(-FLOOR_W/2+3, FLOOR_H/2, FLOOR_D/2-.14); group.add(frontL);
+  const frontR = new THREE.Mesh(new THREE.BoxGeometry(6,FLOOR_H,.28), wallMat); frontR.position.set(FLOOR_W/2-3, FLOOR_H/2, FLOOR_D/2-.14); group.add(frontR);
+  const ceiling = new THREE.Mesh(new THREE.BoxGeometry(FLOOR_W,.12,FLOOR_D), ceilingMat); ceiling.position.set(0,FLOOR_H,0); group.add(ceiling);
+
+  const glass1 = new THREE.Mesh(new THREE.BoxGeometry(18,1.8,.05), glassMat); glass1.position.set(0,1.4,-1.55); group.add(glass1);
+  const glass2 = new THREE.Mesh(new THREE.BoxGeometry(18,1.8,.05), glassMat); glass2.position.set(0,1.4,1.55); group.add(glass2);
+
+  for(const x of [-12,12]) for(const z of [-9,9]){ const c = new THREE.Mesh(new THREE.BoxGeometry(.55,FLOOR_H,.55), new THREE.MeshStandardMaterial({color:0xb5bec7, roughness:.66, metalness:.2})); c.position.set(x,FLOOR_H/2,z); c.castShadow=true; c.receiveShadow=true; group.add(c); }
+  const core = new THREE.Mesh(new THREE.BoxGeometry(4,FLOOR_H,4), new THREE.MeshStandardMaterial({color:0xbec6cd, roughness:.62, metalness:.08})); core.position.set(10,FLOOR_H/2,7); group.add(core);
+  const coreDoor = new THREE.Mesh(new THREE.BoxGeometry(1.2,2.2,.05), new THREE.MeshStandardMaterial({color:0x334155})); coreDoor.position.set(10,1.1,9.03); group.add(coreDoor);
+
+  const labels = new THREE.Group(); const l1=createTextSprite(`Cold aisle · F${index+1}`); l1.position.set(0,2.3,0); labels.add(l1); const l2=createTextSprite('Power / Cooling'); l2.position.set(9.8,2.35,-7.6); labels.add(l2); const l3=createTextSprite('Service Core'); l3.position.set(10,2.35,9.1); labels.add(l3); group.add(labels); labelGroups.push(labels);
+
+  for(const x of [-13.1,13.1]){ const cabinet=new THREE.Mesh(new THREE.BoxGeometry(.18,1.3,.8), new THREE.MeshStandardMaterial({color:0xe11d48})); cabinet.position.set(x,.65,-3); group.add(cabinet); }
+  addCeilingLights(group); addCableTray(group,-6); addCableTray(group,0); addCableTray(group,6);
+
+  const sensorGroup=new THREE.Group(); for(const z of [-6,0,6]) for(const x of [-8,0,8]) sensorGroup.add(addSensorNode(index,x,z)); group.add(sensorGroup); sensorGroups.push(sensorGroup);
+
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(FLOOR_W,FLOOR_D), new THREE.MeshBasicMaterial({visible:false, side:THREE.DoubleSide})); plane.rotation.x=-Math.PI/2; plane.position.y=.04; group.add(plane); floorPlanes.push(plane);
+
+  collisionBoxesByFloor[index]=[]; [
+    {x:0,z:-FLOOR_D/2+.14,w:FLOOR_W,d:.28}, {x:-FLOOR_W/2+.14,z:0,w:.28,d:FLOOR_D}, {x:FLOOR_W/2-.14,z:0,w:.28,d:FLOOR_D},
+    {x:-FLOOR_W/2+3,z:FLOOR_D/2-.14,w:6,d:.28}, {x:FLOOR_W/2-3,z:FLOOR_D/2-.14,w:6,d:.28}, {x:10,z:7,w:4,d:4},
+    {x:-12,z:-9,w:.55,d:.55},{x:-12,z:9,w:.55,d:.55},{x:12,z:-9,w:.55,d:.55},{x:12,z:9,w:.55,d:.55}
+  ].forEach(b=>collisionBoxesByFloor[index].push(b));
+}
+for(let i=0;i<FLOOR_COUNT;i++) createFloor(i);
+
+// Exterior shell around the stacked floors
+const shell = new THREE.Group(); scene.add(shell);
+const shellBody = new THREE.Mesh(new THREE.BoxGeometry(FLOOR_W+2, FLOOR_GAP*(FLOOR_COUNT-1)+FLOOR_H+.8, FLOOR_D+2), new THREE.MeshStandardMaterial({color:0xb8c1c8, roughness:.84, metalness:.05, transparent:true, opacity:.92}));
+shellBody.position.set(0, ((FLOOR_COUNT-1)*FLOOR_GAP + FLOOR_H)/2 - .15, 0); shell.add(shellBody);
+const cutMask = new THREE.Mesh(new THREE.BoxGeometry(FLOOR_W+4, FLOOR_GAP*(FLOOR_COUNT-1)+FLOOR_H+4, 16), new THREE.MeshBasicMaterial({visible:false})); cutMask.position.set(0, ((FLOOR_COUNT-1)*FLOOR_GAP + FLOOR_H)/2, 14); // conceptual only
+const roof = new THREE.Mesh(new THREE.BoxGeometry(FLOOR_W+3,.4,FLOOR_D+3), new THREE.MeshStandardMaterial({color:0x9199a1, roughness:.72, metalness:.08})); roof.position.set(0, FLOOR_GAP*(FLOOR_COUNT-1)+FLOOR_H+.25, 0); shell.add(roof);
+// Replace front shell with frame so the cutaway stays visible
+shell.remove(shellBody);
+function shellPanel(w,h,d,x,y,z,col=0xb8c1c8){ const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color:col, roughness:.84, metalness:.05})); m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true; shell.add(m); }
+const totalH=FLOOR_GAP*(FLOOR_COUNT-1)+FLOOR_H;
+shellPanel(FLOOR_W+2,totalH,.4,0,totalH/2,-FLOOR_D/2-.9); shellPanel(.4,totalH,FLOOR_D+2,-FLOOR_W/2-.9,totalH/2,0); shellPanel(.4,totalH,FLOOR_D+2,FLOOR_W/2+.9,totalH/2,0); shellPanel(7,totalH,.4,-(FLOOR_W/2-3.5), totalH/2, FLOOR_D/2+.9); shellPanel(7,totalH,.4,(FLOOR_W/2-3.5), totalH/2, FLOOR_D/2+.9);
+const frontCanopy = new THREE.Mesh(new THREE.BoxGeometry(10,.25,2.3), new THREE.MeshStandardMaterial({color:0x94a3af, roughness:.68})); frontCanopy.position.set(0,6.8,FLOOR_D/2+2.1); shell.add(frontCanopy);
+const entryStairs = new THREE.Group(); for(let i=0;i<4;i++){ const step=new THREE.Mesh(new THREE.BoxGeometry(8,.18,1), new THREE.MeshStandardMaterial({color:0xc6cdd4, roughness:.9})); step.position.set(0,.09+i*.18, FLOOR_D/2+3.1+i*.9); step.receiveShadow=true; entryStairs.add(step);} scene.add(entryStairs);
+const plaza = new THREE.Mesh(new THREE.PlaneGeometry(30,12), new THREE.MeshStandardMaterial({color:0xd5dce4, roughness:.92})); plaza.rotation.x=-Math.PI/2; plaza.position.set(0,.02,18.5); plaza.receiveShadow=true; scene.add(plaza);
+
+// Utility yard / exterior equipment
+const utilPad = new THREE.Mesh(new THREE.PlaneGeometry(18,12), new THREE.MeshStandardMaterial({color:0xcfd7de, roughness:.88})); utilPad.rotation.x=-Math.PI/2; utilPad.position.set(33,.03,-4); utilPad.receiveShadow=true; scene.add(utilPad);
+for(let i=0;i<3;i++){
+  const unit = new THREE.Mesh(new THREE.BoxGeometry(4.6,2.1,2.6), new THREE.MeshStandardMaterial({color:0xdbe3ea, roughness:.6, metalness:.14})); unit.position.set(26 + i*5.4,1.05,-4); unit.castShadow=true; scene.add(unit);
+  for(let f=0;f<2;f++){ const fan=new THREE.Mesh(new THREE.CylinderGeometry(.55,.55,.08,24), new THREE.MeshStandardMaterial({color:0x5b6470, roughness:.6, metalness:.35})); fan.rotation.x=Math.PI/2; fan.position.set(25 + i*5.4 + f*1.5,2.18,-4); scene.add(fan);} }
+
+// ---------- assets ----------
+function perforatedFront(w,h,d,color){ const g=new THREE.Group(); const panel=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshStandardMaterial({color, roughness:.63, metalness:.34})); g.add(panel); const ventMat=new THREE.MeshStandardMaterial({color:0x0f1419, roughness:.95, metalness:.08}); for(let y=-h/2+.12;y<h/2-.12;y+=.14){ const slat=new THREE.Mesh(new THREE.BoxGeometry(w*.78,.028,.013), ventMat); slat.position.set(0,y,d/2+.012); g.add(slat);} return g; }
+function addIndicator(group, y, z, status){ const color = status==='Critical' ? 0xff5d5d : status==='Warning' ? 0xffc857 : status==='Maintenance' ? 0x60a5fa : 0x59ff93; const lamp=new THREE.Mesh(new THREE.BoxGeometry(.11,.04,.02), new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:1.35})); lamp.position.set(.34,y,z); group.add(lamp); assetIndicators.push({mesh:lamp, getStatus:()=>group.userData.status || status}); }
+function buildAssetMesh(type,data={},isPreview=false){
+  const a=assets[type]; const g=new THREE.Group(); g.userData={...data, type};
+  if(type==='rack' || type==='gpu'){
+    const bodyCol=type==='gpu' ? 0x171526 : 0x181c20;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(a.dims[0],a.dims[1],a.dims[2]), new THREE.MeshStandardMaterial({color:bodyCol, roughness:.42, metalness:.72, transparent:isPreview, opacity:isPreview?.38:1}));
+    body.position.y=a.dims[1]/2; body.castShadow=true; body.receiveShadow=true; g.add(body);
+    const side = new THREE.Mesh(new THREE.BoxGeometry(.02,a.dims[1]*.95,a.dims[2]*.9), new THREE.MeshStandardMaterial({color:0x252a31, roughness:.55, metalness:.35})); side.position.set(-a.dims[0]/2+.02,a.dims[1]/2,0); g.add(side); const side2=side.clone(); side2.position.x=a.dims[0]/2-.02; g.add(side2);
+    const door = perforatedFront(a.dims[0]*.92, a.dims[1]*.95, .02, 0x252b33); door.position.set(0,a.dims[1]/2,a.dims[2]/2+.02); g.add(door);
+    for(let y=.24; y<a.dims[1]-.16; y+=.18){ const server = new THREE.Mesh(new THREE.BoxGeometry(a.dims[0]*.72,.055,.06), new THREE.MeshStandardMaterial({color:type==='gpu'?0x6366f1:0x8fd1ff, emissive:type==='gpu'?0x23145d:0x08314a, emissiveIntensity:.85})); server.position.set(0,y,a.dims[2]/2+.055); g.add(server); const bay = new THREE.Mesh(new THREE.BoxGeometry(a.dims[0]*.76,.012,.022), new THREE.MeshStandardMaterial({color:0x0c1116})); bay.position.set(0,y+.04,a.dims[2]/2+.09); g.add(bay);} 
+    for(let dy=.5; dy<1.9; dy+=.22){ const cable1=new THREE.Mesh(new THREE.CylinderGeometry(.017,.017,.42,8), new THREE.MeshStandardMaterial({color:0x2563eb, roughness:.7})); cable1.rotation.z=Math.PI/2; cable1.position.set(.16,dy,-a.dims[2]/2-.07); g.add(cable1); const cable2=cable1.clone(); cable2.material=cable2.material.clone(); cable2.material.color.setHex(type==='gpu'?0xf59e0b:0x22c55e); cable2.position.x=-.12; cable2.position.z=-a.dims[2]/2-.09; g.add(cable2); }
+    addIndicator(g, a.dims[1]-.18, a.dims[2]/2+.05, data.status || 'Normal');
+  } else if(type==='crac'){
+    const body = new THREE.Mesh(new THREE.BoxGeometry(a.dims[0],a.dims[1],a.dims[2]), new THREE.MeshStandardMaterial({color:0xecf1f6, roughness:.56, metalness:.14, transparent:isPreview, opacity:isPreview?.38:1})); body.position.y=a.dims[1]/2; body.castShadow=true; body.receiveShadow=true; g.add(body);
+    const front=new THREE.Mesh(new THREE.BoxGeometry(a.dims[0]*.84,a.dims[1]*.68,.04), new THREE.MeshStandardMaterial({color:0x8795a3})); front.position.set(0,a.dims[1]*.53,a.dims[2]/2+.03); g.add(front); for(let y=.56;y<a.dims[1]-.28;y+=.11){ const slat=new THREE.Mesh(new THREE.BoxGeometry(a.dims[0]*.74,.02,.013), new THREE.MeshStandardMaterial({color:0x4d5865})); slat.position.set(0,y,a.dims[2]/2+.05); g.add(slat);} const screen=new THREE.Mesh(new THREE.BoxGeometry(.34,.18,.03), new THREE.MeshStandardMaterial({color:0x60a5fa, emissive:0x60a5fa, emissiveIntensity:1})); screen.position.set(a.dims[0]*.28,a.dims[1]-0.34,a.dims[2]/2+.03); g.add(screen);
+  } else if(type==='pdu' || type==='ups'){
+    const col=type==='ups'?0x4b5563:0x5c6771; const body=new THREE.Mesh(new THREE.BoxGeometry(a.dims[0],a.dims[1],a.dims[2]), new THREE.MeshStandardMaterial({color:col, roughness:.52, metalness:.44, transparent:isPreview, opacity:isPreview?.38:1})); body.position.y=a.dims[1]/2; body.castShadow=true; body.receiveShadow=true; g.add(body); const front=new THREE.Mesh(new THREE.BoxGeometry(a.dims[0]*.9,a.dims[1]*.9,.03), new THREE.MeshStandardMaterial({color:0x2f3944})); front.position.set(0,a.dims[1]/2,a.dims[2]/2+.03); g.add(front); const disp=new THREE.Mesh(new THREE.BoxGeometry(.18,.12,.03), new THREE.MeshStandardMaterial({color:0x86efac, emissive:0x14532d, emissiveIntensity:1})); disp.position.set(a.dims[0]*.25,a.dims[1]-0.24,a.dims[2]/2+.04); g.add(disp);
+  } else if(type==='chiller'){
+    const body=new THREE.Mesh(new THREE.BoxGeometry(a.dims[0],a.dims[1],a.dims[2]), new THREE.MeshStandardMaterial({color:0xdde6ee, roughness:.62, metalness:.16, transparent:isPreview, opacity:isPreview?.38:1})); body.position.y=a.dims[1]/2; body.castShadow=true; g.add(body); for(let x=-0.95;x<=0.95;x+=.95){ const fan=new THREE.Mesh(new THREE.CylinderGeometry(.33,.33,.06,24), new THREE.MeshStandardMaterial({color:0x4b5563, metalness:.4, roughness:.6})); fan.rotation.x=Math.PI/2; fan.position.set(x,a.dims[1]+.03,0); g.add(fan);} }
+  else if(type==='wall'){ const body=new THREE.Mesh(new THREE.BoxGeometry(a.dims[0],a.dims[1],a.dims[2]), new THREE.MeshStandardMaterial({map:wallTex, roughness:.72, metalness:.08, transparent:isPreview, opacity:isPreview?.4:1})); body.position.y=a.dims[1]/2; g.add(body); }
+  else if(type==='door'){ const frame=new THREE.Mesh(new THREE.BoxGeometry(a.dims[0],a.dims[1],a.dims[2]), new THREE.MeshStandardMaterial({color:0x6b7480, roughness:.5, metalness:.35, transparent:isPreview, opacity:isPreview?.4:1})); frame.position.y=a.dims[1]/2; g.add(frame); const glass=new THREE.Mesh(new THREE.BoxGeometry(.55,.85,.02), new THREE.MeshPhysicalMaterial({color:0x7dd3fc, transparent:true, opacity:.32, roughness:.08, metalness:.22})); glass.position.set(0,1.85,a.dims[2]/2+.04); g.add(glass); }
+  return g;
+}
+function objectBounds(obj){ const [w,_,d]=assets[obj.type].dims; const rot=((obj.rot%(Math.PI*2))+Math.PI*2)%(Math.PI*2); const swapped=Math.abs(Math.sin(rot))>.7; return {x:obj.x, z:obj.z, w:swapped?d:w, d:swapped?w:d}; }
+function refreshDynamicCollisions(floor){ collisionBoxesByFloor[floor] = collisionBoxesByFloor[floor].filter(b=>!b.dynamic); for(const obj of model.floors[floor].objects){ if(obj.type==='door') continue; const b=objectBounds(obj); collisionBoxesByFloor[floor].push({...b, dynamic:true, id:obj.id}); } }
+
+function makeTelemetryForObject(type, extra={}){ const base=assets[type] || {basePower:0, heat:0}; const utilSeed = type==='gpu' ? .72 : type==='rack' ? .48 : .35; const inletBase = type==='gpu' ? 24.6 : type==='rack' ? 23.2 : 21.4; return { power:extra.power ?? base.basePower ?? 0, heat:extra.heat ?? base.heat ?? 0, utilization:extra.utilization ?? utilSeed, inletTemp:extra.inletTemp ?? inletBase, outletTemp:extra.outletTemp ?? inletBase+8, airflow:extra.airflow ?? ((type==='rack'||type==='gpu')?2.6:4.0), fanSpeed:extra.fanSpeed ?? ((type==='rack'||type==='gpu')?62:48), humidity:extra.humidity ?? 45, health:extra.health ?? 98, acknowledged:false, trend:Array.from({length:30}, ()=>base.basePower ?? 0) }; }
+function placeObject(type,x,z,floor=activeFloor,rot=rotation,extra={}){ const a=assets[type]; const obj={ id:crypto.randomUUID(), type,x,z,rot, name:extra.name || a.label, status:extra.status || 'Normal', power:extra.power ?? a.basePower ?? 0, heat:extra.heat ?? a.heat ?? 0, telemetry:makeTelemetryForObject(type, extra.telemetry || {}) }; model.floors[floor].objects.push(obj); renderFloor(floor); updateEverything(); tutorial.flags.placedAsset=true; checkTutorial(); return obj; }
+function renderFloor(floorIndex){
+  const floorGroup=floorGroups[floorIndex];
+  [...floorGroup.children].filter(n=>n.userData.dynamic).forEach(n=>floorGroup.remove(n));
+  for(let i=0;i<model.floors.length;i++){
+    if(i!==floorIndex) continue;
+    for(const obj of model.floors[i].objects){ const mesh=buildAssetMesh(obj.type, obj, false); mesh.position.set(obj.x,0,obj.z); mesh.rotation.y=obj.rot; mesh.userData.dynamic=true; mesh.userData.objectId=obj.id; mesh.userData.kind='asset'; floorGroup.add(mesh); }
+  }
+  refreshDynamicCollisions(floorIndex);
+  if(mode==='build' && previewMesh) floorGroups[activeFloor].add(previewMesh);
+}
+function renderAll(){ assetIndicators.length=0; for(let f=0; f<FLOOR_COUNT; f++) renderFloor(f); }
+function findObjectFloor(id){ for(let i=0;i<model.floors.length;i++) if(model.floors[i].objects.some(o=>o.id===id)) return i; return null; }
+
+function seed(){
+  model.floors.forEach(f=>f.objects=[]);
+  const rowsZ=[-6,0,6];
+  for(let f=0; f<FLOOR_COUNT; f++){
+    rowsZ.forEach((z,rowIdx)=>{ for(let x=-8.5; x<=8.5; x+=2.4){ const gpuZone=(f===2 && rowIdx===1 && x>=-1.3 && x<=3.5); placeObject(gpuZone?'gpu':'rack', x, z, f, 0, { status:(f===1 && rowIdx===1 && Math.abs(x-1.1)<1.5)?'Warning':'Normal' }); }});
+    placeObject('crac',-12,7.4,f,Math.PI/2); placeObject('crac',-12,-7.4,f,Math.PI/2); placeObject('pdu',10.4,-7.5,f,0); placeObject('ups',10.1,-4.8,f,0); placeObject('door',0,10.0,f,0); placeObject('wall',-6,10.0,f,0); placeObject('wall',6,10.0,f,0);
+  }
+  placeObject('chiller',8.2,4.0,3,Math.PI/2);
+}
+seed();
+
+// ---------- UI ----------
+const floorTabs=document.getElementById('floorTabs');
+for(let i=0;i<FLOOR_COUNT;i++){ const b=document.createElement('button'); b.className='floorBtn'; b.textContent=`Floor ${i+1}`; b.onclick=()=>setFloor(i); floorTabs.appendChild(b); }
+function renderCatalogTabs(){ const wrap=document.getElementById('catalogTabs'); wrap.innerHTML=''; Object.keys(ASSET_CATEGORIES).forEach(key=>{ const b=document.createElement('button'); b.className='catalogTab' + (key===activeCategory?' active':''); b.textContent=CATEGORY_LABELS[key]; b.onclick=()=>{ activeCategory=key; renderPalette(); tutorial.flags.assetChosen=true; checkTutorial(); }; wrap.appendChild(b); }); }
+function renderPalette(){ renderCatalogTabs(); const pal=document.getElementById('palette'); pal.innerHTML=''; ASSET_CATEGORIES[activeCategory].forEach(key=>{ const a=assets[key]; const card=document.createElement('div'); card.className='asset' + (key===activeTool?' active':''); card.innerHTML=`<b>${a.label}</b><span>${a.dims[0]} × ${a.dims[2]} m footprint</span>`; card.onclick=()=>{ activeTool=key; rotation=0; tutorial.flags.assetChosen=true; updateActiveToolTag(); buildPreviewMesh(); renderPalette(); checkTutorial(); }; pal.appendChild(card); }); }
+function updateActiveToolTag(){ document.getElementById('activeToolTag').textContent = `Placing: ${assets[activeTool].label}`; }
+renderPalette(); updateActiveToolTag();
+
+function setFloor(i){ activeFloor=i; document.querySelectorAll('.floorBtn').forEach((el,idx)=>el.classList.toggle('active', idx===i)); floorGroups.forEach((g,idx)=>g.visible=idx===i); sensorGroups.forEach((g,idx)=>g.visible=layers.sensors && idx===i && mode==='operate' && viewMode!=='walk'); labelGroups.forEach((g,idx)=>g.visible=layers.labels && idx===i && mode==='operate' && viewMode!=='walk'); if(mode==='build') configureBuildCamera(); else if(viewMode==='walk') setWalkSpawn(); else configureOperateCamera(); clearSelection(); updateEverything(); renderAll(); }
+setFloor(0);
+
+function setToggleVisual(id, on){ const el=document.getElementById(id); el.classList.toggle('off', !on); el.querySelector('.state').textContent = on ? 'On' : 'Off'; }
+setToggleVisual('thermalToggle', false); setToggleVisual('sensorToggle', false); setToggleVisual('labelToggle', false);
+document.getElementById('thermalToggle').onclick=()=>{ layers.thermal=!layers.thermal; setToggleVisual('thermalToggle', layers.thermal); tutorial.flags.toggledThermal=layers.thermal; refreshVisibility(); checkTutorial(); };
+document.getElementById('sensorToggle').onclick=()=>{ layers.sensors=!layers.sensors; setToggleVisual('sensorToggle', layers.sensors); refreshVisibility(); };
+document.getElementById('labelToggle').onclick=()=>{ layers.labels=!layers.labels; setToggleVisual('labelToggle', layers.labels); refreshVisibility(); };
+
+document.getElementById('operateModeBtn').onclick=()=>setMode('operate');
+document.getElementById('buildModeBtn').onclick=()=>setMode('build');
+document.getElementById('orbitViewBtn').onclick=()=>setViewMode('orbit');
+document.getElementById('walkViewBtn').onclick=()=>setViewMode('walk');
+document.getElementById('rotateSelectedBtn').onclick=()=>rotateSelected();
+document.getElementById('deleteSelectedBtn').onclick=()=>deleteSelected();
+document.getElementById('rotateBtn').onclick=()=>rotateSelected();
+document.getElementById('deleteBtn').onclick=()=>deleteSelected();
+document.getElementById('faultBtn').onclick=()=>injectFault();
+document.getElementById('resetBtn').onclick=()=>{ if(confirm('Reset to the starter four-floor data center?')){ seed(); renderAll(); clearSelection(); updateEverything(); setMode('operate'); setFloor(0); toast('Layout reset.'); }};
+document.getElementById('ackBtn').onclick=()=>ackSelected();
+document.getElementById('startTutorialBtn').onclick=()=>startTutorial();
+document.getElementById('tutorialSkipBtn').onclick=()=>stopTutorial();
+document.getElementById('tutorialNextBtn').onclick=()=>advanceTutorial(true);
+document.getElementById('enterWalkBtn').onclick=()=>{ walkStarted=true; document.getElementById('walkOverlay').style.display='none'; setWalkSpawn(); if(renderer.domElement.requestPointerLock){ try{ renderer.domElement.requestPointerLock(); }catch(e){} } refreshUiState(); };
+
+const nameInput=document.getElementById('nameInput'); const statusInput=document.getElementById('statusInput'); const heatInput=document.getElementById('heatInput'); const powerInput=document.getElementById('powerInput');
+[nameInput, statusInput, heatInput, powerInput].forEach(el=>el.addEventListener('input', ()=>{ if(!selected || mode!=='build') return; selected.name=nameInput.value; selected.status=statusInput.value; selected.heat=+heatInput.value || 0; selected.power=+powerInput.value || 0; selected.telemetry.power=selected.power; selected.telemetry.heat=selected.heat; renderFloor(activeFloor); updateEverything(); }));
+
+function setMode(nextMode){ mode=nextMode; if(mode==='build'){ viewMode='orbit'; tutorial.flags.switchedToBuild=true; configureBuildCamera(); buildPreviewMesh(); } else { tutorial.flags.returnedOperate=true; removePreviewMesh(); configureOperateCamera(); } refreshUiState(); checkTutorial(); }
+function setViewMode(next){ if(mode!=='operate') return; viewMode=next; if(viewMode==='walk'){ document.getElementById('walkOverlay').style.display = walkStarted ? 'none':'flex'; setWalkSpawn(); } else { document.exitPointerLock?.(); configureOperateCamera(); } refreshUiState(); }
+function configureBuildCamera(){ orbit.enabled=true; orbit.minPolarAngle=.76; orbit.maxPolarAngle=.76; orbit.minAzimuthAngle=-Math.PI/4; orbit.maxAzimuthAngle=-Math.PI/4; camera.position.set(32, activeFloor*FLOOR_GAP + 22, 32); orbit.target.set(0, activeFloor*FLOOR_GAP + 1.3, 0); }
+function configureOperateCamera(){ orbit.enabled=true; orbit.minPolarAngle=.2; orbit.maxPolarAngle=Math.PI/2.03; orbit.minAzimuthAngle=-Infinity; orbit.maxAzimuthAngle=Infinity; camera.position.set(28, activeFloor*FLOOR_GAP + 16, 28); orbit.target.set(0, activeFloor*FLOOR_GAP + 1.5, 0); document.getElementById('walkOverlay').style.display='none'; }
+function setWalkSpawn(){ camera.position.set(0, activeFloor*FLOOR_GAP + WALK_EYE, 9.2); yaw=Math.PI; pitch=0; applyLook(); }
+function refreshVisibility(){ floorGroups.forEach((g,idx)=>g.visible=idx===activeFloor); sensorGroups.forEach((g,idx)=>g.visible=mode==='operate' && viewMode!=='walk' && layers.sensors && idx===activeFloor); labelGroups.forEach((g,idx)=>g.visible=mode==='operate' && viewMode!=='walk' && layers.labels && idx===activeFloor); gridHelpers.forEach((g,idx)=>g.visible=mode==='build' && idx===activeFloor); heatOverlays.forEach((arr,idx)=>arr.forEach(h=>h.visible=mode==='operate' && viewMode!=='walk' && layers.thermal && idx===activeFloor)); document.getElementById('thermalLegend').style.display = mode==='operate' && viewMode!=='walk' && layers.thermal ? 'block':'none'; }
+function refreshUiState(){
+  document.getElementById('operateModeBtn').classList.toggle('active', mode==='operate');
+  document.getElementById('buildModeBtn').classList.toggle('active', mode==='build');
+  document.getElementById('orbitViewBtn').classList.toggle('active', viewMode==='orbit');
+  document.getElementById('walkViewBtn').classList.toggle('active', viewMode==='walk');
+  document.getElementById('operateExploreCard').classList.toggle('hidden', mode!=='operate');
+  document.getElementById('buildStudio').classList.toggle('hidden', mode!=='build');
+  document.getElementById('layersCard').classList.toggle('hidden', mode!=='operate');
+  document.getElementById('faultBtn').classList.toggle('hidden', mode!=='operate');
+  document.getElementById('walkHud').style.display = mode==='operate' && viewMode==='walk' ? 'block':'none';
+  document.getElementById('crosshair').style.display = mode==='operate' && viewMode==='walk' ? 'block':'none';
+  document.getElementById('sceneModeBadge').textContent = mode==='build' ? 'BUILD · ISOMETRIC' : `OPERATE · ${viewMode==='walk' ? 'WALKTHROUGH' : 'ORBIT'}`;
+  document.getElementById('editFields').classList.toggle('hidden', mode!=='build' || !!selectedSensor);
+  document.getElementById('rotateBtn').classList.toggle('hidden', mode!=='build' || !!selectedSensor);
+  document.getElementById('deleteBtn').classList.toggle('hidden', mode!=='build' || !!selectedSensor);
+  document.getElementById('ackBtn').classList.toggle('hidden', mode==='build');
+  if(mode==='build') updateSelectionEmptyText('Click the floor to place the selected asset, or click an asset to edit / move it.');
+  else if(viewMode==='walk') updateSelectionEmptyText('Walkthrough is for exploring. Switch back to Orbit to inspect assets.');
+  else updateSelectionEmptyText('Click a rack, cooling unit, power asset, or sensor point to inspect it.');
+  refreshVisibility();
+}
+
+function buildPreviewMesh(){ removePreviewMesh(); if(mode!=='build') return; previewMesh = buildAssetMesh(activeTool, {}, true); previewMesh.visible=false; floorGroups[activeFloor].add(previewMesh); }
+function removePreviewMesh(){ if(previewMesh && previewMesh.parent) previewMesh.parent.remove(previewMesh); previewMesh=null; }
+
+function clearSelection(){ selected=null; selectedSensor=null; syncSelection(); }
+function updateSelectionEmptyText(text){ document.getElementById('selectionEmpty').textContent=text; }
+function statusClass(status){ return status==='Critical' ? 'statusChip crit' : status==='Warning' ? 'statusChip warn' : status==='Maintenance' ? 'statusChip' : 'statusChip good'; }
+function syncSelection(){
+  const empty=document.getElementById('selectionEmpty'); const panel=document.getElementById('selectionPanel');
+  if(!selected && !selectedSensor){ empty.classList.remove('hidden'); panel.classList.add('hidden'); return; }
+  empty.classList.add('hidden'); panel.classList.remove('hidden');
+  if(selected){ const floorIdx=findObjectFloor(selected.id); document.getElementById('selType').textContent = assets[selected.type].label; document.getElementById('selTitle').textContent = selected.name; document.getElementById('selSubtitle').textContent = `Floor ${floorIdx+1} · ${selected.type}`; const chip=document.getElementById('selStatusChip'); chip.className=statusClass(selected.status); chip.textContent=selected.status; nameInput.value=selected.name; statusInput.value=selected.status; heatInput.value=selected.heat; powerInput.value=selected.power; const t=selected.telemetry; document.getElementById('selStats').innerHTML = `
+      <div class="stat"><span>Power</span><b>${t.power.toFixed(1)} kW</b></div>
+      <div class="stat"><span>Inlet / outlet</span><b>${t.inletTemp.toFixed(1)} / ${t.outletTemp.toFixed(1)} °C</b></div>
+      <div class="stat"><span>Utilization</span><b>${Math.round(t.utilization*100)}%</b></div>
+      <div class="stat"><span>Airflow</span><b>${t.airflow.toFixed(1)} m/s</b></div>
+      <div class="stat"><span>Fan speed</span><b>${Math.round(t.fanSpeed)}%</b></div>
+      <div class="stat"><span>Health</span><b>${Math.round(t.health)}%</b></div>
+      <div class="stat"><span>Alarm acknowledged</span><b>${t.acknowledged ? 'Yes':'No'}</b></div>`; drawTrend(t.trend, '#58a6ff');
+  } else { document.getElementById('selType').textContent='Sensor'; document.getElementById('selTitle').textContent=selectedSensor.name; document.getElementById('selSubtitle').textContent=`Floor ${selectedSensor.floor+1} · temperature / humidity`; const chip=document.getElementById('selStatusChip'); chip.className=statusClass(selectedSensor.status); chip.textContent=selectedSensor.status; document.getElementById('selStats').innerHTML = `
+      <div class="stat"><span>Temperature</span><b>${selectedSensor.temp.toFixed(1)} °C</b></div>
+      <div class="stat"><span>Humidity</span><b>${selectedSensor.humidity.toFixed(1)}%</b></div>
+      <div class="stat"><span>Airflow</span><b>${selectedSensor.airflow.toFixed(1)} m/s</b></div>
+      <div class="stat"><span>Position</span><b>x ${selectedSensor.x}, z ${selectedSensor.z}</b></div>`; drawTrend(Array.from({length:30},(_,i)=>selectedSensor.temp + Math.sin(i*.4)*.32), '#38bdf8'); }
+}
+function rotateSelected(){ if(!selected || mode!=='build') return; selected.rot=(selected.rot+Math.PI/2)%(Math.PI*2); renderFloor(activeFloor); updateEverything(); tutorial.flags.rotated=true; checkTutorial(); }
+function deleteSelected(){ if(!selected || mode!=='build') return; model.floors[activeFloor].objects=model.floors[activeFloor].objects.filter(o=>o.id!==selected.id); selected=null; renderFloor(activeFloor); updateEverything(); syncSelection(); }
+function ackSelected(){ if(selected){ selected.telemetry.acknowledged=true; if(selected.status==='Warning') selected.status='Normal'; if(selected.status==='Critical') selected.status='Maintenance'; renderFloor(findObjectFloor(selected.id) ?? activeFloor); updateEverything(); syncSelection(); toast('Alarm acknowledged.'); } if(selectedSensor){ selectedSensor.status='Normal'; syncSelection(); updateEverything(); toast('Sensor alarm acknowledged.'); } }
+function injectFault(){ const candidates=model.floors[activeFloor].objects.filter(o=>['rack','gpu','crac'].includes(o.type)); if(!candidates.length) return; const obj=candidates[Math.floor(Math.random()*candidates.length)]; obj.status='Critical'; obj.telemetry.inletTemp += rand(5,8); obj.telemetry.health = clamp(obj.telemetry.health - rand(4,12), 40, 100); obj.telemetry.acknowledged=false; renderFloor(activeFloor); updateEverything(); tutorial.flags.injectedFault=true; checkTutorial(); toast(`Injected fault on ${obj.name}.`, true); }
+
+// ---------- picking ----------
+function screenMouse(event){ const r=renderer.domElement.getBoundingClientRect(); mouse.x=((event.clientX-r.left)/r.width)*2-1; mouse.y=-((event.clientY-r.top)/r.height)*2+1; }
+function rayFloor(event){ screenMouse(event); raycaster.setFromCamera(mouse, camera); return raycaster.intersectObject(floorPlanes[activeFloor], false)[0]; }
+function pickAsset(event){ screenMouse(event); raycaster.setFromCamera(mouse, camera); const hits=raycaster.intersectObjects(floorGroups[activeFloor].children, true); for(const h of hits){ let p=h.object; while(p && !p.userData.objectId) p=p.parent; if(p && p.userData.objectId) return p; } return null; }
+function pickSensor(event){ screenMouse(event); raycaster.setFromCamera(mouse, camera); const hits=raycaster.intersectObjects(sensorGroups[activeFloor].children, true); for(const h of hits){ let p=h.object; while(p && !p.userData.sensor) p=p.parent; if(p && p.userData.sensor) return p; } return null; }
+
+renderer.domElement.addEventListener('pointerdown', event=>{
+  if(mode==='operate' && viewMode==='walk'){
+    if(renderer.domElement.requestPointerLock){ try{ renderer.domElement.requestPointerLock(); }catch(e){} }
+    if(!pointerLocked){ dragLook=true; lastLookX=event.clientX; lastLookY=event.clientY; }
+    return;
+  }
+  if(mode==='operate' && layers.sensors){ const sensorNode=pickSensor(event); if(sensorNode){ selectedSensor=sensorNode.userData.sensor; selected=null; syncSelection(); return; } }
+  const hitAsset=pickAsset(event);
+  if(mode==='operate' && hitAsset){ const obj=model.floors[activeFloor].objects.find(o=>o.id===hitAsset.userData.objectId) || null; if(obj){ selected=obj; selectedSensor=null; tutorial.flags.clickedAsset=true; syncSelection(); checkTutorial(); } return; }
+  if(mode!=='build') return;
+  if(hitAsset){ selected=model.floors[activeFloor].objects.find(o=>o.id===hitAsset.userData.objectId) || null; selectedSensor=null; syncSelection(); const floorHit=rayFloor(event); if(floorHit && selected){ dragging=selected; dragOffset.set(selected.x-floorHit.point.x, 0, selected.z-floorHit.point.z); } return; }
+  const hit=rayFloor(event); if(!hit) return; let [x,z]=clampPos(snap(hit.point.x), snap(hit.point.z)); selected=placeObject(activeTool, x, z, activeFloor, rotation); selectedSensor=null; syncSelection();
+});
+renderer.domElement.addEventListener('pointermove', event=>{
+  if(mode==='operate' && viewMode==='walk'){
+    if(pointerLocked){ yaw -= event.movementX * .0022; pitch -= event.movementY * .0022; pitch=THREE.MathUtils.clamp(pitch,-Math.PI/2.2,Math.PI/2.2); applyLook(); }
+    else if(dragLook){ yaw -= (event.clientX-lastLookX)*.006; pitch -= (event.clientY-lastLookY)*.006; lastLookX=event.clientX; lastLookY=event.clientY; pitch=THREE.MathUtils.clamp(pitch,-Math.PI/2.2,Math.PI/2.2); applyLook(); }
+    return;
+  }
+  const hit=rayFloor(event); if(hit) document.getElementById('coords').textContent=`x ${hit.point.x.toFixed(1)} · z ${hit.point.z.toFixed(1)} · floor ${activeFloor+1}`;
+  if(mode==='build' && previewMesh && hit && !dragging){ let [x,z]=clampPos(snap(hit.point.x), snap(hit.point.z)); previewMesh.visible=true; previewMesh.position.set(x,0,z); previewMesh.rotation.y=rotation; }
+  if(mode==='build' && dragging && hit){ let [x,z]=clampPos(snap(hit.point.x + dragOffset.x), snap(hit.point.z + dragOffset.z)); dragging.x=x; dragging.z=z; renderFloor(activeFloor); updateEverything(); }
+});
+window.addEventListener('pointerup', ()=>{ dragging=null; dragLook=false; });
+renderer.domElement.addEventListener('mouseleave', ()=>dragLook=false);
+
+// ---------- telemetry ----------
+function updateTelemetry(dt){ telemetryAccumulator += dt; if(!liveTelemetry) return false; if(telemetryAccumulator < .45) return false; dt=telemetryAccumulator; telemetryAccumulator=0; state.time += dt; state.alarms=[]; let totalPower=0, totalTemp=0, tempCount=0;
+  model.floors.forEach((floor, floorIdx)=>{
+    const coolingCount=floor.objects.filter(o=>o.type==='crac').length; const coolingBoost = coolingCount*.35 + (floorIdx===2 ? -.3 : 0);
+    floor.objects.forEach(obj=>{ const t=obj.telemetry; if(obj.type==='rack' || obj.type==='gpu'){ const swing=obj.type==='gpu' ? .22 : .15; t.utilization=clamp(t.utilization + rand(-swing,swing)*dt, .15, .98); t.power=assets[obj.type].basePower * (.55 + t.utilization * (obj.type==='gpu' ? .95 : .65)); t.heat=t.power*.92; t.inletTemp=clamp((obj.type==='gpu'?24.5:22.7) + (1.0-coolingBoost) + t.utilization*5.6 + rand(-.3,.4), 19.5, 38); t.outletTemp=t.inletTemp + (obj.type==='gpu' ? 9.5 : 7.4) + t.utilization*2.6; t.airflow=clamp(2.0 + t.utilization*1.8 + rand(-.08,.08), 1.6, 4.8); t.fanSpeed=clamp(45 + t.utilization*48 + rand(-2,2), 35, 100); t.health=clamp(t.health + rand(-.15,.05), 70, 100); }
+      else if(obj.type==='crac'){ t.power=6.5+rand(-.4,.6); t.inletTemp=20.2+rand(-.4,.4); t.outletTemp=14.8+rand(-.3,.3); t.airflow=4.5+rand(-.3,.3); t.fanSpeed=48+rand(-5,5); t.health=clamp(t.health + rand(-.05,.04), 80, 100); }
+      else if(obj.type==='pdu' || obj.type==='ups'){ t.power=assets[obj.type].basePower + rand(-.3,.3); t.inletTemp=21+rand(-.3,.4); t.outletTemp=t.inletTemp+3.8+rand(-.2,.3); t.airflow=1.1+rand(-.08,.08); t.fanSpeed=35+rand(-3,3); t.health=clamp(t.health + rand(-.04,.03), 85, 100); }
+      else if(obj.type==='chiller'){ t.power=22+rand(-1.2,1.2); t.inletTemp=15+rand(-.4,.4); t.outletTemp=8.6+rand(-.2,.2); t.airflow=0; t.fanSpeed=58+rand(-3,3); t.health=clamp(t.health + rand(-.03,.02), 88, 100); } else { t.power=0; }
+      t.trend.push(t.power); if(t.trend.length>30) t.trend.shift();
+      if((obj.type==='rack'||obj.type==='gpu') && t.inletTemp>31.5){ obj.status='Critical'; state.alarms.push({severity:'Critical', title:'High inlet temperature', detail:`${obj.name} on Floor ${floorIdx+1} at ${t.inletTemp.toFixed(1)} °C`}); }
+      else if((obj.type==='rack'||obj.type==='gpu') && t.inletTemp>28.8){ obj.status='Warning'; state.alarms.push({severity:'Warning', title:'Thermal threshold approaching', detail:`${obj.name} on Floor ${floorIdx+1} at ${t.inletTemp.toFixed(1)} °C`}); }
+      else if(obj.status!=='Maintenance'){ obj.status='Normal'; }
+      totalPower += t.power; if(isFinite(t.inletTemp)){ totalTemp += t.inletTemp; tempCount++; }
+    });
+    sensorGroups[floorIdx].children.forEach(node=>{ const s=node.userData.sensor; const nearby=floor.objects.filter(o=>Math.abs(o.z-s.z)<1.9 && Math.abs(o.x-s.x)<4.2 && (o.type==='rack'||o.type==='gpu')); const avgUtil=nearby.length ? nearby.reduce((sum,o)=>sum+o.telemetry.utilization,0)/nearby.length : .35; s.temp=clamp(21.2 + avgUtil*8.0 + (s.z===0 ? 1.4 : .4) + rand(-.3,.35), 19, 35); s.humidity=clamp(44+rand(-2.5,2.5), 32, 58); s.airflow=clamp(2.1 + coolingCount*.35 - avgUtil*.3 + rand(-.15,.15), 1.2, 4.5); s.status = s.temp>30.5 ? 'Critical' : s.temp>27.8 ? 'Warning' : 'Normal'; if(s.status!=='Normal') state.alarms.push({severity:s.status, title:'Sensor alarm', detail:`${s.name} on Floor ${floorIdx+1} reads ${s.temp.toFixed(1)} °C`}); });
+  });
+  state.history.facilityPower.push(totalPower); state.history.avgTemp.push(tempCount ? totalTemp/tempCount : 0); if(state.history.facilityPower.length>50) state.history.facilityPower.shift(); if(state.history.avgTemp.length>50) state.history.avgTemp.shift(); renderAll(); return true; }
+function updateHeatOverlayForFloor(floorIndex){ const rows=[-6,0,6]; const floor=model.floors[floorIndex]; rows.forEach((z,rowIdx)=>{ const rowObjs=floor.objects.filter(o=>(o.type==='rack'||o.type==='gpu') && Math.abs(o.z-z)<1.2); const avg=rowObjs.length ? rowObjs.reduce((s,o)=>s+o.telemetry.inletTemp,0)/rowObjs.length : 22; const t=clamp((avg-21)/12,0,1); const color=new THREE.Color().setHSL(.6 - t*.56, .9, .48); const overlay=heatOverlays[floorIndex][rowIdx]; overlay.material.color.copy(color); overlay.material.opacity = layers.thermal ? (.1 + t*.28) : 0; }); }
+function renderAlarmList(){ const el=document.getElementById('alarmList'); if(!state.alarms.length){ el.className='hint'; el.textContent='No alarms.'; return; } el.className=''; el.innerHTML=state.alarms.slice(0,10).map(a=>`<div class="alarmItem ${a.severity.toLowerCase()}"><div class="title">${a.severity}: ${a.title}</div><div class="meta">${a.detail}</div></div>`).join(''); }
+function updateStats(){ const objs=model.floors[activeFloor].objects; const power=objs.reduce((s,o)=>s+(o.telemetry?.power||0),0); const heat=objs.reduce((s,o)=>s+(o.telemetry?.heat||0),0); const racks=objs.filter(o=>o.type==='rack'||o.type==='gpu').length; const warn=objs.filter(o=>o.status==='Warning').length; const crit=objs.filter(o=>o.status==='Critical').length; const inletVals=objs.filter(o=>o.telemetry && isFinite(o.telemetry.inletTemp)).map(o=>o.telemetry.inletTemp); const avgInlet=inletVals.length ? inletVals.reduce((a,b)=>a+b,0)/inletVals.length : 0; const pue=(1.22 + Math.min(.35, power/4200*.18)).toFixed(2);
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><span>Objects</span><b>${objs.length}</b></div>
+    <div class="stat"><span>Racks</span><b>${racks}</b></div>
+    <div class="stat"><span>Live facility power</span><b>${power.toFixed(1)} kW</b></div>
+    <div class="stat"><span>Live heat load</span><b>${heat.toFixed(1)} kW</b></div>
+    <div class="stat"><span>Average inlet temperature</span><b>${avgInlet.toFixed(1)} °C</b></div>
+    <div class="stat"><span>Estimated PUE</span><b>${pue}</b></div>
+    <div class="stat"><span>Warnings / critical</span><b>${warn} / ${crit}</b></div>`;
+  const totalPower=state.history.facilityPower.length ? state.history.facilityPower[state.history.facilityPower.length-1] : power; const totalTemp=state.history.avgTemp.length ? state.history.avgTemp[state.history.avgTemp.length-1] : avgInlet; document.getElementById('chipPower').textContent=`${totalPower.toFixed(0)} kW`; document.getElementById('chipTemp').textContent=`${totalTemp.toFixed(1)} °C`; document.getElementById('chipAlerts').textContent=`${state.alarms.length}`; document.getElementById('chipPue').textContent=pue; }
+function updateEverything(){ for(let f=0; f<FLOOR_COUNT; f++) updateHeatOverlayForFloor(f); updateStats(); renderAlarmList(); syncSelection(); }
+
+// ---------- trend chart ----------
+function drawTrend(values, color){ const c=document.getElementById('trendCanvas'); const ctx=c.getContext('2d'); const w=c.width, h=c.height; ctx.clearRect(0,0,w,h); ctx.fillStyle='#0d131a'; ctx.fillRect(0,0,w,h); ctx.strokeStyle='rgba(120,140,160,.25)'; ctx.lineWidth=1; for(let i=1;i<5;i++){ const y=(h/5)*i; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); } if(!values || !values.length) return; const min=Math.min(...values), max=Math.max(...values), span=(max-min)||1; ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath(); values.forEach((v,i)=>{ const x=(i/(values.length-1))*(w-12)+6; const y=h-10-((v-min)/span)*(h-20); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke(); ctx.fillStyle='#9fb0c1'; ctx.font='11px sans-serif'; ctx.fillText(`max ${max.toFixed(1)}`, 8, 12); ctx.fillText(`min ${min.toFixed(1)}`, 8, h-6); }
+
+// ---------- walk mode ----------
+const euler = new THREE.Euler(0,0,0,'YXZ'); const tempForward=new THREE.Vector3(); const tempRight=new THREE.Vector3(); const walkVel=new THREE.Vector3();
+function applyLook(){ euler.set(pitch,yaw,0); camera.quaternion.setFromEuler(euler); }
+function intersectsBox(x,z,b){ return Math.abs(x-b.x) <= (b.w/2 + PLAYER_RADIUS) && Math.abs(z-b.z) <= (b.d/2 + PLAYER_RADIUS); }
+function moveWithCollision(dx,dz){ const boxes=collisionBoxesByFloor[activeFloor]; let nx=camera.position.x+dx, nz=camera.position.z; if(!boxes.some(b=>intersectsBox(nx,nz,b))) camera.position.x=THREE.MathUtils.clamp(nx,-FLOOR_W/2+PLAYER_RADIUS,FLOOR_W/2-PLAYER_RADIUS); nx=camera.position.x; nz=camera.position.z+dz; if(!boxes.some(b=>intersectsBox(nx,nz,b))) camera.position.z=THREE.MathUtils.clamp(nz,-FLOOR_D/2+PLAYER_RADIUS,FLOOR_D/2-PLAYER_RADIUS); }
+function walkUpdate(dt){ if(!(mode==='operate' && viewMode==='walk')) return; const speed=(keys.ShiftLeft||keys.ShiftRight) ? 8.2 : 4.2; const f=(keys.KeyW?1:0)-(keys.KeyS?1:0); const s=(keys.KeyD?1:0)-(keys.KeyA?1:0); tempForward.set(Math.sin(yaw),0,Math.cos(yaw)).multiplyScalar(-f); tempRight.set(Math.cos(yaw),0,Math.sin(yaw)).multiplyScalar(s); walkVel.copy(tempForward).add(tempRight); if(walkVel.lengthSq()>0) walkVel.normalize().multiplyScalar(speed*dt); moveWithCollision(walkVel.x, walkVel.z); camera.position.y=activeFloor*FLOOR_GAP + WALK_EYE; document.getElementById('coords').textContent=`x ${camera.position.x.toFixed(1)} · z ${camera.position.z.toFixed(1)} · floor ${activeFloor+1}`; }
+document.addEventListener('pointerlockchange', ()=>{ pointerLocked=document.pointerLockElement===renderer.domElement; if(!pointerLocked) dragLook=false; });
+document.addEventListener('pointerlockerror', ()=>{ pointerLocked=false; toast('Mouse capture was blocked. WASD still works; hold left mouse and drag to look.'); });
+window.addEventListener('keydown', event=>{ keys[event.code]=true; if(event.code==='KeyR' && mode==='build') rotateSelected(); if((event.code==='Delete' || event.code==='Backspace') && mode==='build') deleteSelected(); if(event.code==='Escape' && mode==='build') clearSelection(); });
+window.addEventListener('keyup', event=>{ keys[event.code]=false; });
+
+// ---------- tutorial ----------
+function startTutorial(){ tutorial.active=true; tutorial.current=0; tutorial.flags={ clickedAsset:false, injectedFault:false, toggledThermal:false, switchedToBuild:false, assetChosen:false, placedAsset:false, rotated:false, returnedOperate:false }; document.getElementById('tutorialOverlay').style.display='block'; renderTutorial(); }
+function stopTutorial(){ tutorial.active=false; document.getElementById('tutorialOverlay').style.display='none'; clearTimeout(tutorial.autoAdvanceTimer); }
+function advanceTutorial(force=false){ if(!tutorial.active) return; if(!force && !tutorial.steps[tutorial.current].complete()) return; tutorial.current++; if(tutorial.current >= tutorial.steps.length){ stopTutorial(); toast('Tutorial complete.'); return; } renderTutorial(); }
+function renderTutorial(){ if(!tutorial.active) return; const step=tutorial.steps[tutorial.current]; const target=document.querySelector(step.target); const overlay=document.getElementById('tutorialOverlay'); const focus=document.getElementById('tutorialFocus'); const card=document.getElementById('tutorialCard'); document.getElementById('tutorialTitle').textContent=step.title; document.getElementById('tutorialBody').textContent=step.body; document.getElementById('tutorialMeta').textContent=`Step ${tutorial.current+1} of ${tutorial.steps.length}`; const r=(target || viewportWrap).getBoundingClientRect(); const base=overlay.getBoundingClientRect(); const left=r.left-base.left, top=r.top-base.top, width=r.width, height=r.height; focus.style.left=`${left-6}px`; focus.style.top=`${top-6}px`; focus.style.width=`${width+12}px`; focus.style.height=`${height+12}px`; const maxW=window.innerWidth; const maxH=window.innerHeight; let preferredLeft=left + width + 14; if(preferredLeft > maxW - 336) preferredLeft = Math.max(12, left - 330); const cardLeft = Math.min(Math.max(preferredLeft, 12), maxW - 336); const cardTop = Math.min(Math.max(top, 12), maxH - 220); card.style.left = `${cardLeft}px`; card.style.top = `${cardTop}px`; const nextBtn=document.getElementById('tutorialNextBtn'); nextBtn.disabled=!step.complete(); nextBtn.style.opacity=step.complete() ? '1' : '.55'; }
+function checkTutorial(){ if(!tutorial.active) return; renderTutorial(); const step=tutorial.steps[tutorial.current]; if(step.complete()){ clearTimeout(tutorial.autoAdvanceTimer); tutorial.autoAdvanceTimer=setTimeout(()=>advanceTutorial(true), 600); } }
+
+// ---------- animate ----------
+function animateIndicators(time){
+  assetIndicators.forEach(ind=>{ if(!ind.mesh || !ind.mesh.material) return; const status=ind.getStatus ? ind.getStatus() : 'Normal'; let base=1.08; if(status==='Critical') base=1.55 + Math.sin(time*6)*.85; else if(status==='Warning') base=1.25 + Math.sin(time*3)*.22; else if(status==='Maintenance') base=.95 + Math.sin(time*2.4)*.14; else base=1.1 + Math.sin(time*2.2)*.06; ind.mesh.material.emissiveIntensity=base; });
+  sensorGroups.forEach(g=>g.children.forEach((node,idx)=>{ const sensor=node.userData.sensor; const beacon=sensor.beacon; if(!beacon || !beacon.material) return; if(sensor.status==='Critical'){ beacon.material.color.setHex(0xff7b7b); beacon.material.emissive.setHex(0x7f1d1d); beacon.material.emissiveIntensity=1.35 + Math.sin(time*5+idx)*.6; }
+    else if(sensor.status==='Warning'){ beacon.material.color.setHex(0xffd166); beacon.material.emissive.setHex(0x7c4a03); beacon.material.emissiveIntensity=1.1 + Math.sin(time*3+idx)*.3; }
+    else { beacon.material.color.setHex(0x67e8f9); beacon.material.emissive.setHex(0x0c4a6e); beacon.material.emissiveIntensity=1.0 + Math.sin(time*2+idx)*.08; }
+    node.scale.setScalar(1 + Math.sin(time*3+idx)*.04);
+  }));
+}
+function resize(){ const r=viewportWrap.getBoundingClientRect(); renderer.setSize(r.width, r.height, false); camera.aspect=r.width/r.height; camera.updateProjectionMatrix(); if(tutorial.active) renderTutorial(); }
+window.addEventListener('resize', resize); resize();
+function animate(){ requestAnimationFrame(animate); const dt=Math.min(.05, clock.getDelta()); const telemetryChanged=updateTelemetry(dt); if(mode==='operate' && viewMode==='walk') walkUpdate(dt); else orbit.update(); animateIndicators(performance.now()/1000); if(telemetryChanged) updateEverything(); renderer.render(scene, camera); }
+
+renderAll(); refreshUiState(); updateEverything(); setMode('operate'); animate();
+</script>
+</body>
+</html>
