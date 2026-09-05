@@ -25,7 +25,13 @@ if (demoScenario.topology.pumpCount !== 1) errors.push("Public reference must co
 if (demoScenario.topology.heatExchangerCount !== 1) errors.push("Public reference must contain one heat exchanger.");
 if (demoScenario.topology.ratedCoolingCapacityKw !== 60) errors.push("Rated cooling capacity must remain 60 kW.");
 if (demoScenario.topology.referenceWaterSideHeatRemovalKw !== 52.67) errors.push("Water-side heat-removal reference must remain 52.67 kW.");
-if (demoScenario.topology.ratedCoolingCapacityKw === demoScenario.topology.referenceWaterSideHeatRemovalKw) errors.push("Water-side heat removal must not be presented as rated cooling capacity.");
+// Read through widened bindings: the fixture is `as const`, so comparing the
+// two literal types directly is a compile error rather than a runtime guard.
+// The check has to survive a future edit that makes them equal, which is
+// exactly the mistake it exists to catch.
+const ratedCapacityKw: number = demoScenario.topology.ratedCoolingCapacityKw;
+const waterSideHeatKw: number = demoScenario.topology.referenceWaterSideHeatRemovalKw;
+if (ratedCapacityKw === waterSideHeatKw) errors.push("Water-side heat removal must not be presented as rated cooling capacity.");
 if (demoScenario.topology.referenceLoopDeltaK !== 9) errors.push("Reference loop delta must remain 9 K.");
 if (demoScenario.savingsEstimatePercent !== null) errors.push("The public demo cannot contain a savings estimate without validated comparison evidence.");
 if (demoMetadata.title !== "Wattr Cooling Sandbox") errors.push("Demo metadata title must identify the standalone sandbox.");

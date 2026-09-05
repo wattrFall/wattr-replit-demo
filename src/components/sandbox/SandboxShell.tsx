@@ -117,7 +117,16 @@ export function SandboxShell() {
           ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it.`
           : null;
 
-  const statusLine = [modeHint, sceneSummary].filter(Boolean).join(" ");
+  /**
+   * What gets *announced*. Only the short, event-driven half: what the pointer
+   * will do, and why something was refused.
+   *
+   * The scene description and the readout deliberately stay out of this. They
+   * carry PUE, inlet temperatures and power, republished ten times a second,
+   * and a polite live region containing them made a screen reader recite the
+   * numbers continuously while the model settled.
+   */
+  const announcement = notice ?? modeHint ?? "";
 
   return (
     <div className="mx-auto w-full max-w-[1240px] px-4 sm:px-6">
@@ -153,7 +162,12 @@ export function SandboxShell() {
             <Palette />
           </div>
 
-          <div className="relative min-h-[340px] flex-1 overflow-hidden rounded-[10px] border border-[var(--sbx-border)] sm:min-h-[440px] lg:min-h-[520px]">
+          <div
+            className="relative min-h-[340px] flex-1 overflow-hidden rounded-[10px] border border-[var(--sbx-border)] sm:min-h-[440px] lg:min-h-[520px]"
+            role="group"
+            aria-label="Data centre floor plan"
+            aria-describedby="sandbox-scene-summary"
+          >
             <Suspense
               fallback={
                 <div className="absolute inset-0 grid place-items-center bg-[var(--sbx-surface-0)]">
@@ -190,12 +204,14 @@ export function SandboxShell() {
         </div>
 
         <footer className="border-t border-[var(--sbx-border)] px-4 py-2.5">
-          <p
-            role="status"
-            aria-live="polite"
-            className="font-[family-name:var(--sbx-font-mono)] text-[11px] leading-[1.5] text-[var(--sbx-text-faint)]"
-          >
-            {notice ?? statusLine}
+          <p className="font-[family-name:var(--sbx-font-mono)] text-[11px] leading-[1.5] text-[var(--sbx-text-faint)]">
+            <span role="status" aria-live="polite">
+              {announcement}
+            </span>{" "}
+            {/* The canvas is aria-hidden, so this is its text equivalent. It is
+                readable on demand — it is referenced by the canvas region — but
+                never announced, because it changes continuously. */}
+            <span id="sandbox-scene-summary">{sceneSummary}</span>
           </p>
         </footer>
       </div>

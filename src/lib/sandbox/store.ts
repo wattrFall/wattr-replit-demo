@@ -21,9 +21,18 @@ import type {
   SandboxLayout,
 } from "./types";
 
-/** Monotonic id source. Reset with the layout so presets are reproducible. */
+/**
+ * Monotonic id source, rewound whenever the layout is replaced.
+ *
+ * Without the rewind, ids keep climbing across resets, so the same preset
+ * loaded twice in one session produces different ids — which breaks any
+ * comparison, snapshot or replay that identifies equipment by id.
+ */
 let idCounter = 0;
 const nextId = (prefix: string) => `${prefix}-${++idCounter}`;
+const rewindIds = () => {
+  idCounter = 0;
+};
 
 export interface SandboxState {
   items: SandboxItem[];
@@ -185,16 +194,25 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       }),
     })),
 
-  loadLayout: (layout) =>
+  loadLayout: (layout) => {
+    // The layout arrives with its own ids; anything placed afterwards numbers
+    // from the highest it contains, so nothing can collide with it.
+    const highest = layout.items.reduce((max, item) => {
+      const n = Number(item.id.split("-").pop());
+      return Number.isFinite(n) ? Math.max(max, n) : max;
+    }, 0);
+    idCounter = highest;
     set({
       items: layout.items.map((i) => ({ ...i, params: { ...i.params } })),
       connections: layout.connections.map((c) => ({ ...c })),
       selectedId: null,
       mode: { type: "idle" },
       notice: null,
-    }),
+    });
+  },
 
-  reset: () =>
+  reset: () => {
+    rewindIds();
     set({
       items: [],
       connections: [],
@@ -205,5 +223,6 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       inletC: {},
       telemetry: null,
       viewResetNonce: get().viewResetNonce + 1,
-    }),
+    });
+  },
 }));
