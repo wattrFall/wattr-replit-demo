@@ -4,6 +4,7 @@ import { Edges } from "@react-three/drei";
 import { CATALOGUE } from "@/lib/sandbox/catalogue";
 import { useSandboxStore } from "@/lib/sandbox/store";
 import { checkConnection } from "@/lib/sandbox/connections";
+import { wasDragged } from "@/lib/sandbox/pointer";
 import { cellToWorld } from "@/lib/sandbox/geometry";
 import { SBX, heatColour } from "@/lib/sandbox/tokens";
 import { rackHeatFraction } from "@/lib/sandbox/model";
@@ -153,6 +154,8 @@ export function Placeable({
   const accent = linkTarget === "valid" ? SBX.healthy : selected ? SBX.primaryBright : entry.accent;
 
   const handleClick = (event: ThreeEvent<MouseEvent>) => {
+    // A camera drag that ends over a unit is not a click on it.
+    if (wasDragged()) return;
     // Read at event time, not from the render closure — see FloorPicker.
     const current = useSandboxStore.getState().mode;
     if (current.type === "placing") return; // fall through to the floor

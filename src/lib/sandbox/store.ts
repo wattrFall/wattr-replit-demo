@@ -43,6 +43,13 @@ export interface SandboxState {
   inletC: Record<string, number>;
   telemetry: Telemetry | null;
 
+  /**
+   * Bumped to ask the camera to return to its framing. A counter rather than a
+   * boolean so repeated requests each fire, and so the camera rig can live
+   * inside the Canvas while the button lives outside it.
+   */
+  viewResetNonce: number;
+
   select: (id: string | null) => void;
   setMode: (mode: InteractionMode) => void;
   setControlMode: (mode: ControlMode) => void;
@@ -57,6 +64,7 @@ export interface SandboxState {
   reset: () => void;
   notify: (message: string | null) => void;
   publishSim: (inletC: Record<string, number>, telemetry: Telemetry) => void;
+  resetView: () => void;
 }
 
 /** True when every cell of the footprint is inside the floor and unoccupied. */
@@ -89,8 +97,10 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   notice: null,
   inletC: {},
   telemetry: null,
+  viewResetNonce: 0,
 
   publishSim: (inletC, telemetry) => set({ inletC, telemetry }),
+  resetView: () => set((s) => ({ viewResetNonce: s.viewResetNonce + 1 })),
 
   // A refusal notice is transient: any further action clears it, so a stale
   // reason never sits under an unrelated interaction.
@@ -194,5 +204,6 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       notice: null,
       inletC: {},
       telemetry: null,
+      viewResetNonce: get().viewResetNonce + 1,
     }),
 }));

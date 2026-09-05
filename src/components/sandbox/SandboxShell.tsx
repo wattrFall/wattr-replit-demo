@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef } from "react";
-import { RotateCcw } from "lucide-react";
+import { Crosshair, RotateCcw } from "lucide-react";
 import { CATALOGUE, GRID_D, GRID_W, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
 import { useSandboxStore } from "@/lib/sandbox/store";
 import { demoScenario } from "@/lib/demoScenario";
@@ -33,6 +33,7 @@ export function SandboxShell() {
   const beginPlacing = useSandboxStore((s) => s.beginPlacing);
   const setMode = useSandboxStore((s) => s.setMode);
   const reset = useSandboxStore((s) => s.reset);
+  const resetView = useSandboxStore((s) => s.resetView);
 
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
@@ -101,14 +102,22 @@ export function SandboxShell() {
 
   const connectSource = mode.type === "connecting" ? items.find((i) => i.id === mode.fromId) : null;
 
-  const statusLine =
+  /**
+   * What the pointer will do next, if anything. Kept separate from the scene
+   * description below: an armed tool used to replace the whole line, which hid
+   * what had been built at exactly the moment a screen-reader user was building
+   * it — and made the readout unverifiable while placing.
+   */
+  const modeHint =
     mode.type === "placing"
       ? `Placing ${CATALOGUE[mode.kind].label} — click a tile, or press Escape to cancel.`
       : connectSource
         ? `Connecting from ${CATALOGUE[connectSource.kind].label} — click a highlighted target, or press Escape to cancel.`
         : selectedItem
-          ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it. ${sceneSummary}`
-          : sceneSummary;
+          ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it.`
+          : null;
+
+  const statusLine = [modeHint, sceneSummary].filter(Boolean).join(" ");
 
   return (
     <div className="mx-auto w-full max-w-[1240px] px-4 sm:px-6">
@@ -156,6 +165,22 @@ export function SandboxShell() {
             >
               <SandboxCanvas reducedMotion={reducedMotion} />
             </Suspense>
+
+            <div className="pointer-events-none absolute bottom-2.5 right-2.5 flex items-center gap-2">
+              <span className="hidden rounded-[6px] bg-[var(--sbx-surface-0)]/80 px-2 py-1 text-[10px] leading-none text-[var(--sbx-text-faint)] sm:inline">
+                Drag to orbit · right-drag to pan · scroll to zoom
+              </span>
+              <SButton
+                size="sm"
+                variant="ghost"
+                className="pointer-events-auto bg-[var(--sbx-surface-0)]/80"
+                onClick={resetView}
+                aria-label="Recentre the view"
+              >
+                <Crosshair className="h-3.5 w-3.5" aria-hidden="true" />
+                Recentre
+              </SButton>
+            </div>
           </div>
 
           <div className="flex flex-col gap-3 lg:w-[260px]">

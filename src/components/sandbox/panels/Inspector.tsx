@@ -56,6 +56,61 @@ export function Inspector() {
         </div>
       </div>
 
+      <div className="border-b border-[var(--sbx-border-hairline)] px-3.5 py-3">
+        <h4 className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--sbx-text-faint)]">
+          Connections
+        </h4>
+
+        {links.length === 0 ? (
+          <p className="mt-2 text-[11px] leading-[1.5] text-[var(--sbx-text-faint)]">
+            {canFeed.length > 0
+              ? `Not connected. This can feed ${canFeed.map((k) => CATALOGUE[k].label).join(" or ")}.`
+              : "Not connected. Connect a CRAC unit or CDU to this rack."}
+          </p>
+        ) : (
+          <ul className="mt-2 space-y-1">
+            {links.map((link) => {
+              const outgoing = link.fromId === item.id;
+              const other = items.find((i) => i.id === (outgoing ? link.toId : link.fromId));
+              if (!other) return null;
+              return (
+                <li
+                  key={link.id}
+                  className="flex items-center gap-2 rounded-[6px] bg-[var(--sbx-surface-3)] px-2 py-1.5"
+                >
+                  <ArrowRight
+                    className={`h-3 w-3 shrink-0 text-[var(--sbx-text-faint)] ${outgoing ? "" : "rotate-180"}`}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--sbx-text-muted)]">
+                    {outgoing ? "to" : "from"} {CATALOGUE[other.kind].label}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => disconnect(link.id)}
+                    aria-label={`Disconnect ${CATALOGUE[other.kind].label}`}
+                    className="rounded p-0.5 text-[var(--sbx-text-faint)] transition-colors duration-[var(--sbx-motion)] hover:text-[var(--sbx-heat)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sbx-focus)]"
+                  >
+                    <X className="h-3 w-3" aria-hidden="true" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {canFeed.length > 0 && (
+          <SButton
+            variant={connecting ? "primary" : "ghost"}
+            size="sm"
+            className="mt-2 w-full"
+            onClick={() => beginConnecting(item.id)}
+          >
+            <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+            {connecting ? "Pick a target…" : "Connect"}
+          </SButton>
+        )}
+      </div>
       <div className="max-h-[42vh] overflow-y-auto lg:max-h-[360px]">
         <div className="divide-y divide-[var(--sbx-border-hairline)]">
           {entry.params.map((spec) => (
@@ -73,61 +128,6 @@ export function Inspector() {
           ))}
         </div>
 
-        <div className="border-t border-[var(--sbx-border-hairline)] px-3.5 py-3">
-          <h4 className="text-[11px] font-medium uppercase tracking-[0.14em] text-[var(--sbx-text-faint)]">
-            Connections
-          </h4>
-
-          {links.length === 0 ? (
-            <p className="mt-2 text-[11px] leading-[1.5] text-[var(--sbx-text-faint)]">
-              {canFeed.length > 0
-                ? `Not connected. This can feed ${canFeed.map((k) => CATALOGUE[k].label).join(" or ")}.`
-                : "Not connected. Connect a CRAC unit or CDU to this rack."}
-            </p>
-          ) : (
-            <ul className="mt-2 space-y-1">
-              {links.map((link) => {
-                const outgoing = link.fromId === item.id;
-                const other = items.find((i) => i.id === (outgoing ? link.toId : link.fromId));
-                if (!other) return null;
-                return (
-                  <li
-                    key={link.id}
-                    className="flex items-center gap-2 rounded-[6px] bg-[var(--sbx-surface-3)] px-2 py-1.5"
-                  >
-                    <ArrowRight
-                      className={`h-3 w-3 shrink-0 text-[var(--sbx-text-faint)] ${outgoing ? "" : "rotate-180"}`}
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--sbx-text-muted)]">
-                      {outgoing ? "to" : "from"} {CATALOGUE[other.kind].label}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => disconnect(link.id)}
-                      aria-label={`Disconnect ${CATALOGUE[other.kind].label}`}
-                      className="rounded p-0.5 text-[var(--sbx-text-faint)] transition-colors duration-[var(--sbx-motion)] hover:text-[var(--sbx-heat)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--sbx-focus)]"
-                    >
-                      <X className="h-3 w-3" aria-hidden="true" />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-
-          {canFeed.length > 0 && (
-            <SButton
-              variant={connecting ? "primary" : "ghost"}
-              size="sm"
-              className="mt-2 w-full"
-              onClick={() => beginConnecting(item.id)}
-            >
-              <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
-              {connecting ? "Pick a target…" : "Connect"}
-            </SButton>
-          )}
-        </div>
       </div>
 
       <div className="flex items-center justify-between gap-2 border-t border-[var(--sbx-border-hairline)] px-3.5 py-2.5">

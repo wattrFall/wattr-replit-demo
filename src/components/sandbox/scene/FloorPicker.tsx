@@ -4,6 +4,7 @@ import { CATALOGUE } from "@/lib/sandbox/catalogue";
 import { FLOOR_D, FLOOR_W, cellToWorld, sameCell, worldToCell } from "@/lib/sandbox/geometry";
 import { SBX } from "@/lib/sandbox/tokens";
 import { canPlaceAt, useSandboxStore } from "@/lib/sandbox/store";
+import { wasDragged } from "@/lib/sandbox/pointer";
 import type { GridCell } from "@/lib/sandbox/types";
 
 /**
@@ -36,6 +37,9 @@ export function FloorPicker() {
   };
 
   const handleClick = (event: ThreeEvent<MouseEvent>) => {
+    // An orbit or pan that happens to finish over the floor is not a request to
+    // build there.
+    if (wasDragged()) return;
     const mode = useSandboxStore.getState().mode;
     if (mode.type !== "placing") return;
     event.stopPropagation();
