@@ -6,6 +6,7 @@ import {
   replayCockpitSnapshot,
 } from "../src/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph } from "../src/lib/cockpit/workspaces";
+import { useScenarioSession } from "../src/lib/cockpit/session";
 
 const simulatedAt = SCENARIO_START_S + SCENARIO_DURATION_S;
 const baseline = replayCockpitSnapshot(simulatedAt, DEFAULT_FACILITY_MODEL);
@@ -44,5 +45,31 @@ assert(
   comparison.results.every((row) => row.degreeMinutes <= Math.max(0, row.peakC - baseline.incident.limitC) * 5),
   "degree-minutes must integrate the trajectory rather than multiply peak by duration",
 );
+
+const session = useScenarioSession.getState();
+session.reset();
+session.selectAsset("A02");
+session.jump(900);
+const sharedAt = useScenarioSession.getState().simulatedAt;
+assert.equal(useScenarioSession.getState().selectedAssetId, "A02", "twin and HUD must share selection");
+assert.equal(
+  thermalGraph(useScenarioSession.getState().simulation.snapshot, "current").nodes.find((node) => node.id === "A02")?.value,
+  `${useScenarioSession.getState().simulation.snapshot.racks.find((rack) => rack.id === "A02")?.inletC.toFixed(1)}°C current`,
+  "graph must derive from the twin and HUD scenario instant",
+);
+assert.equal(useScenarioSession.getState().simulation.snapshot.simulatedAt, sharedAt, "timeline must share scenario time");
+useScenarioSession.getState().focusTwin({
+  assetId: "cdu-03",
+  floor: 1,
+  path: ["gpu-b", "cdu-03", "chiller-01"],
+  incidentId: "inc-204",
+  simulatedAt: SCENARIO_START_S + 600,
+});
+const focused = useScenarioSession.getState();
+assert.equal(focused.simulatedAt, SCENARIO_START_S + 600, "assistant focus must restore cited scenario time");
+assert.equal(focused.selectedAssetId, "cdu-03", "assistant focus must restore cited asset");
+assert.deepEqual(focused.highlightedPath, ["gpu-b", "cdu-03", "chiller-01"]);
+assert.equal(focused.focusedIncidentId, "inc-204");
+assert.equal(focused.playing, false, "focus and audit reconstruction must pause replay");
 
 console.log("Operating workspace model, traversal, and comparison tests passed.");

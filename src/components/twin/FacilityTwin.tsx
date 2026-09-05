@@ -18,6 +18,7 @@ const overlayLabels: Record<TwinOverlay, string> = {
 export function FacilityTwin(props: FacilityTwinProps) {
   const [floor, setFloor] = useState<1 | 2>(1);
   const [cameraMode, setCameraMode] = useState<"orbit" | "walk">("orbit");
+  const [cameraState, setCameraState] = useState("orbit:15.00,12.00,16.00:idle");
   const effectiveModel = props.mode === "edit" ? props.snapshot.modelConfig : props.model;
   useEffect(() => {
     if (props.selectedFloor) setFloor(props.selectedFloor);
@@ -45,10 +46,10 @@ export function FacilityTwin(props: FacilityTwinProps) {
       <details className="twin-help"><summary aria-label="Camera and floor help"><CircleHelp size={13}/></summary><p>Floors change the visible level. Orbit is best for planning; Walk gives aisle-level movement. Neither changes replay state.</p></details>
       <span className="twin-model"><Box size={12}/> {props.mode === "edit" ? `UNPUBLISHED DRAFT · BASED ON ${props.modelVersion}` : `OPERATIONS · ${props.modelVersion}`}</span>
     </div>
-    <div className="twin-stage" data-guide="twin">
+    <div className="twin-stage" data-guide="twin" data-camera-state={cameraState}>
       <TwinBoundary fallback={fallback}>
         <Suspense fallback={<div className="twin-fallback"><b>Loading facility twin…</b></div>}>
-          <FacilityTwinCanvas {...props} model={effectiveModel} floor={floor} cameraMode={cameraMode}/>
+          <FacilityTwinCanvas {...props} model={effectiveModel} floor={floor} cameraMode={cameraMode} onCameraState={setCameraState}/>
         </Suspense>
       </TwinBoundary>
       <div className="twin-instructions">{cameraMode === "walk" ? "WASD move · drag to look · click for pointer capture · Esc exits capture" : "Drag to orbit · wheel to zoom · right-drag to pan"}</div>

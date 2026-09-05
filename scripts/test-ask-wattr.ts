@@ -21,7 +21,8 @@ const emptyFacilityId = `${prefix}-empty`;
 const emptyModelId = `${prefix}-model`;
 const emptyScenarioId = `${prefix}-scenario`;
 const port = await availableTestPort();
-const providerPort = await availableTestPort();
+let providerPort = await availableTestPort();
+while (providerPort === port) providerPort = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 let providerMode: "ok" | "invalid" | "unavailable" = "ok";
 const providerRequests: Array<Record<string, unknown>> = [];
@@ -134,13 +135,17 @@ server.stderr.on("data", (chunk) => { stderr += String(chunk); });
 
 try {
   const deadline = Date.now() + 30_000;
+  let healthy = false;
   while (Date.now() < deadline) {
     try {
-      if ((await fetch(`${baseUrl}/api/health`)).ok) break;
+      if ((await fetch(`${baseUrl}/api/health`)).ok) {
+        healthy = true;
+        break;
+      }
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  if (!(await fetch(`${baseUrl}/api/health`)).ok) throw new Error(`Ask Wattr test server did not start: ${stderr}`);
+  if (!healthy) throw new Error(`Ask Wattr test server did not start on ${port}: ${stderr}`);
 
   const manager = await ask(users.PORTFOLIO_MANAGER, {
     question: "Rank my authorized facilities by forecast risk",

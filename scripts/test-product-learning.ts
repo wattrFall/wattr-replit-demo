@@ -84,13 +84,17 @@ server.stderr.on("data", (chunk) => { stderr += String(chunk); });
 
 try {
   const deadline = Date.now() + 30_000;
+  let healthy = false;
   while (Date.now() < deadline) {
     try {
-      if ((await fetch(`${baseUrl}/api/health`)).ok) break;
+      if ((await fetch(`${baseUrl}/api/health`)).ok) {
+        healthy = true;
+        break;
+      }
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  if (!(await fetch(`${baseUrl}/api/health`)).ok) throw new Error(`Test server did not start: ${stderr}`);
+  if (!healthy) throw new Error(`Test server did not start on ${port}: ${stderr}`);
 
   const eventBody = {
     eventName: "FACILITY_DRILLDOWN",

@@ -5,3 +5,4 @@
 - [Assistant focus confirmations](assistant-focus-confirmations.md) — sign short-lived focus suggestions and re-authorize their exact evidence scope when confirmed.
 - [Product learning boundaries](product-learning-boundaries.md) — learning signals stay structured, facility-scoped, best-effort, sparse, and independently expired.
 - [Causal variant branching](causal-variant-branching.md) — branch every comparison from one thermal state; apply command lag from branch time and disclose unsupported metrics.
+- [Ephemeral test ports](ephemeral-test-ports.md) — port discovery does not reserve a port; multi-server tests must reject duplicate allocations before binding.

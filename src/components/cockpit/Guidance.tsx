@@ -69,6 +69,12 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
   const originRef = useRef<HTMLElement | null>(null);
   const cardRef = useRef<HTMLElement | null>(null);
   const current = steps[stepIndex];
+  const recoverFocus = () => {
+    const target = originRef.current?.isConnected
+      ? originRef.current
+      : document.querySelector<HTMLElement>("#main-content");
+    target?.focus({ preventScroll: true });
+  };
 
   const locate = useCallback(() => {
     if (!open || !current) return;
@@ -99,7 +105,7 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     try {
       await save(next, complete);
       setError("");
-      if (complete) { setOpen(false); setNotice("Tutorial complete. You can restart it from Help and tutorials."); originRef.current?.focus(); }
+      if (complete) { setOpen(false); setNotice("Tutorial complete. You can restart it from Help and tutorials."); recoverFocus(); }
     } catch (cause) { setError(String(cause)); }
   }, [save, steps.length]);
 
@@ -120,7 +126,7 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
   }, [restart]);
 
   const skip = () => { const finished = stepIndex + 1 >= steps.length; void persist(stepIndex + 1, finished); };
-  const continueLater = () => { setOpen(false); setNotice(`Tutorial paused at step ${stepIndex + 1}. Progress is saved.`); originRef.current?.focus(); };
+  const continueLater = () => { setOpen(false); setNotice(`Tutorial paused at step ${stepIndex + 1}. Progress is saved.`); recoverFocus(); };
   const focusTarget = () => {
     const target = document.querySelector<HTMLElement>(current.target);
     const focusable = target?.matches("button, a[href], input, select, textarea, [tabindex]")

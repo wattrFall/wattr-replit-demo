@@ -4,7 +4,11 @@ import { Edges, Html, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import type { FacilityTwinProps } from "./types";
 
-type CanvasProps = FacilityTwinProps & { floor: 1 | 2; cameraMode: "orbit" | "walk" };
+type CanvasProps = FacilityTwinProps & {
+  floor: 1 | 2;
+  cameraMode: "orbit" | "walk";
+  onCameraState?: (state: string) => void;
+};
 type Asset = { id: string; label: string; kind: "rack" | "cooling" | "power" | "sensor"; x: number; z: number; w: number; d: number; h: number; floor: 1 | 2 };
 
 const ASSETS: Asset[] = [
@@ -21,13 +25,27 @@ const ASSETS: Asset[] = [
   { id: "pdu-02", label: "PDU-02", kind: "power", x: 0, z: 5, w: 1.4, d: 1, h: 2.1, floor: 2 },
 ];
 
-function CameraRig({ mode, floor }: { mode: "orbit" | "walk"; floor: 1 | 2 }) {
+function CameraRig({ mode, floor, onCameraState }: {
+  mode: "orbit" | "walk";
+  floor: 1 | 2;
+  onCameraState?: (state: string) => void;
+}) {
   const { camera, gl } = useThree();
   const keys = useRef(new Set<string>()), yaw = useRef(0), pitch = useRef(0), dragging = useRef(false);
   const active = useRef(false);
+  const lastReported = useRef("");
+  const report = (capture: string) => {
+    const position = camera.position.toArray().map((value) => value.toFixed(2)).join(",");
+    const state = `${mode}:${position}:${capture}`;
+    if (state !== lastReported.current) {
+      lastReported.current = state;
+      onCameraState?.(state);
+    }
+  };
   useEffect(() => {
     camera.position.set(mode === "walk" ? 0 : 15, mode === "walk" ? 1.65 : 12, mode === "walk" ? 8 : 16);
     camera.rotation.set(0, mode === "walk" ? Math.PI : 0, 0);
+    report("idle");
   }, [camera, mode, floor]);
   useEffect(() => {
     if (mode !== "walk") return;
@@ -38,14 +56,33 @@ function CameraRig({ mode, floor }: { mode: "orbit" | "walk"; floor: 1 | 2 }) {
       if (document.pointerLockElement !== node && !dragging.current) return;
       yaw.current -= e.movementX * .0025; pitch.current = THREE.MathUtils.clamp(pitch.current - e.movementY * .002, -.9, .9);
     };
-    const mouseDown = () => { active.current = true; dragging.current = true; node.requestPointerLock?.(); };
+    const mouseDown = () => {
+      active.current = true;
+      dragging.current = true;
+      report("requesting");
+      try {
+        const request = node.requestPointerLock?.();
+        if (request && typeof (request as Promise<void>).catch === "function") {
+          void (request as Promise<void>).catch(() => report("rejected-drag-fallback"));
+        }
+      } catch {
+        report("rejected-drag-fallback");
+      }
+    };
     const mouseUp = () => { dragging.current = false; if (document.pointerLockElement !== node) { active.current = false; keys.current.clear(); } };
-    const lockChange = () => { active.current = document.pointerLockElement === node; if (!active.current) keys.current.clear(); };
+    const lockChange = () => {
+      active.current = document.pointerLockElement === node;
+      report(active.current ? "captured" : "released");
+      if (!active.current) keys.current.clear();
+    };
     window.addEventListener("keydown", down); window.addEventListener("keyup", up); window.addEventListener("mousemove", move);
     node.addEventListener("mousedown", mouseDown); document.addEventListener("pointerlockchange", lockChange); window.addEventListener("mouseup", mouseUp);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); window.removeEventListener("mousemove", move); node.removeEventListener("mousedown", mouseDown); document.removeEventListener("pointerlockchange", lockChange); window.removeEventListener("mouseup", mouseUp); if (document.pointerLockElement === node) document.exitPointerLock(); };
   }, [gl, mode]);
   useFrame((_, delta) => {
+    report(mode === "walk"
+      ? document.pointerLockElement === gl.domElement ? "captured" : dragging.current ? "drag-fallback" : "idle"
+      : "idle");
     if (mode !== "walk") return;
     camera.rotation.set(pitch.current, yaw.current, 0, "YXZ");
     const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw.current);
@@ -63,7 +100,16 @@ function CameraRig({ mode, floor }: { mode: "orbit" | "walk"; floor: 1 | 2 }) {
       camera.position.copy(next);
     }
   });
-  return mode === "orbit" ? <OrbitControls makeDefault target={[0, 1, 0]} minDistance={7} maxDistance={36} minPolarAngle={.25} maxPolarAngle={Math.PI / 2.08} enablePan/> : null;
+  return mode === "orbit" ? <OrbitControls
+    makeDefault
+    target={[0, 1, 0]}
+    minDistance={7}
+    maxDistance={36}
+    minPolarAngle={.25}
+    maxPolarAngle={Math.PI / 2.08}
+    enablePan
+    onChange={() => report("orbit-input")}
+  /> : null;
 }
 
 function AssetMesh({ asset, props }: { asset: Asset; props: CanvasProps }) {
@@ -99,7 +145,7 @@ function FacilityScene(props: CanvasProps) {
     {props.overlays.includes("flow") && <><mesh position={[0, 3.1, 3]}><boxGeometry args={[17, .08, .08]}/><meshBasicMaterial color="#22d3ee"/></mesh><mesh position={[0, 3.1, -1]}><boxGeometry args={[14, .08, .08]}/><meshBasicMaterial color="#f59e0b"/></mesh></>}
     {props.overlays.includes("forecast") && <Html position={[4.8, 3.8, -3.5]}><div className="scene-forecast">5 MIN FORECAST<br/><b>{props.snapshot.forecast.baselinePeakC.toFixed(1)}°C</b></div></Html>}
     {props.highlightedPath?.length && <Html position={[0, 4.4, 0]}><div className="scene-forecast">FOCUSED THERMAL PATH<br/><b>{props.highlightedPath.join(" → ")}</b></div></Html>}
-    <CameraRig mode={props.cameraMode} floor={props.floor}/>
+    <CameraRig mode={props.cameraMode} floor={props.floor} onCameraState={props.onCameraState}/>
   </>;
 }
 

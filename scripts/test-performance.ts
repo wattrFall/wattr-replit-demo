@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readdir, readFile, stat } from "node:fs/promises";
 import {
   SCENARIO_DURATION_S,
   SCENARIO_START_S,
@@ -45,6 +46,22 @@ const heapAfter = process.memoryUsage().heapUsed;
 const heapGrowth = heapAfter - heapBefore;
 assert(heapGrowth < 128 * 1024 * 1024, `replay memory grew by ${(heapGrowth / 1024 / 1024).toFixed(1)}MiB`);
 
+const assetsDir = new URL("../dist/assets/", import.meta.url);
+const assets = await readdir(assetsDir);
+const jsAssets = await Promise.all(assets.filter((name) => name.endsWith(".js")).map(async (name) => ({
+  name,
+  bytes: (await stat(new URL(name, assetsDir))).size,
+  source: await readFile(new URL(name, assetsDir), "utf8"),
+})));
+const twinChunks = jsAssets.filter((asset) => /^(FacilityTwinCanvas|SandboxCanvas|OrbitControls)-/.test(asset.name));
+assert(twinChunks.length > 0, "lazy-loaded twin/WebGL bundle was not emitted");
+const twinBundleBytes = twinChunks.reduce((sum, asset) => sum + asset.bytes, 0);
+assert(twinBundleBytes < 2_500_000, `lazy twin bundle exceeded 2.5MB (${(twinBundleBytes / 1024 / 1024).toFixed(2)}MiB)`);
+const html = await readFile(new URL("../dist/index.html", import.meta.url), "utf8");
+for (const chunk of twinChunks) {
+  assert(!html.includes(chunk.name), `twin chunk ${chunk.name} is eagerly loaded by the app shell`);
+}
+
 console.log(
-  `Performance gates passed: ${Object.entries(timings).map(([speed, ms]) => `${speed}x=${ms.toFixed(0)}ms`).join(", ")}; graph fan-out=${fanoutMs.toFixed(0)}ms; heap growth=${(heapGrowth / 1024 / 1024).toFixed(1)}MiB.`,
+  `Performance gates passed: ${Object.entries(timings).map(([speed, ms]) => `${speed}x=${ms.toFixed(0)}ms`).join(", ")}; graph fan-out=${fanoutMs.toFixed(0)}ms; heap growth=${(heapGrowth / 1024 / 1024).toFixed(1)}MiB; lazy twin bundle=${(twinBundleBytes / 1024 / 1024).toFixed(2)}MiB.`,
 );

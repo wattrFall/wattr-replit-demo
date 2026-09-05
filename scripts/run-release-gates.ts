@@ -22,13 +22,33 @@ const gates = [
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const failures: string[] = [];
 const startedAt = Date.now();
+const timeoutByScript: Record<string, number> = {
+  "test:browser": 240_000,
+  "test:performance": 120_000,
+  build: 180_000,
+  "db:setup": 180_000,
+};
+const defaultTimeoutMs = 120_000;
+const totalBudgetMs = 15 * 60_000;
 
 for (const [label, script] of gates) {
+  if (Date.now() - startedAt >= totalBudgetMs) {
+    failures.push(`overall release budget (timeout after ${Math.round(totalBudgetMs / 60_000)}m)`);
+    break;
+  }
   console.log(`\n=== RELEASE GATE: ${label} (npm run ${script}) ===`);
   const result = spawnSync(npm, ["run", script], {
     stdio: "inherit",
     env: { ...process.env, RELEASE_GATE: "1" },
+    timeout: Math.min(timeoutByScript[script] ?? defaultTimeoutMs, totalBudgetMs - (Date.now() - startedAt)),
+    killSignal: "SIGTERM",
   });
+  if (result.error) {
+    const timedOut = (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+    failures.push(`${label} (${timedOut ? "TIMEOUT" : result.error.message})`);
+    console.error(`--- FAILED: ${label}: ${timedOut ? "bounded execution time exceeded" : result.error.message} ---`);
+    break;
+  }
   if (result.status !== 0) {
     failures.push(`${label} (exit ${result.status ?? "signal"})`);
     console.error(`--- FAILED: ${label} ---`);
