@@ -14,4 +14,5 @@ export type FacilityTwinProps = {
   overlays: TwinOverlay[];
   mode?: TwinMode;
   canEdit?: boolean;
+  onGuideAction?: (action: string) => void;
 };

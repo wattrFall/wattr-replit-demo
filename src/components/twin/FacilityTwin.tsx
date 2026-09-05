@@ -1,5 +1,5 @@
 import { Component, Suspense, lazy, useMemo, useState, type ReactNode } from "react";
-import { Box, Footprints, Layers3, MousePointer2 } from "lucide-react";
+import { Box, CircleHelp, Footprints, Layers3, MousePointer2 } from "lucide-react";
 import type { FacilityTwinProps, TwinOverlay } from "./types";
 
 const FacilityTwinCanvas = lazy(() => import("./FacilityTwinCanvas"));
@@ -32,16 +32,17 @@ export function FacilityTwin(props: FacilityTwinProps) {
 
   return <div className="facility-twin">
     <div className="twin-toolbar">
-      <div className="twin-toolgroup" role="group" aria-label="Facility floor">
-        {([1, 2] as const).map((value) => <button key={value} className={floor === value ? "active" : ""} aria-pressed={floor === value} onClick={() => setFloor(value)}>F{value}</button>)}
+      <div className="twin-toolgroup" role="group" aria-label="Facility floor" data-guide="floors">
+        {([1, 2] as const).map((value) => <button key={value} data-guide={value === 2 ? "floor-change" : undefined} className={floor === value ? "active" : ""} aria-pressed={floor === value} onClick={() => { setFloor(value); props.onGuideAction?.("floor-change"); }}>F{value}</button>)}
       </div>
-      <div className="twin-toolgroup" role="group" aria-label="Camera mode">
-        <button className={cameraMode === "orbit" ? "active" : ""} aria-pressed={cameraMode === "orbit"} onClick={() => setCameraMode("orbit")}><MousePointer2 size={13}/> Orbit</button>
-        <button className={cameraMode === "walk" ? "active" : ""} aria-pressed={cameraMode === "walk"} onClick={() => setCameraMode("walk")}><Footprints size={13}/> Walk</button>
+      <div className="twin-toolgroup" role="group" aria-label="Camera mode" data-guide="camera">
+        <button data-guide="camera-orbit" className={cameraMode === "orbit" ? "active" : ""} aria-pressed={cameraMode === "orbit"} onClick={() => { setCameraMode("orbit"); props.onGuideAction?.("camera-orbit"); }}><MousePointer2 size={13}/> Orbit</button>
+        <button data-guide="camera-walk" className={cameraMode === "walk" ? "active" : ""} aria-pressed={cameraMode === "walk"} onClick={() => { setCameraMode("walk"); props.onGuideAction?.("camera-walk"); }}><Footprints size={13}/> Walk</button>
       </div>
+      <details className="twin-help"><summary aria-label="Camera and floor help"><CircleHelp size={13}/></summary><p>Floors change the visible level. Orbit is best for planning; Walk gives aisle-level movement. Neither changes replay state.</p></details>
       <span className="twin-model"><Box size={12}/> {props.mode === "edit" ? `UNPUBLISHED DRAFT · BASED ON ${props.modelVersion}` : `OPERATIONS · ${props.modelVersion}`}</span>
     </div>
-    <div className="twin-stage">
+    <div className="twin-stage" data-guide="twin">
       <TwinBoundary fallback={fallback}>
         <Suspense fallback={<div className="twin-fallback"><b>Loading facility twin…</b></div>}>
           <FacilityTwinCanvas {...props} model={effectiveModel} floor={floor} cameraMode={cameraMode}/>
@@ -51,11 +52,11 @@ export function FacilityTwin(props: FacilityTwinProps) {
       {props.view === "thermal" && <div className="twin-legend"><span>22°C</span><i/><span>35°C</span></div>}
     </div>
     <p className="sr-only" role="status" aria-live="polite">{summary} Selected asset {props.selectedId}.</p>
-    <div className="twin-asset-strip" role="list" aria-label="Keyboard-selectable facility assets">
+    <div className="twin-asset-strip" role="list" aria-label="Keyboard-selectable facility assets" data-guide="assets">
       {(floor === 1 ? [
         ["gpu-b", "GPU Hall B"], ["A01", "Rack A01"], ["A02", "Rack A02"], ["B01", "Rack B01"], ["B02", "Rack B02"],
         ["cdu-03", "CDU-03"], ["chiller-01", "Chiller-01"], ["pdu-01", "PDU-01"], ["sensor-03", "Sensor-03"],
-      ] : [["rack-f2-a", "Rack F2-A"], ["rack-f2-b", "Rack F2-B"], ["rack-f2-c", "Rack F2-C"], ["pdu-02", "PDU-02"]]).map(([id, label]) => <button role="listitem" key={id} className={props.selectedId === id ? "selected" : ""} aria-pressed={props.selectedId === id} onClick={() => props.onSelect(id)}>{label}</button>)}
+        ] : [["rack-f2-a", "Rack F2-A"], ["rack-f2-b", "Rack F2-B"], ["rack-f2-c", "Rack F2-C"], ["pdu-02", "PDU-02"]]).map(([id, label]) => <button role="listitem" key={id} className={props.selectedId === id ? "selected" : ""} aria-pressed={props.selectedId === id} onClick={() => { props.onSelect(id); props.onGuideAction?.("asset-select"); }}>{label}</button>)}
     </div>
     <div className="twin-layer-summary">{props.overlays.map((item) => overlayLabels[item]).join(" · ") || "No overlays"} · deterministic snapshot at {Math.round(props.snapshot.elapsedS / 60)}m</div>
   </div>;

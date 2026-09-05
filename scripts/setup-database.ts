@@ -68,6 +68,14 @@ try {
       version: "0010_product_learning_privacy",
       file: new URL("../database/migrations/0010_product_learning_privacy.sql", import.meta.url),
     },
+    {
+      version: "0011_guided_tutorial_progress",
+      file: new URL("../database/migrations/0011_guided_tutorial_progress.sql", import.meta.url),
+    },
+    {
+      version: "0012_role_scoped_tutorial_progress",
+      file: new URL("../database/migrations/0012_role_scoped_tutorial_progress.sql", import.meta.url),
+    },
   ];
 
   for (const migration of migrations) {

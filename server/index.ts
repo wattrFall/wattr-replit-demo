@@ -557,11 +557,13 @@ app.get("/api/me", requireAuth, async (req: AuthedRequest, res) => {
   const result = await pool.query(
     `SELECT u.id, u.display_name, m.organization_id, m.role, m.is_admin,
             (o.owner_user_id = m.user_id) AS is_owner,
-            p.theme, p.tutorial_complete, p.tutorial_step
+            p.theme, COALESCE(tp.tutorial_complete, false) AS tutorial_complete,
+            COALESCE(tp.tutorial_step, 0) AS tutorial_step, m.role AS tutorial_role
      FROM users u
      JOIN memberships m ON m.user_id = u.id AND m.organization_id = $2
      JOIN organizations o ON o.id = m.organization_id
      JOIN user_preferences p ON p.user_id = u.id
+     LEFT JOIN user_tutorial_progress tp ON tp.user_id = u.id AND tp.role = m.role
      WHERE u.id = $1`,
     [req.userId, DEMO_ORGANIZATION_ID],
   );
@@ -2223,17 +2225,21 @@ app.patch("/api/me/tutorial", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const step = req.body?.step;
   const complete = req.body?.complete;
-  if (!Number.isInteger(step) || step < 0 || step > 20 || typeof complete !== "boolean") {
+  const role = req.body?.role;
+  const membership = await organizationMembership(req.userId!);
+  if (!Number.isInteger(step) || step < 0 || step > 20 || typeof complete !== "boolean" || !membership || role !== membership.role) {
     return res.status(400).json({ error: "Invalid tutorial progress" });
   }
   const result = await pool.query(
-    `UPDATE user_preferences
-     SET tutorial_step = $2, tutorial_complete = $3, updated_at = now()
-     WHERE user_id = $1
-     RETURNING tutorial_step, tutorial_complete`,
-    [req.userId, step, complete],
+    `INSERT INTO user_tutorial_progress (user_id, role, tutorial_step, tutorial_complete)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, role) DO UPDATE SET
+       tutorial_step = EXCLUDED.tutorial_step,
+       tutorial_complete = EXCLUDED.tutorial_complete,
+       updated_at = now()
+     RETURNING tutorial_step, tutorial_complete, role AS tutorial_role`,
+    [req.userId, role, step, complete],
   );
-  const membership = await organizationMembership(req.userId!);
   if (membership) {
     await recordLearningEvent({
       organizationId: membership.organization_id,

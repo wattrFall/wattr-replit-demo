@@ -61,6 +61,8 @@ try {
     "0008_product_learning",
     "0009_product_learning_retention",
     "0010_product_learning_privacy",
+    "0011_guided_tutorial_progress",
+    "0012_role_scoped_tutorial_progress",
   ]);
 
   const counts = await pool.query(`

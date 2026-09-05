@@ -69,8 +69,13 @@ async function seed() {
     [userId, browserUserId],
   );
   await pool.query(
-    `INSERT INTO user_preferences (user_id, tutorial_complete, tutorial_step)
-     VALUES ($1, true, 10), ($2, true, 10)`,
+    `INSERT INTO user_preferences (user_id, tutorial_complete, tutorial_step, tutorial_role)
+     VALUES ($1, true, 10, 'OPERATOR'), ($2, true, 10, 'PORTFOLIO_MANAGER')`,
+    [userId, browserUserId],
+  );
+  await pool.query(
+    `INSERT INTO user_tutorial_progress (user_id, role, tutorial_complete, tutorial_step)
+     VALUES ($1, 'OPERATOR', true, 10), ($2, 'PORTFOLIO_MANAGER', true, 10)`,
     [userId, browserUserId],
   );
 }
@@ -123,6 +128,29 @@ try {
     assert.equal(page.status, 200, `route delivery failed for ${path}`);
     assert(page.text.includes('<div id="root"></div>'), `SPA shell missing for ${path}`);
   }
+
+  const operatorProgress = await request("/api/me/tutorial", {
+    method: "PATCH",
+    body: JSON.stringify({ role: "OPERATOR", step: 2, complete: false }),
+  });
+  assert.equal(operatorProgress.status, 200);
+  await pool.query("UPDATE memberships SET role = 'MODEL_ADMIN' WHERE user_id = $1", [userId]);
+  const modelProgress = await request("/api/me/tutorial", {
+    method: "PATCH",
+    body: JSON.stringify({ role: "MODEL_ADMIN", step: 3, complete: true }),
+  });
+  assert.equal(modelProgress.status, 200);
+  const modelMe = await request("/api/me");
+  assert.equal(modelMe.body.tutorial_step, 3);
+  assert.equal(modelMe.body.tutorial_complete, true);
+  await pool.query("UPDATE memberships SET role = 'OPERATOR' WHERE user_id = $1", [userId]);
+  const operatorMe = await request("/api/me");
+  assert.equal(operatorMe.body.tutorial_step, 2);
+  assert.equal(operatorMe.body.tutorial_complete, false);
+  await request("/api/me/tutorial", {
+    method: "PATCH",
+    body: JSON.stringify({ role: "OPERATOR", step: 10, complete: true }),
+  });
 
   const facilities = await request("/api/facilities");
   assert.equal(facilities.status, 200);

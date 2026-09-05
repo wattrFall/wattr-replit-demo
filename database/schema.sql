@@ -54,7 +54,17 @@ CREATE TABLE IF NOT EXISTS user_preferences (
   theme text NOT NULL DEFAULT 'system' CHECK (theme IN ('light','dark','system')),
   tutorial_complete boolean NOT NULL DEFAULT false,
   tutorial_step integer NOT NULL DEFAULT 0 CHECK (tutorial_step >= 0),
+  tutorial_role text CHECK (tutorial_role IN ('PORTFOLIO_MANAGER','OPERATOR','ENGINEER','MODEL_ADMIN','VIEWER')),
   updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_tutorial_progress (
+  user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role text NOT NULL CHECK (role IN ('PORTFOLIO_MANAGER','OPERATOR','ENGINEER','MODEL_ADMIN','VIEWER')),
+  tutorial_step integer NOT NULL DEFAULT 0 CHECK (tutorial_step >= 0),
+  tutorial_complete boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, role)
 );
 
 CREATE TABLE IF NOT EXISTS model_versions (
@@ -508,6 +518,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_decision_history_mutation();
 ALTER TABLE facilities ADD COLUMN IF NOT EXISTS synthetic_status text NOT NULL DEFAULT 'SYNTHETIC';
 ALTER TABLE facilities ADD COLUMN IF NOT EXISTS quality text NOT NULL DEFAULT 'GOOD';
 ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS tutorial_step integer NOT NULL DEFAULT 0;
+ALTER TABLE user_preferences ADD COLUMN IF NOT EXISTS tutorial_role text;
 ALTER TABLE organizations ADD COLUMN IF NOT EXISTS owner_user_id text;
 ALTER TABLE memberships ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false;
 ALTER TABLE incidents ADD COLUMN IF NOT EXISTS scenario_id text;
