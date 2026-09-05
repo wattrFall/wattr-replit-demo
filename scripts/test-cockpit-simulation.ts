@@ -3,6 +3,7 @@ import {
   DEFAULT_FACILITY_MODEL,
   SCENARIO_START_S,
   advanceCockpitSimulation,
+  counterfactualCockpitSnapshot,
   createCockpitSimulation,
   replayCockpitSnapshot,
   scenarioLayout,
@@ -28,7 +29,7 @@ const golden = [
     pue: 1.229,
     headroomKw: 520,
     forecastPeakC: 31.8,
-    advisoryPeakC: 30.7,
+    advisoryPeakC: 30.8,
     risk: "clear",
   },
   {
@@ -39,7 +40,7 @@ const golden = [
     pue: 1.228,
     headroomKw: 451.7,
     forecastPeakC: 32.3,
-    advisoryPeakC: 31.6,
+    advisoryPeakC: 31.8,
     risk: "watch",
   },
   {
@@ -50,7 +51,7 @@ const golden = [
     pue: 1.227,
     headroomKw: 315,
     forecastPeakC: 33.1,
-    advisoryPeakC: 32.5,
+    advisoryPeakC: 32.7,
     risk: "critical",
   },
   {
@@ -61,7 +62,7 @@ const golden = [
     pue: 1.226,
     headroomKw: 110,
     forecastPeakC: 34,
-    advisoryPeakC: 33.7,
+    advisoryPeakC: 34,
     risk: "critical",
   },
 ] as const;
@@ -134,5 +135,30 @@ assert.deepEqual(
 );
 useScenarioSession.getState().setModelConfig(DEFAULT_FACILITY_MODEL);
 useScenarioSession.getState().reset();
+
+const causal = replayCockpitSnapshot(SCENARIO_START_S + 900);
+assert.notDeepEqual(causal.series.forecast, causal.series.counterfactual, "recommendation must branch the physical path");
+assert.notDeepEqual(causal.series.counterfactual, causal.series.alternative, "operator alternative must have its own physical path");
+assert.notDeepEqual(causal.series.forecast, causal.series.alternative, "operator alternative must execute rather than replay baseline");
+assert(causal.forecast.advisoryPeakC < causal.forecast.baselinePeakC, "action must improve the thermal outcome");
+const lowFlow = counterfactualCockpitSnapshot(SCENARIO_START_S + 900, { flowPercent: 60, durationMinutes: 20 });
+const highFlow = counterfactualCockpitSnapshot(SCENARIO_START_S + 900, { flowPercent: 85, durationMinutes: 20 });
+const shortAction = counterfactualCockpitSnapshot(SCENARIO_START_S + 900, { flowPercent: 85, durationMinutes: 1 });
+assert.notDeepEqual(lowFlow.series.counterfactual, highFlow.series.counterfactual, "alternative flow must change the physical trajectory");
+assert(highFlow.forecast.advisoryPeakC <= lowFlow.forecast.advisoryPeakC, "greater bounded flow must not worsen peak temperature");
+assert(highFlow.forecast.advisoryPeakC <= shortAction.forecast.advisoryPeakC, "command duration must affect action-versus-expiry outcome");
+assert(causal.checkpoints.filter((event) => event.reached).map((event) => event.elapsedS).every((time, index, all) => index === 0 || time > all[index - 1]), "event checkpoints must remain ordered");
+
+const noLag = replayCockpitSnapshot(SCENARIO_START_S + 300, { ...DEFAULT_FACILITY_MODEL, responseLag: 0 });
+const lagged = replayCockpitSnapshot(SCENARIO_START_S + 300, { ...DEFAULT_FACILITY_MODEL, responseLag: 60 });
+assert(lagged.forecast.advisoryPeakC >= noLag.forecast.advisoryPeakC, "cooling response lag must not improve cooling");
+const earlyCoolingEffect = lagged.series.forecast[0].baselinePeakC - lagged.series.counterfactual[0].baselinePeakC;
+const settledCoolingEffect = lagged.series.forecast[90].baselinePeakC - lagged.series.counterfactual[90].baselinePeakC;
+assert(settledCoolingEffect >= earlyCoolingEffect, "advisory cooling effect must emerge after the response lag");
+
+for (const elapsedS of [0, 300, 900, 1_800]) {
+  const sample = replayCockpitSnapshot(SCENARIO_START_S + elapsedS);
+  assert(sample.peakInletC >= 20, "thermal state must remain physically bounded");
+}
 
 console.log("Cockpit simulation golden and replay tests passed.");

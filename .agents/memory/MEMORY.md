@@ -3,3 +3,4 @@
 - [Forward migration parity](forward-migration-parity.md) — legacy upgrades must explicitly converge column types, nullability, checks, and FKs with clean installs.
 - [Grounded assistant boundaries](grounded-assistant-boundaries.md) — bind each answer and proposed action to the exact authorized record, model, scenario, and time.
 - [Product learning boundaries](product-learning-boundaries.md) — learning signals stay structured, facility-scoped, best-effort, sparse, and independently expired.
+- [Causal variant branching](causal-variant-branching.md) — branch every comparison from one thermal state; apply command lag from branch time and disclose unsupported metrics.

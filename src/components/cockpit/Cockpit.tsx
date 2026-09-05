@@ -400,7 +400,8 @@ function OperatorTestSession({ facility, elapsedS }: { facility: Facility; elaps
 function Operations({ data, facility }: { data: SessionData; facility: Facility }) {
   const s = useScenarioSession(), snapshot = s.simulation.snapshot;
   const [view, setView] = useState<TwinView>("physical");
-  const [selectedAsset, setSelectedAsset] = useState("gpu-b");
+  const selectedAsset = s.selectedAssetId;
+  const setSelectedAsset = s.selectAsset;
   const [overlays, setOverlays] = useState<TwinOverlay[]>(["thermal", "flow", "incident"]);
   useEffect(() => { useScenarioSession.getState().setModelConfig(facility.model_config); }, [facility.id, facility.model_version]);
   const selectedRack = snapshot.racks.find((rack) => rack.id === selectedAsset);
@@ -654,9 +655,13 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
 }
 
 function GraphPage({ data, facility }: { data: SessionData; facility: Facility }) {
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot), [view, setView] = useState<GraphView>("topology"), graph = useMemo(() => thermalGraph(snapshot, view), [snapshot, view]), [selectedId, setSelectedId] = useState("cdu-03");
+  const snapshot = useScenarioSession((s) => s.simulation.snapshot), selectedId = useScenarioSession((s) => s.selectedAssetId), setSelectedId = useScenarioSession((s) => s.selectAsset), [view, setView] = useState<GraphView>("topology"), graph = useMemo(() => thermalGraph(snapshot, view), [snapshot, view]);
   const selected = graph.nodes.find(node => node.id === selectedId) ?? graph.nodes[0], related = graphSelection(graph, selected.id);
-  const nodeTone = (node: typeof graph.nodes[number]) => view === "forecast" && node.risk ? "border-amber-400 bg-amber-400/10" : view === "current" && node.id === "cdu-03" ? "border-cyan-300 bg-cyan-300/10" : "border-slate-700 bg-slate-900";
+  const nodeTone = (node: typeof graph.nodes[number]) =>
+    related.upstream.some((item) => item.id === node.id) ? "border-sky-400 bg-sky-400/10"
+      : related.downstream.some((item) => item.id === node.id) ? "border-teal-400 bg-teal-400/10"
+        : view === "forecast" && node.risk ? "border-amber-400 bg-amber-400/10"
+          : "border-slate-700 bg-slate-900";
   useEffect(() => {
     void recordLearningEvent("ENGINEERING_TOOL_USED", {
       facilityId: facility.id,
@@ -689,7 +694,7 @@ function ModelLab({ data, facility }: { data: SessionData; facility: Facility })
       simulatedAt: snapshot.simulatedAt,
     });
   };
-  return <Shell data={data} facility={facility}><PageHead eyebrow="MODEL LAB / PHYSICAL AI" title="Controller comparison" detail="Every controller receives the same initial state and event stream. This is a comparison harness, not a superiority claim." action={<Status tone="warn">SYNTHETIC</Status>}/><ReplayBar/><section className="panel p-6"><div className="grid gap-4 md:grid-cols-3"><div><div className="eyebrow">INITIAL STATE</div><p className="mt-2 text-sm">{comparison?.initialState ?? `${snapshot.workloadPercent}% workload · ${snapshot.itPowerKw.toLocaleString()} kW IT · ${snapshot.rackCount} racks`}</p></div><div><div className="eyebrow">SHARED EVENTS</div><p className="mt-2 text-sm">{comparison?.events.join(" → ") ?? "Training ramp → power rise → CDU response lag"}</p></div><div className="flex items-end md:justify-end"><button className="button primary" onClick={run}><Play size={15}/>Run same-input comparison</button></div></div></section>{comparison&&<section className="panel mt-4 overflow-x-auto"><table className="data-table min-w-[900px]"><caption className="sr-only">Controller comparison results</caption><thead><tr><th>Controller</th><th>Peak temp</th><th>Degree-minutes</th><th>Warning lead</th><th>Cooling energy</th><th>Interventions</th><th>Inference events</th><th>Objective</th></tr></thead><tbody>{comparison.results.map(result => <tr key={result.id}><td><b>{result.name}</b><small className="mt-1 block text-slate-500">{result.architecturalMetric}: {result.architecturalValue}</small></td><td>{result.peakC.toFixed(1)}°C</td><td>{result.degreeMinutes}</td><td>{result.warningLeadMinutes} min</td><td>{result.coolingEnergyKwh} kWh</td><td>{result.interventions}</td><td>{result.inferenceEvents || "continuous"}</td><td>{result.objective}</td></tr>)}</tbody></table><p className="p-5 text-xs text-slate-500">SNN rows show architectural event metrics where measured compute energy is unavailable. No energy-efficiency percentage is inferred.</p></section>}</Shell>;
+  return <Shell data={data} facility={facility}><PageHead eyebrow="MODEL LAB / PHYSICAL AI" title="Controller comparison" detail="Every controller receives the same initial state and event stream. This is a comparison harness, not a superiority claim." action={<Status tone="warn">SYNTHETIC</Status>}/><ReplayBar/><section className="panel p-6"><div className="grid gap-4 md:grid-cols-3"><div><div className="eyebrow">INITIAL STATE</div><p className="mt-2 text-sm">{comparison?.initialState ?? `${snapshot.workloadPercent}% workload · ${snapshot.itPowerKw.toLocaleString()} kW IT · ${snapshot.rackCount} racks`}</p></div><div><div className="eyebrow">SHARED EVENTS</div><p className="mt-2 text-sm">{comparison?.events.join(" → ") ?? "Training ramp → power rise → CDU response lag"}</p></div><div className="flex items-end md:justify-end"><button className="button primary" onClick={run}><Play size={15}/>Run same-input comparison</button></div></div></section>{comparison&&<section className="panel mt-4 overflow-x-auto"><table className="data-table min-w-[900px]"><caption className="sr-only">Controller comparison results</caption><thead><tr><th>Controller</th><th>Peak temp</th><th>Degree-minutes</th><th>Warning lead</th><th>Cooling energy</th><th>Interventions</th><th>Inference events</th><th>Objective</th></tr></thead><tbody>{comparison.results.map(result => <tr key={result.id}><td><b>{result.name}</b><small className="mt-1 block text-slate-500">{result.architecturalMetric}: {result.architecturalValue}</small></td><td>{result.peakC.toFixed(1)}°C</td><td>{result.degreeMinutes.toFixed(1)}</td><td>{result.warningLeadMinutes === null ? "Unavailable" : `${result.warningLeadMinutes} min`}</td><td>{result.coolingEnergyKwh === null ? "Unavailable" : `${result.coolingEnergyKwh} kWh`}</td><td>{result.interventions}</td><td>{result.inferenceEvents === null ? "Unavailable" : result.inferenceEvents}</td><td>{result.objective}</td></tr>)}</tbody></table><p className="p-5 text-xs text-slate-500">SNN rows show only metrics supported by an implemented measurement. Compute energy, event sparsity, and unsupported physical-AI claims are marked unavailable.</p></section>}</Shell>;
 }
 
 function AccessAdministration({ data }: { data: SessionData }) {

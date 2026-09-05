@@ -20,10 +20,12 @@ type ScenarioSession = {
   mode: "Observe" | "Shadow" | "Advisory";
   simulation: CockpitSimulationState;
   modelConfig: FacilityModelConfig;
+  selectedAssetId: string;
   setPlaying: (playing: boolean) => void;
   setSpeed: (speed: ScenarioSession["speed"]) => void;
   setMode: (mode: ScenarioSession["mode"]) => void;
   setModelConfig: (config: FacilityModelConfig) => void;
+  selectAsset: (assetId: string) => void;
   advance: (seconds: number) => void;
   step: (seconds?: number) => void;
   jump: (elapsedSeconds: number) => void;
@@ -38,9 +40,11 @@ export const useScenarioSession = create<ScenarioSession>((set) => ({
   mode: "Advisory",
   simulation: createCockpitSimulation(SCENARIO_START_S),
   modelConfig: DEFAULT_FACILITY_MODEL,
+  selectedAssetId: "cdu-03",
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),
   setMode: (mode) => set({ mode }),
+  selectAsset: (selectedAssetId) => set({ selectedAssetId }),
   setModelConfig: (modelConfig) => set((state) => {
     if (
       state.modelConfig.seed === modelConfig.seed &&

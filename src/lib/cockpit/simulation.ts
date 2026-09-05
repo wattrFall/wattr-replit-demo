@@ -24,7 +24,7 @@ const RAMP_INCREASE = 0.25;
 const RACK_LIMIT_C = 32;
 const MAINTENANCE_LOCKOUT = false;
 
-export type SimulationVariant = "baseline" | "advisory";
+export type SimulationVariant = "baseline" | "advisory" | "alternative";
 export type AdvisoryParameters = {
   flowPercent: number;
   durationMinutes: number;
@@ -75,6 +75,21 @@ export interface ForecastSeriesPoint {
   thresholdC: number;
   confidence: number;
 }
+
+export type ScenarioCheckpoint = {
+  id: "workload-rise" | "cooling-lag" | "forecast-risk" | "incident" | "recommendation" | "decision";
+  elapsedS: number;
+  label: string;
+};
+
+export const SCENARIO_CHECKPOINTS: readonly ScenarioCheckpoint[] = [
+  { id: "workload-rise", elapsedS: 120, label: "Training workload begins rising" },
+  { id: "cooling-lag", elapsedS: 240, label: "CDU response lag becomes visible" },
+  { id: "forecast-risk", elapsedS: 300, label: "Forecast crosses the thermal limit" },
+  { id: "incident", elapsedS: 540, label: "Thermal incident forms" },
+  { id: "recommendation", elapsedS: 600, label: "Cooling recommendation becomes available" },
+  { id: "decision", elapsedS: 900, label: "Operator decision boundary" },
+] as const;
 
 export interface RecommendationSnapshot {
   id: "rec-17";
@@ -139,11 +154,14 @@ export interface CockpitSnapshot {
   safety: SafetySnapshot;
   baselineTelemetry: Telemetry;
   advisoryTelemetry: Telemetry;
+  thermalState: SimState;
   modelConfig: FacilityModelConfig;
+  checkpoints: Array<ScenarioCheckpoint & { reached: boolean }>;
   series: {
     actual: ForecastSeriesPoint[];
     forecast: ForecastSeriesPoint[];
     counterfactual: ForecastSeriesPoint[];
+    alternative: ForecastSeriesPoint[];
   };
 }
 
@@ -195,6 +213,7 @@ export function scenarioLayout(
   variant: SimulationVariant,
   config: FacilityModelConfig = DEFAULT_FACILITY_MODEL,
   advisory: AdvisoryParameters = DEFAULT_ADVISORY_PARAMETERS,
+  commandStartedAt: number = startAt,
 ): SandboxLayout {
   const ramp = rampAt(simulatedAt, startAt);
   const loadMultiplier =
@@ -202,7 +221,15 @@ export function scenarioLayout(
     (DEFAULT_FACILITY_MODEL.thermalMass / config.thermalMass) *
     seededLoadScale(config.seed);
   const lagAdjustment = (DEFAULT_FACILITY_MODEL.responseLag - config.responseLag) / 120;
-  const cduPumpPercent = variant === "advisory" ? advisory.flowPercent : 70 + 6 * lagAdjustment * ramp;
+  const commandedFlow = variant === "advisory"
+    ? advisory.flowPercent
+    : variant === "alternative"
+      ? Math.max(COMMAND_ENVELOPE.minFlowPercent, advisory.flowPercent)
+      : 70;
+  const lagS = Math.max(0, config.responseLag);
+  const commandElapsed = Math.max(0, simulatedAt - commandStartedAt);
+  const commandBlend = variant === "baseline" ? 1 : clamp01(commandElapsed / Math.max(1, lagS));
+  const cduPumpPercent = 70 + (commandedFlow - 70) * commandBlend + 6 * lagAdjustment * ramp;
 
   const racks = RACK_IDS.map((id) => rack(id, loadMultiplier));
   const cdu: SandboxItem = {
@@ -245,33 +272,38 @@ function fixedSliceCount(seconds: number): number {
   return Math.max(0, Math.round(seconds / SIM_DT_S));
 }
 
-function constraintMinutes(
+export function simulateVariant(
   thermal: SimState,
   startAt: number,
   fromAt: number,
   variant: SimulationVariant,
   config: FacilityModelConfig,
   advisory: AdvisoryParameters = DEFAULT_ADVISORY_PARAMETERS,
-): { peakC: number; minutes: number; points: ForecastSeriesPoint[] } {
+): { peakC: number; minutes: number; degreeMinutes: number; points: ForecastSeriesPoint[]; finalState: SimState; coolingEnergyKwh: number } {
   let state = thermal;
   let peakC = -Infinity;
   let constrainedSlices = 0;
   const points: ForecastSeriesPoint[] = [];
+  let coolingEnergyKwh = 0;
+  let degreeMinutes = 0;
   const seconds = Math.round(FORECAST_HORIZON_S);
 
   for (let i = 0; i < seconds; i += 1) {
     const simulatedAt = fromAt + i + 1;
-    const advisoryActive = variant === "advisory" && i < advisory.durationMinutes * 60;
+    const advisoryActive = variant !== "baseline" && i < advisory.durationMinutes * 60;
     const layout = scenarioLayout(
       simulatedAt,
       startAt,
       advisoryActive ? "advisory" : "baseline",
       config,
       advisory,
+      fromAt,
     );
     state = stepSim(state, layout, "baseline", fixedSliceCount(1));
     const telemetry = readTelemetry(state, layout, "baseline");
+    coolingEnergyKwh += Math.max(0, telemetry.totalPowerKw - telemetry.itPowerKw) / 3_600;
     peakC = Math.max(peakC, telemetry.maxInletC ?? RACK_LIMIT_C);
+    degreeMinutes += Math.max(0, (telemetry.maxInletC ?? RACK_LIMIT_C) - RACK_LIMIT_C) / 60;
     if (telemetry.racksAtRisk > 0) constrainedSlices += fixedSliceCount(1);
     points.push({
       simulatedAt,
@@ -287,7 +319,10 @@ function constraintMinutes(
   return {
     peakC: Number.isFinite(peakC) ? peakC : RACK_LIMIT_C,
     minutes: constrainedSlices * SIM_DT_S / 60,
+    degreeMinutes,
     points,
+    finalState: state,
+    coolingEnergyKwh,
   };
 }
 
@@ -307,8 +342,12 @@ function deriveSnapshot(
   const advisoryLayout = scenarioLayout(simulatedAt, startAt, "advisory", config, advisory);
   const baselineTelemetry = readTelemetry(thermal, baselineLayout, "baseline");
   const advisoryTelemetry = readTelemetry(thermal, advisoryLayout, "baseline");
-  const baselineForecast = constraintMinutes(thermal, startAt, simulatedAt, "baseline", config);
-  const advisoryForecast = constraintMinutes(thermal, startAt, simulatedAt, "advisory", config, advisory);
+  const baselineForecast = simulateVariant(thermal, startAt, simulatedAt, "baseline", config);
+  const advisoryForecast = simulateVariant(thermal, startAt, simulatedAt, "advisory", config, advisory);
+  const alternativeForecast = simulateVariant(thermal, startAt, simulatedAt, "alternative", config, {
+    flowPercent: COMMAND_ENVELOPE.maxFlowPercent,
+    durationMinutes: Math.max(1, advisory.durationMinutes / 2),
+  });
   const currentRacks = baselineLayout.items
     .filter((item) => item.kind === "rack")
     .map((item) => {
@@ -349,6 +388,10 @@ function deriveSnapshot(
     ...point,
     counterfactualPeakC: advisoryForecast.points[index]?.baselinePeakC ?? point.counterfactualPeakC,
     actualPeakC: index === 0 ? rounded(currentPeak) : null,
+  }));
+  const alternativeSeries = baselineForecast.points.map((point, index) => ({
+    ...point,
+    counterfactualPeakC: alternativeForecast.points[index]?.baselinePeakC ?? point.baselinePeakC,
   }));
   const actualPoint = {
     simulatedAt,
@@ -429,13 +472,36 @@ function deriveSnapshot(
     },
     baselineTelemetry,
     advisoryTelemetry,
+    thermalState: thermal,
     modelConfig: config,
+    checkpoints: SCENARIO_CHECKPOINTS.map((checkpoint) => ({
+      ...checkpoint,
+      reached: scenarioElapsed(simulatedAt, startAt) >= checkpoint.elapsedS,
+    })),
     series: {
       actual: [actualPoint],
       forecast: forecastSeries,
-      counterfactual: forecastSeries,
+      counterfactual: advisoryForecast.points,
+      alternative: alternativeSeries,
     },
   };
+}
+
+const snapshotCache = new Map<string, CockpitSnapshot>();
+
+function cachedSnapshot(
+  thermal: SimState,
+  simulatedAt: number,
+  startAt: number,
+  config: FacilityModelConfig,
+): CockpitSnapshot {
+  const key = `${startAt}:${simulatedAt}:${config.scenario}:${config.seed}:${config.thermalMass}:${config.responseLag}`;
+  const cached = snapshotCache.get(key);
+  if (cached) return cached;
+  const snapshot = deriveSnapshot(thermal, simulatedAt, startAt, config);
+  snapshotCache.set(key, snapshot);
+  if (snapshotCache.size > 256) snapshotCache.delete(snapshotCache.keys().next().value!);
+  return snapshot;
 }
 
 export function createCockpitSimulation(startAt: number, config: FacilityModelConfig = DEFAULT_FACILITY_MODEL): CockpitSimulationState {
@@ -445,7 +511,7 @@ export function createCockpitSimulation(startAt: number, config: FacilityModelCo
     elapsedSlices: 0,
     simulatedAt: startAt,
     thermal,
-    snapshot: deriveSnapshot(thermal, startAt, startAt, config),
+    snapshot: cachedSnapshot(thermal, startAt, startAt, config),
   };
 }
 
@@ -492,7 +558,7 @@ export function advanceCockpitSimulation(
     elapsedSlices,
     simulatedAt,
     thermal,
-    snapshot: deriveSnapshot(thermal, simulatedAt, startAt, config),
+    snapshot: cachedSnapshot(thermal, simulatedAt, startAt, config),
   };
 }
 
@@ -543,6 +609,7 @@ export function snapshotForAudit(snapshot: CockpitSnapshot) {
     safety: snapshot.safety,
     baselineTelemetry: snapshot.baselineTelemetry,
     advisoryTelemetry: snapshot.advisoryTelemetry,
+    thermalState: snapshot.thermalState,
     series: snapshot.series,
     incident: snapshot.incident,
   };

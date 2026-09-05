@@ -137,7 +137,7 @@ assert.equal(graph.nodes.length, 9);
 assert.equal(graph.edges.length, 11);
 const selection = graphSelection(graph, "cdu-03");
 assert(selection.upstream.some((node) => node.id === "B02"));
-assert(selection.downstream.some((node) => node.id === "chiller-02"));
-assert(selection.impact.some((node) => node.id === "primary"));
+assert(selection.downstream.some((node) => node.id === "chiller-01"));
+assert.deepEqual(selection.impact.map((node) => node.id).sort(), ["A01", "A02", "B01", "B02"]);
 
 console.log("Domain invariants, topology, bounds, lag, offline equipment, reset, comparison, and graph checks passed.");
