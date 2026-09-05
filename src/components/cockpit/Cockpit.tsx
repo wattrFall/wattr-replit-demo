@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Show, SignIn, SignUp, useUser } from "@clerk/react";
 import {
   Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ArrowDownUp, BookOpen, BrainCircuit, Check,
@@ -126,10 +126,21 @@ function ThemeProvider({ initialTheme, children }: { initialTheme: string; child
 }
 
 function ContextualHelp({ title, children }: { title: string; children: ReactNode }) {
-  return <details className="context-help">
-    <summary><CircleHelp size={14} aria-hidden="true"/><span>{title}</span></summary>
-    <div className="context-help-content">{children}</div>
-  </details>;
+  const tooltipId = useId();
+  return <span className="context-help">
+    <button
+      type="button"
+      className="context-help-trigger"
+      aria-label={title}
+      aria-describedby={tooltipId}
+    >
+      <CircleHelp size={14} aria-hidden="true"/>
+    </button>
+    <span id={tooltipId} className="context-help-content" role="tooltip">
+      <strong>{title}</strong>
+      {children}
+    </span>
+  </span>;
 }
 
 function DisclosureSection({ label, children, engineering = false }: { label: string; children: ReactNode; engineering?: boolean }) {

@@ -134,10 +134,32 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
       : target?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]");
     focusable?.focus({ preventScroll: false });
   };
-  const cardStyle = rect ? {
-    left: Math.min(window.innerWidth - 340, Math.max(12, rect.left)),
-    top: rect.bottom + 220 < window.innerHeight ? rect.bottom + 12 : Math.max(74, rect.top - 210),
-  } : { right: 16, bottom: 16 };
+  const cardStyle = (() => {
+    if (!rect) return { right: 16, bottom: 16 };
+    const margin = 16;
+    const cardWidth = Math.min(344, window.innerWidth - margin * 2);
+    const estimatedHeight = 270;
+    const clampedTop = Math.min(
+      window.innerHeight - estimatedHeight - margin,
+      Math.max(74, rect.top),
+    );
+    if (rect.right + margin + cardWidth <= window.innerWidth) {
+      return { left: rect.right + margin, top: clampedTop };
+    }
+    if (rect.left - margin - cardWidth >= margin) {
+      return { left: rect.left - margin - cardWidth, top: clampedTop };
+    }
+    if (rect.bottom + margin + estimatedHeight <= window.innerHeight) {
+      return {
+        left: Math.min(window.innerWidth - cardWidth - margin, Math.max(margin, rect.left)),
+        top: rect.bottom + margin,
+      };
+    }
+    return {
+      left: Math.min(window.innerWidth - cardWidth - margin, Math.max(margin, rect.left)),
+      bottom: Math.max(margin, window.innerHeight - rect.top + margin),
+    };
+  })();
 
   return <GuidanceContext.Provider value={{ emit, restart }}>
     {children}
