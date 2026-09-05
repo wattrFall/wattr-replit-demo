@@ -238,6 +238,18 @@ try {
   assert.equal(detail.body.safetyEvaluation.outcome, "PASS");
   assert.equal(detail.body.decision.note, "Approved as advisory only");
 
+  const legacyInsert = await pool.query(
+    `INSERT INTO audit_records
+       (organization_id, facility_id, user_id, action, scenario_id, simulated_at, model_version, model_version_id, payload)
+     VALUES ('wattr-demo', 'sfo-01', $1, 'DECISION_APPROVE', 'gpu-training-ramp-v1', $2, 'sfo-rom-1.0.0', 'sfo-rom-1.0.0', $3)
+     RETURNING id`,
+    [userId, SCENARIO_START_S + 300, { recommendationId: "rec-17", outcome: "ALLOWED_AS_ADVISORY" }],
+  );
+  const legacyDetail = await request(`/api/facilities/sfo-01/audit/${legacyInsert.rows[0].id}`);
+  assert.equal(legacyDetail.status, 200);
+  assert.equal(legacyDetail.body.reconstructionSource, "REPLAYED_LEGACY");
+  assert.equal(legacyDetail.body.snapshot.simulatedAt, SCENARIO_START_S + 300);
+
   assert(alternativeAuditId);
   const alternativeDetail = await request(`/api/facilities/sfo-01/audit/${alternativeAuditId}`);
   assert.equal(alternativeDetail.status, 200);

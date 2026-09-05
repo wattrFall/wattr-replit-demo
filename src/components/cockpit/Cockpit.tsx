@@ -174,7 +174,7 @@ function Brand() {
 }
 function Status({ children, tone = "good" }: { children: ReactNode; tone?: "good" | "warn" | "bad" }) { return <span className={`status ${tone}`}>{children}</span>; }
 function Metric({ label, value, unit, sub, warn, help }: { label: string; value: string; unit?: string; sub: string; warn?: boolean; help?: string }) {
-  return <article className="panel metric" aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. ${sub}`}><div className="text-[10px] uppercase tracking-[.16em] text-slate-500">{label}</div><div className={`mt-3 text-2xl font-semibold ${warn ? "text-amber-300" : "text-slate-100"}`}>{value}<small className="ml-1 text-xs font-normal text-slate-500">{unit}</small></div><div className="mt-2 text-[11px] text-slate-500">{sub}</div>{help && <ContextualHelp title={`About ${label}`}><p>{help}</p></ContextualHelp>}</article>;
+  return <article className="panel metric" aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. ${sub}`}><div className="metric-header">{help && <ContextualHelp title={`About ${label}`}><p>{help}</p></ContextualHelp>}<div className="text-[10px] uppercase tracking-[.16em] text-slate-500">{label}</div></div><div className={`mt-3 text-2xl font-semibold ${warn ? "text-amber-300" : "text-slate-100"}`}>{value}<small className="ml-1 text-xs font-normal text-slate-500">{unit}</small></div><div className="metric-sub mt-2 text-[11px] text-slate-500">{sub}</div></article>;
 }
 function PageHead({ eyebrow, title, detail, action }: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
   return <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><div className={`${mono} mb-2 text-[10px] tracking-[.2em] text-cyan-400`}>{eyebrow}</div><h1 className="text-2xl font-semibold tracking-tight text-slate-100 md:text-3xl">{title}</h1><p className="mt-1 text-sm text-slate-500">{detail}</p></div>{action}</div>;
@@ -317,7 +317,8 @@ function useScenarioClock() {
 function ReplayBar({ onReset = () => {} }: { onReset?: () => void }) {
   const s = useScenarioSession();
   const elapsed = s.simulation.snapshot.elapsedS;
-  return <section className="replay-bar mb-4" aria-label="Canonical replay controls">
+  if (!location.pathname.endsWith("/operations")) return null;
+  return <section className="replay-bar mb-4" data-guide="replay" aria-label="Canonical replay controls">
     <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300" aria-hidden="true"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><div className="ml-auto flex items-center gap-1" role="group" aria-label="Replay speed"><span className="mr-1 text-[10px] uppercase tracking-[.12em] text-slate-500">Speed</span>{([1,5,10,30,60] as const).map(v => <button type="button" aria-label={`Replay speed ${v} times`} aria-pressed={s.speed === v} key={v} onClick={() => s.setSpeed(v)} className={`speed ${s.speed === v ? "selected" : ""}`}>{v}×</button>)}</div><button type="button" className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15} aria-hidden="true"/> : <Play size={15} aria-hidden="true"/>} {s.playing ? "Pause" : "Play"}</button></div>
     <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" className="button secondary" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={14} aria-hidden="true"/>Step 30s</button><button type="button" className="button secondary" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}>−5m</button><button type="button" className="button secondary" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}>+5m</button><button type="button" className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button><input aria-label="Replay position" aria-valuetext={`${Math.round(elapsed / 60)} minutes into the 30 minute scenario`} className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/><span className={`${mono} text-[10px] text-slate-500`}>{Math.round(elapsed / 60)}m</span><button type="button" className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15} aria-hidden="true"/>Reset</button><Status tone={s.mode === "Advisory" ? "warn" : "good"}>{s.mode} · human-in-loop</Status></div>
     <p className="sr-only" role="status" aria-live="polite">Replay at {Math.round(elapsed / 60)} minutes. {s.playing ? `Playing at ${s.speed} times speed.` : "Paused."}</p>
@@ -622,11 +623,12 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
   useEffect(() => { load(); }, [facility.id, decisionFilter]);
   const select = async (record: Audit) => {
     setSelected(record);
+    setDetail(null);
     setError("");
     try {
       setDetail(await api(`/api/facilities/${facility.id}/audit/${record.id}`));
       guidance.emit("audit-reconstruct");
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setDetail(null); setError(String(cause)); }
   };
   const snapshot = detail?.snapshot;
   const decision = detail?.decision ?? selected?.payload?.decision;

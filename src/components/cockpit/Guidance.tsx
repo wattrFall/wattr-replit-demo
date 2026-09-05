@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, BookOpen, RotateCcw, X } from "lucide-react";
+import { BookOpen, RotateCcw, X } from "lucide-react";
 import type { Role } from "@/lib/security/rolePolicy";
 
 export type GuideStep = {
@@ -42,8 +42,12 @@ const stepsByRole: Record<Role, GuideStep[]> = {
     { id: "rollback", title: "Know the rollback path", body: "An archived validated version can be restored deliberately from version history.", route: "/model", target: ".panel" },
   ],
   VIEWER: [
-    { id: "twin", title: "Explore read-only operations", body: "Select an asset and inspect its synchronized state. Your role cannot record operational decisions.", route: "/operations", target: "[data-guide='assets']", action: "asset-select", actionLabel: "Select an asset" },
-    { id: "thermal", title: "Read the thermal layer", body: "Thermal view maps modeled temperatures while preserving the operational HUD.", route: "/operations", target: "[data-guide='view'] button:last-of-type", action: "thermal-view", actionLabel: "Turn on Thermal overlay" },
+    { id: "replay", title: "Set the scenario time", body: "Play, step, or scrub the deterministic scenario here. Every Operations panel follows this one clock.", route: "/operations", target: "[data-guide='replay']" },
+    { id: "twin", title: "Explore read-only operations", body: "Select an asset in the twin to inspect its synchronized state. Viewer access never records an operational decision.", route: "/operations", target: "[data-guide='assets']", action: "asset-select", actionLabel: "Select an asset" },
+    { id: "thermal", title: "Read the thermal layer", body: "Choose Thermal overlay to map modeled inlet temperatures without hiding the operational HUD.", route: "/operations", target: "[data-guide='view'] button:last-of-type", action: "thermal-view", actionLabel: "Turn on Thermal overlay" },
+    { id: "layers", title: "Control operational layers", body: "Use the controls beside the twin view to reveal heat, flow, sensors, labels, incidents, and forecast context without changing the simulation.", route: "/operations", target: "[data-guide='view']" },
+    { id: "timeline", title: "Jump to an authored event", body: "The timeline moves the shared replay clock to a meaningful scenario checkpoint.", route: "/operations", target: ".timeline" },
+    { id: "assistant", title: "Ask Wattr with evidence", body: "Ask a natural-language question about the authorized facility. Answers stay grounded in structured records and cannot issue commands.", route: "/ask-wattr", target: ".panel" },
     { id: "audit", title: "Review historical context", body: "Select an available audit record to reconstruct what was known at decision time.", route: "/audit", target: "[data-guide='audit'] button", action: "audit-reconstruct", actionLabel: "Select a record" },
   ],
 };
@@ -68,6 +72,8 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
   const [error, setError] = useState("");
   const originRef = useRef<HTMLElement | null>(null);
   const cardRef = useRef<HTMLElement | null>(null);
+  const locatedStepRef = useRef("");
+  const [cardSize, setCardSize] = useState({ width: 344, height: 270 });
   const current = steps[stepIndex];
   const recoverFocus = () => {
     const target = originRef.current?.isConnected
@@ -79,20 +85,43 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
   const locate = useCallback(() => {
     if (!open || !current) return;
     const target = document.querySelector<HTMLElement>(current.target);
-    setRect(target?.getBoundingClientRect() ?? null);
+    if (!target) {
+      setRect(null);
+      return;
+    }
+    if (locatedStepRef.current !== current.id) {
+      locatedStepRef.current = current.id;
+      target.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      window.setTimeout(() => setRect(target.getBoundingClientRect()), 220);
+    } else {
+      setRect(target.getBoundingClientRect());
+    }
   }, [current, open]);
   useLayoutEffect(() => {
     locate();
     addEventListener("resize", locate);
     addEventListener("scroll", locate, true);
+    const observer = new MutationObserver(locate);
+    observer.observe(document.body, { childList: true, subtree: true });
     const timer = window.setInterval(locate, 500);
-    return () => { removeEventListener("resize", locate); removeEventListener("scroll", locate, true); clearInterval(timer); };
+    return () => { removeEventListener("resize", locate); removeEventListener("scroll", locate, true); observer.disconnect(); clearInterval(timer); };
   }, [locate]);
   useEffect(() => {
     if (!open || !current) return;
     const wanted = routeFor(current, facilityId);
     if (location.pathname !== wanted) navigate(wanted);
-  }, [open, stepIndex, role]);
+  }, [open, current, facilityId, navigate]);
+  useLayoutEffect(() => {
+    if (!open || !cardRef.current) return;
+    const update = () => {
+      const box = cardRef.current?.getBoundingClientRect();
+      if (box) setCardSize({ width: box.width, height: box.height });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(cardRef.current);
+    return () => observer.disconnect();
+  }, [open, current]);
   useEffect(() => {
     if (!open) return;
     cardRef.current?.focus({ preventScroll: true });
@@ -125,20 +154,13 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     return () => removeEventListener("wattr:restart-guide", onRestart);
   }, [restart]);
 
-  const skip = () => { const finished = stepIndex + 1 >= steps.length; void persist(stepIndex + 1, finished); };
-  const continueLater = () => { setOpen(false); setNotice(`Tutorial paused at step ${stepIndex + 1}. Progress is saved.`); recoverFocus(); };
-  const focusTarget = () => {
-    const target = document.querySelector<HTMLElement>(current.target);
-    const focusable = target?.matches("button, a[href], input, select, textarea, [tabindex]")
-      ? target
-      : target?.querySelector<HTMLElement>("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]");
-    focusable?.focus({ preventScroll: false });
-  };
+  const next = () => { const finished = stepIndex + 1 >= steps.length; void persist(stepIndex + 1, finished); };
+  const skip = () => { setOpen(false); setNotice(`Tutorial paused at step ${stepIndex + 1}. Progress is saved.`); recoverFocus(); };
   const cardStyle = (() => {
     if (!rect) return { right: 16, bottom: 16 };
     const margin = 16;
-    const cardWidth = Math.min(344, window.innerWidth - margin * 2);
-    const estimatedHeight = 270;
+    const cardWidth = Math.min(cardSize.width, window.innerWidth - margin * 2);
+    const estimatedHeight = cardSize.height;
     const clampedTop = Math.min(
       window.innerHeight - estimatedHeight - margin,
       Math.max(74, rect.top),
@@ -167,18 +189,16 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     {open && current && <div className="guide-layer" aria-live="polite">
       {rect && <div className="guide-spotlight" style={{ left: rect.left - 5, top: rect.top - 5, width: rect.width + 10, height: rect.height + 10 }}/>}
       <section ref={cardRef} tabIndex={-1} className="guide-card" style={cardStyle} role="region" aria-labelledby="guide-title" aria-describedby="guide-body">
-        <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">GUIDED TWIN · {stepIndex + 1}/{steps.length}</div><h2 id="guide-title" className="mt-1 font-semibold">{current.title}</h2></div><button className="icon-button" onClick={continueLater} aria-label="Continue tutorial later"><X size={15}/></button></div>
+        <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">GUIDED TWIN · {stepIndex + 1}/{steps.length}</div><h2 id="guide-title" className="mt-1 font-semibold">{current.title}</h2></div><button className="icon-button" onClick={skip} aria-label="Skip tutorial for now"><X size={15}/></button></div>
         <p id="guide-body" className="mt-3 text-xs leading-5 text-slate-300">{current.body}</p>
         <p className="mt-3 text-xs text-cyan-300">{current.actionLabel ? `Required: ${current.actionLabel}.` : "Review this area, then continue."}</p>
         {!rect && <p className="mt-2 text-xs text-amber-300">This control is unavailable here. Skip this step or open its workspace.</p>}
         {error && <p className="mt-2 text-xs text-red-300" role="alert">{error}</p>}
         <div className="mt-4 flex flex-wrap gap-2">
-          <button className="button secondary" disabled={stepIndex === 0} onClick={() => void persist(stepIndex - 1, false)}><ArrowLeft size={13}/>Back</button>
-          <button className="button secondary" onClick={skip}>Skip</button>
-          {rect && <button className="button secondary" onClick={focusTarget}>Focus control</button>}
-          {!current.action && <button className="button primary" onClick={() => void persist(stepIndex + 1, stepIndex + 1 >= steps.length)}>Next<ArrowRight size={13}/></button>}
+          <button className="button secondary" disabled={stepIndex === 0} onClick={() => void persist(stepIndex - 1, false)}>Back</button>
+          <button className="button primary" onClick={next}>Next</button>
         </div>
-        <button className="tutorial-later" onClick={continueLater}>Continue later</button>
+        <button className="tutorial-later" onClick={skip}>Skip tutorial</button>
       </section>
     </div>}
   </GuidanceContext.Provider>;

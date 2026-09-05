@@ -371,15 +371,12 @@ try {
     await restartGuide.focus();
     await restartGuide.click();
     await page.getByText("Orient in orbit view", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Focus control" }).click();
-    assert.equal(
-      await page.evaluate(() => document.activeElement?.getAttribute("data-guide")),
-      "camera-orbit",
-      "guidance did not provide a keyboard focus alternative",
-    );
+    await page.locator(".guide-spotlight").waitFor({ state: "visible", timeout: 10_000 });
+    assert(await page.getByRole("button", { name: "Next" }).isVisible(), "guidance did not provide consistent next navigation");
+    assert.equal(await page.getByRole("button", { name: "Focus control" }).count(), 0, "obsolete focus control is still rendered");
     await page.locator("[data-guide='camera-orbit']").click();
     await page.getByText("Enter aisle-level walkthrough", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Continue tutorial later" }).click();
+    await page.getByRole("button", { name: "Skip tutorial", exact: true }).click();
     assert.equal(
       await page.evaluate(() => document.activeElement?.id),
       "main-content",

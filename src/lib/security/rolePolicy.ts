@@ -7,7 +7,7 @@ export const ROLE_CAPABILITIES: Record<Role, Record<Capability, boolean>> = {
   OPERATOR: { view: true, operate: true, engineer: false, model: false, assistant: true },
   ENGINEER: { view: true, operate: false, engineer: true, model: false, assistant: true },
   MODEL_ADMIN: { view: true, operate: false, engineer: false, model: true, assistant: true },
-  VIEWER: { view: true, operate: false, engineer: false, model: false, assistant: false },
+  VIEWER: { view: true, operate: false, engineer: false, model: false, assistant: true },
 };
 
 export function defaultLandingPath(role: Role) {

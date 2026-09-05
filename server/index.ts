@@ -171,7 +171,7 @@ async function facilityPermission(userId: string, facilityId: string, capability
          OR ($3 = 'operate' AND p.can_operate AND m.role = 'OPERATOR')
          OR ($3 = 'engineer' AND p.can_view AND m.role = 'ENGINEER')
          OR ($3 = 'model' AND p.can_edit_model AND m.role = 'MODEL_ADMIN')
-          OR ($3 = 'assistant' AND p.can_view AND m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER'))
+          OR ($3 = 'assistant' AND p.can_view AND m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER', 'MODEL_ADMIN', 'VIEWER'))
        )`,
     [userId, facilityId, capability, DEMO_ORGANIZATION_ID],
   );
@@ -589,7 +589,7 @@ app.get("/api/facilities", requireAuth, async (req: AuthedRequest, res) => {
             (p.can_operate AND m.role = 'OPERATOR') AS can_operate,
             (p.can_edit_model AND m.role = 'MODEL_ADMIN') AS can_edit_model,
             (m.role = 'ENGINEER') AS can_engineer,
-            (m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER', 'MODEL_ADMIN')) AS can_assistant
+            (m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER', 'MODEL_ADMIN', 'VIEWER')) AS can_assistant
      FROM facilities f
      JOIN model_versions mv ON mv.id = f.model_version
      JOIN facility_permissions p ON p.facility_id = f.id
@@ -2343,8 +2343,28 @@ app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: A
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Audit record not found" });
   const record = result.rows[0];
-  if (!record.payload?.snapshot) {
-    return res.status(409).json({ error: "This legacy record does not contain an immutable reconstruction snapshot" });
+  let snapshot = record.payload?.snapshot;
+  let reconstructionSource: "STORED_SNAPSHOT" | "REPLAYED_LEGACY" = "STORED_SNAPSHOT";
+  let historicalModel: { id: string; config: FacilityModelConfig } | undefined;
+  if (!snapshot) {
+    if (!isScenarioTimestamp(Number(record.simulated_at))) {
+      return res.status(409).json({ error: "Historical reconstruction is unavailable because the recorded scenario time is outside the supported replay window" });
+    }
+    const modelResult = await pool.query(
+      `SELECT id, config FROM model_versions WHERE facility_id = $1 AND id = $2`,
+      [req.params.facilityId, record.model_version],
+    );
+    historicalModel = modelResult.rows[0];
+    if (!historicalModel) {
+      return res.status(409).json({ error: "Historical reconstruction is unavailable because the recorded model version no longer exists" });
+    }
+    try {
+      assertModelConfig(historicalModel.config);
+      snapshot = snapshotForAudit(replaySnapshot(Number(record.simulated_at), historicalModel.config));
+      reconstructionSource = "REPLAYED_LEGACY";
+    } catch {
+      return res.status(409).json({ error: "Historical reconstruction is unavailable for this legacy record" });
+    }
   }
   await recordLearningEvent({
     organizationId: permission.organization_id,
@@ -2361,10 +2381,11 @@ app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: A
   });
   res.json({
     record,
-    snapshot: record.payload.snapshot,
-    scenario: record.payload.scenario,
-    model: record.payload.model,
-    recommendation: record.payload.recommendation,
+    snapshot,
+    reconstructionSource,
+    scenario: record.payload.scenario ?? { id: record.scenario_id },
+    model: record.payload.model ?? { version: historicalModel?.id ?? record.model_version },
+    recommendation: record.payload.recommendation ?? snapshot.recommendation,
     safetyEvaluation: record.payload.safetyEvaluation,
     decision: record.payload.decision,
   });

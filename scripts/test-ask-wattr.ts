@@ -249,7 +249,7 @@ try {
     method: "POST",
     body: JSON.stringify({ action: focusAction.id, facilityId: "sfo-01" }),
   });
-  if (viewerFocus.status !== 403) throw new Error("Viewer directly invoked an assistant focus action");
+  if (viewerFocus.status !== 200 || viewerFocus.body?.action !== "FOCUS") throw new Error("Viewer could not use a read-only assistant focus action");
   const tamperedFocus = await request(users.OPERATOR, "/api/assistant/action", {
     method: "POST",
     body: JSON.stringify({ action: focusAction.id.replace("inc-204", "inc-205"), facilityId: "sfo-01" }),
@@ -302,7 +302,7 @@ try {
   }
 
   const viewer = await ask(users.VIEWER, { question: "What is the current risk?", facilityId: "sfo-01" });
-  if (viewer.status !== 403 || viewer.body?.tool !== "refusal") throw new Error("Viewer reached Ask Wattr");
+  if (viewer.status !== 200 || !["facility_state", "incident_context"].includes(viewer.body?.tool)) throw new Error("Viewer could not access grounded read-only Ask Wattr");
 
   const forbiddenAction = await request(users.OPERATOR, "/api/assistant/action", {
     method: "POST",
