@@ -69,14 +69,15 @@ function CameraRig({ mode, floor }: { mode: "orbit" | "walk"; floor: 1 | 2 }) {
 function AssetMesh({ asset, props }: { asset: Asset; props: CanvasProps }) {
   const rack = props.snapshot.racks.find((item) => item.id === asset.id);
   const selected = props.selectedId === asset.id;
+  const highlighted = props.highlightedPath?.includes(asset.id) ?? false;
   const heat = rack ? THREE.MathUtils.clamp((rack.inletC - 22) / 13, 0, 1) : 0;
   const color = props.view === "thermal" && props.overlays.includes("heat") ? new THREE.Color().lerpColors(new THREE.Color("#22d3ee"), new THREE.Color("#ef4444"), heat) : new THREE.Color(asset.kind === "rack" ? "#263746" : asset.kind === "cooling" ? "#0e7490" : "#a16207");
   const click = (event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); props.onSelect(asset.id); };
   return <group position={[asset.x, 0, asset.z]}>
     <mesh position={[0, asset.h / 2, 0]} onClick={click}>
       {asset.kind === "sensor" ? <sphereGeometry args={[.16, 12, 12]}/> : <boxGeometry args={[asset.w, asset.h, asset.d]}/>}
-      <meshStandardMaterial color={color} emissive={selected ? "#32d5df" : rack?.atRisk && props.overlays.includes("incidents") ? "#b91c1c" : "#000000"} emissiveIntensity={selected ? .55 : .25} roughness={.64} metalness={.2}/>
-      <Edges color={selected ? "#7ff5f7" : "#547080"}/>
+      <meshStandardMaterial color={color} emissive={selected ? "#32d5df" : highlighted ? "#a855f7" : rack?.atRisk && props.overlays.includes("incidents") ? "#b91c1c" : "#000000"} emissiveIntensity={selected || highlighted ? .55 : .25} roughness={.64} metalness={.2}/>
+      <Edges color={selected ? "#7ff5f7" : highlighted ? "#d8b4fe" : "#547080"}/>
     </mesh>
     {asset.kind === "rack" && <mesh position={[0, asset.h / 2, asset.d / 2 + .01]}><planeGeometry args={[asset.w * .7, asset.h * .72]}/><meshBasicMaterial color={color} transparent opacity={.42}/></mesh>}
     {props.overlays.includes("labels") && <Html center position={[0, asset.h + .35, 0]}><button className="scene-label" onClick={() => props.onSelect(asset.id)}>{asset.label}</button></Html>}
@@ -97,6 +98,7 @@ function FacilityScene(props: CanvasProps) {
     {props.floor === 1 && props.overlays.includes("sensors") && sensors.map((asset) => <AssetMesh key={asset.id} asset={asset} props={props}/>)}
     {props.overlays.includes("flow") && <><mesh position={[0, 3.1, 3]}><boxGeometry args={[17, .08, .08]}/><meshBasicMaterial color="#22d3ee"/></mesh><mesh position={[0, 3.1, -1]}><boxGeometry args={[14, .08, .08]}/><meshBasicMaterial color="#f59e0b"/></mesh></>}
     {props.overlays.includes("forecast") && <Html position={[4.8, 3.8, -3.5]}><div className="scene-forecast">5 MIN FORECAST<br/><b>{props.snapshot.forecast.baselinePeakC.toFixed(1)}°C</b></div></Html>}
+    {props.highlightedPath?.length && <Html position={[0, 4.4, 0]}><div className="scene-forecast">FOCUSED THERMAL PATH<br/><b>{props.highlightedPath.join(" → ")}</b></div></Html>}
     <CameraRig mode={props.cameraMode} floor={props.floor}/>
   </>;
 }

@@ -21,11 +21,23 @@ type ScenarioSession = {
   simulation: CockpitSimulationState;
   modelConfig: FacilityModelConfig;
   selectedAssetId: string;
+  selectedFloor: 1 | 2;
+  highlightedPath: string[];
+  focusedIncidentId: string | null;
+  focusedRecommendationId: string | null;
   setPlaying: (playing: boolean) => void;
   setSpeed: (speed: ScenarioSession["speed"]) => void;
   setMode: (mode: ScenarioSession["mode"]) => void;
   setModelConfig: (config: FacilityModelConfig) => void;
   selectAsset: (assetId: string) => void;
+  focusTwin: (focus: {
+    assetId?: string;
+    floor?: 1 | 2;
+    path?: string[];
+    incidentId?: string;
+    recommendationId?: string;
+    simulatedAt?: number;
+  }) => void;
   advance: (seconds: number) => void;
   step: (seconds?: number) => void;
   jump: (elapsedSeconds: number) => void;
@@ -41,10 +53,35 @@ export const useScenarioSession = create<ScenarioSession>((set) => ({
   simulation: createCockpitSimulation(SCENARIO_START_S),
   modelConfig: DEFAULT_FACILITY_MODEL,
   selectedAssetId: "cdu-03",
+  selectedFloor: 1,
+  highlightedPath: [],
+  focusedIncidentId: null,
+  focusedRecommendationId: null,
   setPlaying: (playing) => set({ playing }),
   setSpeed: (speed) => set({ speed }),
   setMode: (mode) => set({ mode }),
   selectAsset: (selectedAssetId) => set({ selectedAssetId }),
+  focusTwin: (focus) => set((state) => {
+    const targetTime = focus.simulatedAt;
+    const simulation = targetTime === undefined
+      ? state.simulation
+      : advanceCockpitSimulation(
+          createCockpitSimulation(SCENARIO_START_S, state.modelConfig),
+          Math.min(SCENARIO_DURATION_S, Math.max(0, targetTime - SCENARIO_START_S)),
+          SCENARIO_START_S,
+          state.modelConfig,
+        );
+    return {
+      selectedAssetId: focus.assetId ?? state.selectedAssetId,
+      selectedFloor: focus.floor ?? state.selectedFloor,
+      highlightedPath: focus.path ?? [],
+      focusedIncidentId: focus.incidentId ?? null,
+      focusedRecommendationId: focus.recommendationId ?? null,
+      simulatedAt: simulation.simulatedAt,
+      simulation,
+      playing: false,
+    };
+  }),
   setModelConfig: (modelConfig) => set((state) => {
     if (
       state.modelConfig.seed === modelConfig.seed &&
@@ -101,6 +138,9 @@ export const useScenarioSession = create<ScenarioSession>((set) => ({
     playing: false,
     speed: 1,
     simulation: createCockpitSimulation(SCENARIO_START_S, state.modelConfig),
+    highlightedPath: [],
+    focusedIncidentId: null,
+    focusedRecommendationId: null,
   })),
 }));
 

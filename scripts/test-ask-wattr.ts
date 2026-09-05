@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from "node:http";
 import { availableTestPort } from "./test-port";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
@@ -20,7 +21,24 @@ const emptyFacilityId = `${prefix}-empty`;
 const emptyModelId = `${prefix}-model`;
 const emptyScenarioId = `${prefix}-scenario`;
 const port = await availableTestPort();
+const providerPort = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
+let providerMode: "ok" | "invalid" | "unavailable" = "ok";
+const providerRequests: Array<Record<string, unknown>> = [];
+const provider = createServer(async (req, res) => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+  providerRequests.push(body);
+  if (providerMode === "unavailable") {
+    res.writeHead(503, { "content-type": "application/json" });
+    return res.end('{"error":"unavailable"}');
+  }
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify({ tool: providerMode === "invalid" ? "issue_ot_command" : "incident_context" }) } }],
+  }));
+});
 
 async function request(userId: string, path: string, init: RequestInit = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -99,8 +117,16 @@ async function cleanup() {
 }
 
 await seed();
+provider.listen(providerPort, "127.0.0.1");
+await once(provider, "listening");
 const server = spawn("node_modules/.bin/tsx", ["server/index.ts"], {
-  env: { ...process.env, NODE_ENV: "test", PORT: String(port) },
+  env: {
+    ...process.env,
+    NODE_ENV: "test",
+    PORT: String(port),
+    ASK_WATTR_MODEL_URL: `http://127.0.0.1:${providerPort}`,
+    ASK_WATTR_MODEL: "test-interpreter",
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 let stderr = "";
@@ -183,6 +209,73 @@ try {
     throw new Error("Assistant implied live or invented telemetry");
   }
 
+  const interpreted = await ask(users.OPERATOR, {
+    question: "Please explain the selected equipment and its causal context",
+    facilityId: "sfo-01",
+    simulatedAt: 1752677460,
+    selection: { assetId: "B02", path: ["gpu-b", "B02", "loop-b"] },
+  });
+  if (interpreted.status !== 200 ||
+      interpreted.body?.tool !== "incident_context" ||
+      interpreted.body?.interpretation?.source !== "provider" ||
+      !interpreted.body?.limitations?.some((item: string) => item.includes("selected asset B02"))) {
+    throw new Error(`Provider interpretation or contextual selection failed: ${JSON.stringify(interpreted.body)}`);
+  }
+  const providerPayload = JSON.stringify(providerRequests.at(-1));
+  if (!providerPayload.includes("incident_context") || providerPayload.includes("CLERK_SECRET_KEY")) {
+    throw new Error("Provider received unrestricted or secret-bearing interpretation context");
+  }
+  const focusAction = interpreted.body.actions.find((action: any) => action.id.startsWith("focus-incident:"));
+  if (!focusAction || focusAction.kind !== "FOCUS" || focusAction.focus?.simulatedAt !== 1752677460) {
+    throw new Error(`Incident focus suggestion was not bound to the cited record: ${JSON.stringify(focusAction)}`);
+  }
+  const confirmedFocus = await request(users.OPERATOR, "/api/assistant/action", {
+    method: "POST",
+    body: JSON.stringify({ action: focusAction.id, facilityId: "sfo-01" }),
+  });
+  if (confirmedFocus.status !== 200 ||
+      confirmedFocus.body?.action !== "FOCUS" ||
+      confirmedFocus.body?.humanConfirmationRequired !== true ||
+      confirmedFocus.body?.focus?.incidentId !== "inc-204" ||
+      !confirmedFocus.body?.focus?.path?.length) {
+    throw new Error(`Confirmed twin focus failed: ${JSON.stringify(confirmedFocus.body)}`);
+  }
+  const viewerFocus = await request(users.VIEWER, "/api/assistant/action", {
+    method: "POST",
+    body: JSON.stringify({ action: focusAction.id, facilityId: "sfo-01" }),
+  });
+  if (viewerFocus.status !== 403) throw new Error("Viewer directly invoked an assistant focus action");
+  const tamperedFocus = await request(users.OPERATOR, "/api/assistant/action", {
+    method: "POST",
+    body: JSON.stringify({ action: focusAction.id.replace("inc-204", "inc-205"), facilityId: "sfo-01" }),
+  });
+  if (tamperedFocus.status !== 403) throw new Error("Tampered focus binding was accepted");
+
+  providerMode = "invalid";
+  const invalidProvider = await ask(users.OPERATOR, {
+    question: "What would happen if we used the recommendation?",
+    facilityId: "sfo-01",
+    simulatedAt: 1752677460,
+  });
+  if (invalidProvider.status !== 200 ||
+      invalidProvider.body?.tool !== "what_if" ||
+      invalidProvider.body?.interpretation?.source !== "deterministic" ||
+      !invalidProvider.body?.limitations?.some((item: string) => item.includes("deterministic interpretation"))) {
+    throw new Error(`Invalid provider output did not fail safely: ${JSON.stringify(invalidProvider.body)}`);
+  }
+  providerMode = "unavailable";
+  const unavailableProvider = await ask(users.OPERATOR, {
+    question: "What is the current risk?",
+    facilityId: "sfo-01",
+    simulatedAt: 1752677460,
+  });
+  if (unavailableProvider.status !== 200 ||
+      unavailableProvider.body?.interpretation?.source !== "deterministic" ||
+      !unavailableProvider.body?.limitations?.some((item: string) => item.includes("unavailable"))) {
+    throw new Error(`Unavailable provider did not preserve deterministic operation: ${JSON.stringify(unavailableProvider.body)}`);
+  }
+  providerMode = "ok";
+
   const unauthorized = await ask(users.OPERATOR, {
     question: "What is happening there?",
     facilityId: "not-authorized",
@@ -221,6 +314,11 @@ try {
     body: JSON.stringify({ action: "open-incident:not-a-record", facilityId: "sfo-01" }),
   });
   if (missingRecordAction.status !== 404) throw new Error("Ask Wattr navigated to a missing incident");
+  const fabricatedFocus = await request(users.OPERATOR, "/api/assistant/action", {
+    method: "POST",
+    body: JSON.stringify({ action: "focus-incident:not-a-record", facilityId: "sfo-01" }),
+  });
+  if (fabricatedFocus.status !== 403) throw new Error("Ask Wattr focused a fabricated unsigned incident");
   const recommendationAction = await request(users.OPERATOR, "/api/assistant/action", {
     method: "POST",
     body: JSON.stringify({ action: "open-recommendation:rec-17", facilityId: "sfo-01" }),
@@ -240,6 +338,8 @@ try {
 } finally {
   server.kill("SIGTERM");
   await Promise.race([once(server, "exit"), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+  provider.close();
+  await once(provider, "close");
   await cleanup();
   await pool.end();
 }

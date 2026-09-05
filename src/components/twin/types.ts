@@ -9,6 +9,8 @@ export type FacilityTwinProps = {
   modelVersion: string;
   snapshot: CockpitSnapshot;
   selectedId: string;
+  selectedFloor?: 1 | 2;
+  highlightedPath?: string[];
   onSelect: (id: string) => void;
   view: TwinView;
   overlays: TwinOverlay[];

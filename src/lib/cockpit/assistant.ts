@@ -15,9 +15,17 @@ export type AssistantTool = typeof ASSISTANT_TOOLS[number];
 export type AssistantAction = {
   id: string;
   label: string;
-  kind: "NAVIGATE";
+  kind: "NAVIGATE" | "FOCUS";
   path: string;
   capability: "view" | "assistant" | "engineer" | "model";
+  focus?: {
+    assetId?: string;
+    floor?: 1 | 2;
+    path?: string[];
+    incidentId?: string;
+    recommendationId?: string;
+    simulatedAt?: number;
+  };
 };
 
 export type AssistantCitation = {
@@ -54,6 +62,10 @@ export type AssistantResponse = {
     quality: "GOOD" | "DEGRADED" | "UNKNOWN";
   };
   confidence: number | null;
+  interpretation: {
+    source: "provider" | "deterministic";
+    limitation: string | null;
+  };
   limitations: string[];
   citations: AssistantCitation[];
   actions: AssistantAction[];

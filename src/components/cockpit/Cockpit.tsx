@@ -426,10 +426,11 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
       <section className="panel min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 p-5"><div><h2 className="font-semibold">Synchronized facility twin</h2><p className="mt-1 text-xs text-slate-500">Select an asset to inspect its replay state and dependencies.</p></div><div data-guide="view" className="flex items-start gap-2"><div className="flex gap-1" role="group" aria-label="Twin view">{(["physical", "thermal"] as TwinView[]).map((item) => <button key={item} className={`speed ${view === item ? "selected" : ""}`} onClick={() => { setView(item); if (item === "thermal") guidance.emit("thermal-view"); }}>{item === "physical" ? "Physical" : "Thermal overlay"}</button>)}</div><ContextualHelp title="About twin views"><p>Physical view emphasizes equipment. Thermal overlay colors modeled inlet temperatures to reveal hot spots; it does not imply measured telemetry.</p></ContextualHelp></div></div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-800 px-5 py-3 text-xs text-slate-400">{(["heat", "flow", "sensors", "labels", "incidents", "forecast"] as TwinOverlay[]).map((overlay) => <label key={overlay} className="flex items-center gap-2"><input type="checkbox" checked={overlays.includes(overlay)} onChange={() => toggleOverlay(overlay)}/>{overlay === "heat" ? "Heat map" : overlay === "flow" ? "Flow paths" : overlay[0].toUpperCase() + overlay.slice(1)}</label>)}</div>
-        <FacilityTwin model={facility.model_config} modelVersion={facility.model_version} snapshot={snapshot} selectedId={selectedAsset} onSelect={setSelectedAsset} view={view} overlays={overlays} canEdit={facility.can_edit_model} onGuideAction={guidance.emit}/>
+        <FacilityTwin model={facility.model_config} modelVersion={facility.model_version} snapshot={snapshot} selectedId={selectedAsset} selectedFloor={s.selectedFloor} highlightedPath={s.highlightedPath} onSelect={setSelectedAsset} view={view} overlays={overlays} canEdit={facility.can_edit_model} onGuideAction={guidance.emit}/>
         <div className="border-t border-slate-800 p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="eyebrow">REPLAY TIMELINE</div><p className="mt-1 text-xs text-slate-500">Every panel reads the same canonical clock.</p></div><span className={`${mono} text-xs text-cyan-300`}>{Math.round(snapshot.elapsedS / 60)}m / 30m</span></div><div className="timeline mt-4"><div className="timeline-axis"/>{[0, 300, 900, 1800].map((at) => <button key={at} className={`timeline-event ${Math.abs(snapshot.elapsedS - at) < 30 ? "current" : ""}`} onClick={() => s.jump(at)}><span className={`dot ${at >= 900 ? "amber" : ""}`}/><small>{at / 60}m</small><b>{at === 0 ? "Baseline" : at === 900 ? "Forecast" : at === 1800 ? "Ramp end" : "Power rise"}</b></button>)}</div></div>
       </section>
       <aside className="min-w-0 space-y-4">
+        {(s.focusedIncidentId || s.focusedRecommendationId) && <section className="panel border-purple-400/40 p-4" aria-label="Assistant twin focus"><div className="eyebrow text-purple-300">ASK WATTR FOCUS</div><div className="mt-2 flex flex-wrap items-center gap-2"><Status tone={s.focusedIncidentId ? "warn" : "good"}>{s.focusedIncidentId ? `Incident ${s.focusedIncidentId}` : `Recommendation ${s.focusedRecommendationId}`}</Status><span className="text-xs text-slate-400">{s.highlightedPath.length ? s.highlightedPath.join(" → ") : `${selectedLabel} at the cited scenario time`}</span></div></section>}
         <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAsset === "cdu-03" ? `Cooling distribution is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit online.` : selectedAsset === "chiller-01" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : selectedAsset.startsWith("pdu-") ? "Power distribution asset in the authorized facility topology. Facility power context remains synchronized to the replay clock." : selectedAsset.startsWith("sensor-") ? `Environmental sensor marker. Facility mean inlet is ${snapshot.meanInletC.toFixed(1)}°C at this replay instant.` : selectedAsset.startsWith("rack-f2-") ? "Floor 2 modeled compute asset. This floor has no rack-level telemetry in the canonical training scenario." : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}<ContextualHelp title="Why select an asset?"><p>Selection adds local state and dependencies without replacing the facility-wide summary. Use it when a site-level signal needs asset context.</p></ContextualHelp></section>
         <section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><div className="mt-2 flex items-center justify-between gap-3"><h2 className={`text-xl font-semibold ${riskTone === "good" ? "text-teal-300" : riskTone === "bad" ? "text-red-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : `${snapshot.incident.severity} condition`}</h2><Status tone={riskTone}>{snapshot.forecast.risk}</Status></div><p className="mt-3 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><ContextualHelp title="How to read this forecast"><p>The forecast extends the current replay state through the disclosed horizon. Risk describes whether modeled temperature approaches or crosses the limit; it is not a live alarm or certainty statement.</p></ContextualHelp><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section>
         <section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={(event) => s.setMode(event.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">{s.mode === "Observe" ? "Read-only view. No advisory is proposed." : s.mode === "Shadow" ? "Recommendations are simulated for comparison; no action is sent." : "Advisories may be reviewed, but human approval is required. No OT commands are issued."}</p><ContextualHelp title="What changes by mode?"><p><b>Observe</b> shows state only. <b>Shadow</b> computes recommendations for comparison. <b>Advisory</b> lets authorized operators review and record a disposition. None of these modes sends an OT command.</p></ContextualHelp></section>
@@ -658,10 +659,11 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
 
 function GraphPage({ data, facility }: { data: SessionData; facility: Facility }) {
   const guidance = useGuidance();
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot), selectedId = useScenarioSession((s) => s.selectedAssetId), setSelectedId = useScenarioSession((s) => s.selectAsset), [view, setView] = useState<GraphView>("topology"), graph = useMemo(() => thermalGraph(snapshot, view), [snapshot, view]);
+  const snapshot = useScenarioSession((s) => s.simulation.snapshot), selectedId = useScenarioSession((s) => s.selectedAssetId), highlightedPath = useScenarioSession((s) => s.highlightedPath), setSelectedId = useScenarioSession((s) => s.selectAsset), [view, setView] = useState<GraphView>("topology"), graph = useMemo(() => thermalGraph(snapshot, view), [snapshot, view]);
   const selected = graph.nodes.find(node => node.id === selectedId) ?? graph.nodes[0], related = graphSelection(graph, selected.id);
   const nodeTone = (node: typeof graph.nodes[number]) =>
-    related.upstream.some((item) => item.id === node.id) ? "border-sky-400 bg-sky-400/10"
+    highlightedPath.includes(node.id) ? "border-purple-400 bg-purple-400/10"
+      : related.upstream.some((item) => item.id === node.id) ? "border-sky-400 bg-sky-400/10"
       : related.downstream.some((item) => item.id === node.id) ? "border-teal-400 bg-teal-400/10"
         : view === "forecast" && node.risk ? "border-amber-400 bg-amber-400/10"
           : "border-slate-700 bg-slate-900";
@@ -854,6 +856,8 @@ function GuidedHelp({ data }: { data: SessionData }) {
 
 function AssistantPage({ data, facility }: { data: SessionData; facility?: Facility }) {
   const simulatedAt = useScenarioSession((state) => state.simulatedAt);
+  const selectedAssetId = useScenarioSession((state) => state.selectedAssetId);
+  const highlightedPath = useScenarioSession((state) => state.highlightedPath);
   const [question, setQuestion] = useState("");
   const [response, setResponse] = useState<AssistantResponse | null>(null);
   const [pending, setPending] = useState(false);
@@ -870,6 +874,7 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
         question: trimmed,
         ...(facility ? { facilityId: facility.id } : {}),
         simulatedAt,
+        ...(facility ? { selection: { assetId: selectedAssetId, path: highlightedPath } } : {}),
       });
       setResponse(result);
     } catch (cause) {
@@ -882,10 +887,11 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
   const runAction = async (action: NonNullable<AssistantResponse["actions"]>[number]) => {
     if (!facility) return;
     try {
-      const result = await post<{ path: string }>("/api/assistant/action", {
+      const result = await post<{ path: string; action: "NAVIGATE" | "FOCUS"; focus?: AssistantResponse["actions"][number]["focus"] }>("/api/assistant/action", {
         action: action.id,
         facilityId: facility.id,
       });
+      if (result.focus) useScenarioSession.getState().focusTwin(result.focus);
       navigate(result.path);
     } catch (cause) {
       setError(String(cause));
@@ -913,14 +919,14 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
             />
           </label>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <span className="text-xs text-slate-500">Answers use authorized structured data only. No live telemetry is implied.</span>
+            <span className="text-xs text-slate-500">Answers use authorized structured data only. Current twin selection is included as context.</span>
             <button className="button primary" type="submit" disabled={!question.trim() || pending}><BrainCircuit size={15}/>{pending ? "Reading canonical state…" : "Ask Wattr"}</button>
           </div>
         </form>
         {!response && !error && <div className="p-6"><div className="eyebrow">TRY A ROLE-AWARE QUESTION</div><div className="mt-3 grid gap-2">{suggestions.map((suggestion) => <button key={suggestion} type="button" className="w-full rounded-md border border-slate-800 p-3 text-left text-sm text-slate-300 hover:border-cyan-400/60" onClick={() => void ask(suggestion)}>{suggestion}<ArrowRight size={14} className="float-right mt-0.5 text-cyan-300"/></button>)}</div></div>}
         {error && <div className="p-6" role="alert"><p className="text-sm text-red-300">{error}</p><p className="mt-2 text-xs text-slate-500">No answer was shown because the authorized assistant request did not complete.</p></div>}
         {response && <div className="p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">{response.tool.replace(/_/g, " ")}</div><h2 className="mt-2 text-lg font-semibold">Grounded answer</h2></div><Status tone={response.tool === "refusal" ? "bad" : "good"}>{response.tool === "refusal" ? "LIMITED" : "AUTHORIZED"}</Status></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">{response.tool.replace(/_/g, " ")} · {response.interpretation.source} interpretation</div><h2 className="mt-2 text-lg font-semibold">Grounded answer</h2></div><Status tone={response.tool === "refusal" ? "bad" : "good"}>{response.tool === "refusal" ? "LIMITED" : "AUTHORIZED"}</Status></div>
           <p className="mt-5 text-sm leading-7 text-slate-200">{response.answer}</p>
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="subpanel"><span className="eyebrow">FACILITY</span><b>{response.context.facilityId ?? (response.citations.length ? `${response.citations.length} authorized sites` : "Unavailable")}</b></div>
@@ -929,7 +935,7 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
             <div className="subpanel"><span className="eyebrow">CONFIDENCE / QUALITY</span><b>{response.confidence === null ? "Unavailable" : `${Math.round(response.confidence * 100)}%`} · {response.context.quality}</b></div>
           </div>
           {response.limitations.length > 0 && <div className="mt-5 rounded-md border border-amber-400/30 bg-amber-400/5 p-4"><div className="eyebrow text-amber-300">LIMITATIONS</div><ul className="mt-2 space-y-1 text-xs leading-5 text-slate-400">{response.limitations.map((limitation) => <li key={limitation}>• {limitation}</li>)}</ul></div>}
-          {response.actions.length > 0 && <div className="mt-5 flex flex-wrap gap-2"><span className="self-center text-xs text-slate-500">Authorized next step:</span>{response.actions.map((action) => <button type="button" key={action.id} className="button secondary" onClick={() => void runAction(action)}>{action.label}<ArrowRight size={14}/></button>)}</div>}
+          {response.actions.length > 0 && <div className="mt-5 flex flex-wrap gap-2"><span className="self-center text-xs text-slate-500">Confirm a safe focus or navigation:</span>{response.actions.map((action) => <button type="button" key={action.id} className="button secondary" onClick={() => void runAction(action)}>{action.label}<ArrowRight size={14}/></button>)}</div>}
         </div>}
       </section>
       <aside className="space-y-4">

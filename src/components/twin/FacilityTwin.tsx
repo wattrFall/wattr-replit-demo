@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useMemo, useState, type ReactNode } from "react";
+import { Component, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Box, CircleHelp, Footprints, Layers3, MousePointer2 } from "lucide-react";
 import type { FacilityTwinProps, TwinOverlay } from "./types";
 
@@ -19,6 +19,9 @@ export function FacilityTwin(props: FacilityTwinProps) {
   const [floor, setFloor] = useState<1 | 2>(1);
   const [cameraMode, setCameraMode] = useState<"orbit" | "walk">("orbit");
   const effectiveModel = props.mode === "edit" ? props.snapshot.modelConfig : props.model;
+  useEffect(() => {
+    if (props.selectedFloor) setFloor(props.selectedFloor);
+  }, [props.selectedFloor]);
   const summary = useMemo(() => {
     const hot = props.snapshot.racks.filter((rack) => rack.atRisk).map((rack) => rack.id);
     return floor === 1
@@ -58,6 +61,6 @@ export function FacilityTwin(props: FacilityTwinProps) {
         ["cdu-03", "CDU-03"], ["chiller-01", "Chiller-01"], ["pdu-01", "PDU-01"], ["sensor-03", "Sensor-03"],
         ] : [["rack-f2-a", "Rack F2-A"], ["rack-f2-b", "Rack F2-B"], ["rack-f2-c", "Rack F2-C"], ["pdu-02", "PDU-02"]]).map(([id, label]) => <button role="listitem" key={id} className={props.selectedId === id ? "selected" : ""} aria-pressed={props.selectedId === id} onClick={() => { props.onSelect(id); props.onGuideAction?.("asset-select"); }}>{label}</button>)}
     </div>
-    <div className="twin-layer-summary">{props.overlays.map((item) => overlayLabels[item]).join(" · ") || "No overlays"} · deterministic snapshot at {Math.round(props.snapshot.elapsedS / 60)}m</div>
+    <div className="twin-layer-summary">{props.overlays.map((item) => overlayLabels[item]).join(" · ") || "No overlays"} · deterministic snapshot at {Math.round(props.snapshot.elapsedS / 60)}m{props.highlightedPath?.length ? ` · focused path ${props.highlightedPath.join(" → ")}` : ""}</div>
   </div>;
 }
