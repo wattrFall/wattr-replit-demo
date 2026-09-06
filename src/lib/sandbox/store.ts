@@ -72,6 +72,8 @@ export interface SandboxState {
   showResults: boolean;
   /** Findings from the most recent run attempt, error or not. */
   runFindings: ValidationResult | null;
+  /** Which preset is loaded, or null once the user has edited the hall. */
+  activePresetId: string | null;
 
   select: (id: string | null) => void;
   setMode: (mode: InteractionMode) => void;
@@ -83,7 +85,8 @@ export interface SandboxState {
   connect: (toId: string) => void;
   disconnect: (connectionId: string) => void;
   setParam: (id: string, key: string, value: number) => void;
-  loadLayout: (layout: SandboxLayout) => void;
+  /** `presetId` marks which preset the layout came from, for the picker. */
+  loadLayout: (layout: SandboxLayout, presetId?: string | null) => void;
   reset: () => void;
   notify: (message: string | null) => void;
   publishSim: (inletC: Record<string, number>, telemetry: Telemetry) => void;
@@ -139,6 +142,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   lastRun: null,
   showResults: false,
   runFindings: null,
+  activePresetId: null,
 
   publishSim: (inletC, telemetry) => set({ inletC, telemetry }),
   resetView: () => set((s) => ({ viewResetNonce: s.viewResetNonce + 1 })),
@@ -238,7 +242,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       return;
     }
     const item: SandboxItem = { id: nextId(kind), kind, cell, params: defaultParams(kind) };
-    set({ items: [...items, item], selectedId: item.id, notice: null });
+    set({ items: [...items, item], selectedId: item.id, notice: null, activePresetId: null });
   },
 
   beginConnecting: (fromId) =>
@@ -279,6 +283,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       selectedId: s.selectedId === id ? null : s.selectedId,
       // Cancel an in-progress link if its source has just been deleted.
       mode: s.mode.type === "connecting" && s.mode.fromId === id ? { type: "idle" } : s.mode,
+      activePresetId: null,
     })),
 
   setParam: (id, key, value) =>
@@ -292,7 +297,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       }),
     })),
 
-  loadLayout: (layout) => {
+  loadLayout: (layout, presetId = null) => {
     // The layout arrives with its own ids; anything placed afterwards numbers
     // from the highest it contains, so nothing can collide with it.
     const highest = layout.items.reduce((max, item) => {
@@ -307,6 +312,10 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       selectedId: null,
       mode: { type: "idle" },
       notice: null,
+      activePresetId: presetId,
+      lastRun: null,
+      runFindings: null,
+      viewResetNonce: get().viewResetNonce + 1,
     });
   },
 
@@ -320,6 +329,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       mode: { type: "idle" },
       controlMode: "baseline",
       notice: null,
+      activePresetId: null,
       inletC: {},
       telemetry: null,
       viewResetNonce: get().viewResetNonce + 1,

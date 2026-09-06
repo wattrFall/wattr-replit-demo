@@ -12,6 +12,8 @@ import { Floor } from "./panels/Floor";
 import { Inspector } from "./panels/Inspector";
 import { Telemetry } from "./panels/Telemetry";
 import { ResultsOverlay } from "./ResultsOverlay";
+import { Presets } from "./panels/Presets";
+import { OPENING_PRESET } from "@/lib/sandbox/presets";
 import { useSandboxSimulation } from "./useSandboxSimulation";
 
 /**
@@ -39,6 +41,19 @@ export function SandboxShell() {
   const reset = useSandboxStore((s) => s.reset);
   const resetView = useSandboxStore((s) => s.resetView);
   const runSimulation = useSandboxStore((s) => s.runSimulation);
+  const loadLayout = useSandboxStore((s) => s.loadLayout);
+
+  /**
+   * Open on a working hall rather than an empty grid. A first visitor should
+   * see a data centre reacting within a second or two, not a blank floor and a
+   * palette to work out.
+   */
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    loadLayout(OPENING_PRESET.layout, OPENING_PRESET.id);
+  }, [loadLayout]);
 
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
@@ -170,6 +185,8 @@ export function SandboxShell() {
             </SButton>
           </div>
         </header>
+
+        <Presets />
 
         <div className="flex flex-col gap-3 p-3 lg:flex-row">
           <div className="flex flex-col gap-3 lg:w-[210px]">

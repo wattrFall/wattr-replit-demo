@@ -59,18 +59,22 @@ const ENERGY_ROWS: StatRow[] = [
 ];
 
 const SAFETY_ROWS: StatRow[] = [
+  // Deliberately not a contest. Once both sides are inside the racks' limits, a
+  // colder hall is not a better one — it is a more expensive one, and crowning
+  // the colder column here would reward exactly the overcooling the controller
+  // exists to remove. Whether a hall was actually safe is the two rows below.
   {
     label: "Peak inlet",
     format: (s) => (s.peakInletC === null ? "—" : `${s.peakInletC.toFixed(1)} °C`),
-    value: (s) => s.peakInletC,
-    better: "lower",
-    hint: "The hottest any rack got at any point in the run.",
+    value: () => null,
+    better: "none",
+    hint: "The hottest any rack got. Colder is not better if both stayed within limits — only cheaper to leave warm.",
   },
   {
     label: "Mean inlet",
     format: (s) => (s.meanInletC === null ? "—" : `${s.meanInletC.toFixed(1)} °C`),
-    value: (s) => s.meanInletC,
-    better: "lower",
+    value: () => null,
+    better: "none",
   },
   {
     label: "Steps over limit",
