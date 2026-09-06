@@ -112,6 +112,16 @@ export const MAX_SLICES_PER_CALL = 8;
 /** Fan/pump power at full speed, per kW of rated capacity. */
 const FAN_KW_PER_CAPACITY_KW = 0.021;
 
+/**
+ * Airflow a CRAC is expected to move for its rated capacity. A unit rated well
+ * below this cannot deliver its nameplate cooling however hard its fan works —
+ * which is what the airflow parameter is for.
+ */
+const AIRFLOW_REF_CMH = 9000;
+
+/** Cabinet height the thermal model is tuned around. */
+const RACK_UNITS_REF = 42;
+
 /** Chiller coefficient of performance at the reference condition. */
 const COP_REF = 4.6;
 /** COP improves as chilled water is raised, and decays as ambient climbs. */
@@ -145,6 +155,8 @@ export interface UnitControls {
   capacityKw: number;
   /** True when a chiller feeds this unit. */
   chilled: boolean;
+  /** 0..1. How much of the fan's effort actually reaches the racks. */
+  airflow: number;
 }
 
 /** The plant's resolved operating point: every unit, plus the water it draws on. */
@@ -211,6 +223,36 @@ function hasChiller(layout: SandboxLayout, unitId: string): boolean {
     const source = layout.items.find((i) => i.id === c.fromId);
     return source?.kind === "chiller";
   });
+}
+
+/**
+ * How well a unit converts fan effort into delivered cooling.
+ *
+ * EXTENSION — the env has no airflow term. A CRAC with too little airflow for
+ * its capacity is throughput-limited: the fan spins, the air does not arrive.
+ * Square-rooted so the penalty is gentle rather than a cliff, and capped at 1
+ * so oversized airflow buys nothing on its own.
+ */
+export function airflowFactor(unit: SandboxItem): number {
+  if (unit.kind !== "crac") return 1;
+  const airflow = unit.params.airflowCmh ?? AIRFLOW_REF_CMH;
+  const capacity = unit.params.capacityKw ?? 60;
+  // Scale the reference by capacity: a 120 kW unit needs twice the air.
+  const needed = AIRFLOW_REF_CMH * (capacity / 60);
+  return Math.min(1, Math.sqrt(airflow / Math.max(1, needed)));
+}
+
+/**
+ * Heat concentration penalty for tall cabinets.
+ *
+ * EXTENSION — the env has no rack geometry. The same kilowatts packed into a
+ * taller cabinet sit further from the supply air at the top, so the inlet the
+ * model reports rises slightly. Deliberately small: it should be felt, not
+ * dominate.
+ */
+export function rackDensityFactor(rack: SandboxItem): number {
+  const units = rack.params.rackUnits ?? RACK_UNITS_REF;
+  return 1 + (units - RACK_UNITS_REF) / RACK_UNITS_REF * 0.18;
 }
 
 /** Heat produced by a rack, in kW. Utilisation scales the installed load. */
@@ -327,6 +369,7 @@ export function resolvePlant(layout: SandboxLayout, mode: ControlMode): Plant {
         supplyC: Math.max(setpointOf(unit), floorC),
         capacityKw,
         chilled,
+        airflow: airflowFactor(unit),
       };
     }
 
@@ -339,6 +382,7 @@ export function resolvePlant(layout: SandboxLayout, mode: ControlMode): Plant {
         supplyC: Math.max(setpointOf(unit), floorC),
         capacityKw,
         chilled,
+        airflow: airflowFactor(unit),
       };
     }
 
@@ -356,6 +400,7 @@ export function resolvePlant(layout: SandboxLayout, mode: ControlMode): Plant {
       supplyC,
       capacityKw,
       chilled,
+      airflow: airflowFactor(unit),
     };
   });
 
@@ -429,7 +474,9 @@ export function stepSim(
 
     // Several units on one rack act together: mean supply, summed fan effort,
     // which mirrors the env taking the mean of its two ACU fan speeds.
-    const fan = units.reduce((sum, u) => sum + u.fan, 0) / Math.max(1, units.length);
+    // Airflow limits what the fan actually delivers (see airflowFactor).
+    const fan =
+      units.reduce((sum, u) => sum + u.fan * u.airflow, 0) / Math.max(1, units.length);
     const supplyC =
       units.length === 0
         ? AMBIENT_REF_C
@@ -441,7 +488,7 @@ export function stepSim(
       // env:  T += W*load - C*fan
       // here: the cooling term is scaled by how far the rack sits above supply,
       // which is the restoring force the env does not have (deviation 1).
-      const heating = W_HEAT * load;
+      const heating = W_HEAT * load * rackDensityFactor(rack);
       const cooling = units.length === 0 ? 0 : (C_COOL * fan * (temp - supplyC)) / DELTA_REF_K;
       temp += (heating - cooling) * stepScale;
       temp = Math.min(T_MAX, Math.max(T_MIN, temp));

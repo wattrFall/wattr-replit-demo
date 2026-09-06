@@ -12,6 +12,8 @@ import { CATALOGUE, defaultParams } from "./catalogue";
 import { checkConnection } from "./connections";
 import { DEFAULT_FLOOR, FLOOR_LIMITS, footprintCells, gridD, gridW, zoneAt } from "./geometry";
 import type { Telemetry } from "./model";
+import { runEpisode, type RunResult } from "./run";
+import { validateLayout, type ValidationResult } from "./validate";
 import type {
   ComponentKind,
   Connection,
@@ -62,6 +64,15 @@ export interface SandboxState {
    */
   viewResetNonce: number;
 
+  /**
+   * The build/run lifecycle. Validation is recomputed on demand rather than
+   * held as state, so it can never disagree with the layout it describes.
+   */
+  lastRun: RunResult | null;
+  showResults: boolean;
+  /** Findings from the most recent run attempt, error or not. */
+  runFindings: ValidationResult | null;
+
   select: (id: string | null) => void;
   setMode: (mode: InteractionMode) => void;
   setControlMode: (mode: ControlMode) => void;
@@ -79,6 +90,9 @@ export interface SandboxState {
   resetView: () => void;
   /** Resize one dimension of the site. Refuses if equipment would be stranded. */
   setFloor: (patch: Partial<FloorSpec>) => void;
+  /** Validate, and run both control modes if the design holds up. */
+  runSimulation: () => void;
+  closeResults: () => void;
 }
 
 /**
@@ -122,9 +136,29 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   inletC: {},
   telemetry: null,
   viewResetNonce: 0,
+  lastRun: null,
+  showResults: false,
+  runFindings: null,
 
   publishSim: (inletC, telemetry) => set({ inletC, telemetry }),
   resetView: () => set((s) => ({ viewResetNonce: s.viewResetNonce + 1 })),
+
+  runSimulation: () => {
+    const { items, connections, floor } = get();
+    const layout = { items, connections, floor };
+    const findings = validateLayout(layout);
+
+    // A run on an incoherent hall would produce authoritative-looking numbers
+    // that mean nothing, so errors stop it. Warnings do not.
+    if (!findings.ok) {
+      set({ runFindings: findings, showResults: true, lastRun: null });
+      return;
+    }
+
+    set({ runFindings: findings, lastRun: runEpisode(layout), showResults: true });
+  },
+
+  closeResults: () => set({ showResults: false }),
 
   setFloor: (patch) => {
     const { floor, items } = get();
@@ -289,6 +323,9 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       inletC: {},
       telemetry: null,
       viewResetNonce: get().viewResetNonce + 1,
+      lastRun: null,
+      showResults: false,
+      runFindings: null,
     });
   },
 }));

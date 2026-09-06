@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef } from "react";
-import { Crosshair, RotateCcw } from "lucide-react";
+import { Crosshair, Play, RotateCcw } from "lucide-react";
 import { CATALOGUE, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
 import { gridD } from "@/lib/sandbox/geometry";
 import { useSandboxStore } from "@/lib/sandbox/store";
@@ -11,6 +11,7 @@ import { Palette } from "./panels/Palette";
 import { Floor } from "./panels/Floor";
 import { Inspector } from "./panels/Inspector";
 import { Telemetry } from "./panels/Telemetry";
+import { ResultsOverlay } from "./ResultsOverlay";
 import { useSandboxSimulation } from "./useSandboxSimulation";
 
 /**
@@ -37,6 +38,7 @@ export function SandboxShell() {
   const setMode = useSandboxStore((s) => s.setMode);
   const reset = useSandboxStore((s) => s.reset);
   const resetView = useSandboxStore((s) => s.resetView);
+  const runSimulation = useSandboxStore((s) => s.runSimulation);
 
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
@@ -153,6 +155,15 @@ export function SandboxShell() {
                 { value: "wattr", label: "Wattr control" },
               ]}
             />
+            <SButton
+              variant="primary"
+              size="sm"
+              onClick={runSimulation}
+              aria-label="Validate the design and run a simulation"
+            >
+              <Play className="h-3.5 w-3.5" aria-hidden="true" />
+              Run simulation
+            </SButton>
             <SButton variant="ghost" size="sm" onClick={reset} aria-label="Reset the sandbox">
               <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
               Reset
@@ -219,6 +230,8 @@ export function SandboxShell() {
           </p>
         </footer>
       </div>
+
+      <ResultsOverlay />
 
       {/* Model scope and limitations travel with the sandbox, as they did with
           the walkthrough this page replaces. */}
