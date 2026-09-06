@@ -8,13 +8,15 @@
  * moves. That is what makes the 60fps target reachable.
  */
 import { create } from "zustand";
-import { CATALOGUE, GRID_D, GRID_W, defaultParams } from "./catalogue";
+import { CATALOGUE, defaultParams } from "./catalogue";
 import { checkConnection } from "./connections";
+import { DEFAULT_FLOOR, FLOOR_LIMITS, footprintCells, gridD, gridW, zoneAt } from "./geometry";
 import type { Telemetry } from "./model";
 import type {
   ComponentKind,
   Connection,
   ControlMode,
+  FloorSpec,
   GridCell,
   InteractionMode,
   SandboxItem,
@@ -35,6 +37,7 @@ const rewindIds = () => {
 };
 
 export interface SandboxState {
+  floor: FloorSpec;
   items: SandboxItem[];
   connections: Connection[];
   selectedId: string | null;
@@ -74,16 +77,27 @@ export interface SandboxState {
   notify: (message: string | null) => void;
   publishSim: (inletC: Record<string, number>, telemetry: Telemetry) => void;
   resetView: () => void;
+  /** Resize one dimension of the site. Refuses if equipment would be stranded. */
+  setFloor: (patch: Partial<FloorSpec>) => void;
 }
 
-/** True when every cell of the footprint is inside the floor and unoccupied. */
+/**
+ * True when every cell of the footprint sits in the right zone and is free.
+ *
+ * Zone is checked per cell, not per origin: a two-tile chiller straddling the
+ * walkway has its origin in the plant yard but half of itself outside it.
+ */
 export function canPlaceAt(
   items: SandboxItem[],
   kind: ComponentKind,
   cell: GridCell,
+  floor: FloorSpec,
 ): boolean {
   const { w, d } = CATALOGUE[kind].footprint;
-  if (cell.x < 0 || cell.z < 0 || cell.x + w > GRID_W || cell.z + d > GRID_D) return false;
+  const wanted = CATALOGUE[kind].zone;
+  for (const c of footprintCells(kind, cell)) {
+    if (zoneAt(floor, c) !== wanted) return false;
+  }
 
   for (const item of items) {
     const f = CATALOGUE[item.kind].footprint;
@@ -98,6 +112,7 @@ export function canPlaceAt(
 }
 
 export const useSandboxStore = create<SandboxState>((set, get) => ({
+  floor: DEFAULT_FLOOR,
   items: [],
   connections: [],
   selectedId: null,
@@ -110,6 +125,47 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
 
   publishSim: (inletC, telemetry) => set({ inletC, telemetry }),
   resetView: () => set((s) => ({ viewResetNonce: s.viewResetNonce + 1 })),
+
+  setFloor: (patch) => {
+    const { floor, items } = get();
+    const next: FloorSpec = { ...floor, ...patch };
+    (Object.keys(FLOOR_LIMITS) as (keyof FloorSpec)[]).forEach((key) => {
+      const { min, max } = FLOOR_LIMITS[key];
+      next[key] = Math.round(Math.min(max, Math.max(min, next[key])));
+    });
+
+    // The plant yard begins where the hall ends, so widening the hall slides
+    // the yard along the grid. Its contents ride with it: resizing one zone
+    // must not tear up the other, which is what happens if the cells are left
+    // where they were.
+    const shift = next.hallW - floor.hallW;
+    const moved =
+      shift === 0
+        ? items
+        : items.map((item) =>
+            CATALOGUE[item.kind].zone === "plant"
+              ? { ...item, cell: { ...item.cell, x: item.cell.x + shift } }
+              : item,
+          );
+
+    // What is left is genuine: a zone shrunk below what it holds. Refuse and
+    // name what is in the way, rather than deleting somebody's layout to
+    // satisfy a slider drag.
+    const stranded = moved.filter((item) =>
+      footprintCells(item.kind, item.cell).some(
+        (c) => zoneAt(next, c) !== CATALOGUE[item.kind].zone,
+      ),
+    );
+    if (stranded.length > 0) {
+      const labels = [...new Set(stranded.map((i) => CATALOGUE[i.kind].label))];
+      set({
+        notice: `Cannot resize: ${stranded.length} item${stranded.length > 1 ? "s" : ""} would not fit (${labels.join(", ")}). Move or delete them first.`,
+      });
+      return;
+    }
+
+    set({ floor: next, items: moved, notice: null, viewResetNonce: get().viewResetNonce + 1 });
+  },
 
   // A refusal notice is transient: any further action clears it, so a stale
   // reason never sits under an unrelated interaction.
@@ -127,15 +183,23 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
     })),
 
   place: (kind, cell) => {
-    const { items } = get();
-    if (!canPlaceAt(items, kind, cell)) {
-      const { w, d } = CATALOGUE[kind].footprint;
-      const offFloor =
-        cell.x < 0 || cell.z < 0 || cell.x + w > GRID_W || cell.z + d > GRID_D;
+    const { items, floor } = get();
+    if (!canPlaceAt(items, kind, cell, floor)) {
+      const entry = CATALOGUE[kind];
+      const { w, d } = entry.footprint;
+      const cells = footprintCells(kind, cell);
+      const zones = cells.map((c) => zoneAt(floor, c));
+      const wrongZone = zones.some((z) => z !== null && z !== entry.zone);
+      const offSite = zones.some((z) => z === null);
+
       set({
-        notice: offFloor
-          ? `A ${CATALOGUE[kind].label} needs ${w} by ${d} tiles and would hang off the floor here.`
-          : `That space is already occupied. A ${CATALOGUE[kind].label} needs ${w} by ${d} clear ${w * d === 1 ? "tile" : "tiles"}.`,
+        notice: wrongZone
+          ? entry.zone === "plant"
+            ? `A ${entry.label} belongs in the plant yard, not on the raised floor.`
+            : `A ${entry.label} belongs on the raised floor, not in the plant yard.`
+          : offSite
+            ? `A ${entry.label} needs ${w} by ${d} tiles and would hang off the ${entry.zone === "plant" ? "plant yard" : "raised floor"} here.`
+            : `That space is already occupied. A ${entry.label} needs ${w} by ${d} clear ${w * d === 1 ? "tile" : "tiles"}.`,
       });
       return;
     }
@@ -203,6 +267,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
     }, 0);
     idCounter = highest;
     set({
+      floor: { ...layout.floor },
       items: layout.items.map((i) => ({ ...i, params: { ...i.params } })),
       connections: layout.connections.map((c) => ({ ...c })),
       selectedId: null,
@@ -214,6 +279,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   reset: () => {
     rewindIds();
     set({
+      floor: DEFAULT_FLOOR,
       items: [],
       connections: [],
       selectedId: null,

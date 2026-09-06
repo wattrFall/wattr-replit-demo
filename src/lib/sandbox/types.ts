@@ -9,7 +9,17 @@
 /** The fixed catalogue of placeable equipment. */
 export type ComponentKind = "rack" | "crac" | "cdu" | "chiller" | "sensor";
 
-/** A cell on the floor plan. Integer coordinates; the grid is GRID_W x GRID_D. */
+/**
+ * The two areas of the site, which take different equipment.
+ *
+ * The hall is the raised floor: racks and the cooling that serves them
+ * directly. The plant yard is outside it, where heat is rejected. Keeping them
+ * apart is what makes the topology rules legible on the floor rather than only
+ * in the connection refusals.
+ */
+export type Zone = "hall" | "plant";
+
+/** A cell on the floor plan. Integer coordinates spanning hall, gap and plant. */
 export interface GridCell {
   x: number;
   z: number;
@@ -58,10 +68,24 @@ export type InteractionMode =
   | { type: "placing"; kind: ComponentKind }
   | { type: "connecting"; fromId: string };
 
+/**
+ * Floor dimensions, in tiles.
+ *
+ * The plant yard sits to the +x side of the hall with a walkway between them,
+ * so a single cell coordinate space covers both and the gap columns simply
+ * take nothing.
+ */
+export interface FloorSpec {
+  hallW: number;
+  hallD: number;
+  plantW: number;
+}
+
 /** The full authored layout — everything needed to reproduce a scene. */
 export interface SandboxLayout {
   items: SandboxItem[];
   connections: Connection[];
+  floor: FloorSpec;
 }
 
 /** A named starting layout offered to first-time visitors. */

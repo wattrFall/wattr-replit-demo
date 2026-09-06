@@ -1,11 +1,11 @@
 import { useState } from "react";
 import type { ThreeEvent } from "@react-three/fiber";
 import { CATALOGUE } from "@/lib/sandbox/catalogue";
-import { FLOOR_D, FLOOR_W, cellToWorld, sameCell, worldToCell } from "@/lib/sandbox/geometry";
+import { cellToWorld, floorD, floorW, sameCell, worldToCell } from "@/lib/sandbox/geometry";
 import { SBX } from "@/lib/sandbox/tokens";
 import { canPlaceAt, useSandboxStore } from "@/lib/sandbox/store";
 import { wasDragged } from "@/lib/sandbox/pointer";
-import type { GridCell } from "@/lib/sandbox/types";
+import type { FloorSpec, GridCell } from "@/lib/sandbox/types";
 
 /**
  * The floor's pick target, plus the placement ghost.
@@ -19,9 +19,10 @@ export function FloorPicker() {
   const mode = useSandboxStore((s) => s.mode);
   const items = useSandboxStore((s) => s.items);
   const place = useSandboxStore((s) => s.place);
+  const floor = useSandboxStore((s) => s.floor);
 
   const placing = mode.type === "placing" ? mode.kind : null;
-  const valid = placing && hoverCell ? canPlaceAt(items, placing, hoverCell) : false;
+  const valid = placing && hoverCell ? canPlaceAt(items, placing, hoverCell, floor) : false;
 
   /**
    * Handlers read the mode from the store at event time rather than from the
@@ -32,7 +33,7 @@ export function FloorPicker() {
   const handleMove = (event: ThreeEvent<PointerEvent>) => {
     const mode = useSandboxStore.getState().mode;
     if (mode.type !== "placing") return;
-    const cell = worldToCell(event.point.x, event.point.z);
+    const cell = worldToCell(useSandboxStore.getState().floor, event.point.x, event.point.z);
     setHoverCell((current) => (sameCell(current, cell) ? current : cell));
   };
 
@@ -43,7 +44,7 @@ export function FloorPicker() {
     const mode = useSandboxStore.getState().mode;
     if (mode.type !== "placing") return;
     event.stopPropagation();
-    place(mode.kind, worldToCell(event.point.x, event.point.z));
+    place(mode.kind, worldToCell(useSandboxStore.getState().floor, event.point.x, event.point.z));
   };
 
   return (
@@ -55,13 +56,13 @@ export function FloorPicker() {
         onPointerOut={() => setHoverCell(null)}
         onClick={handleClick}
       >
-        <planeGeometry args={[FLOOR_W, FLOOR_D]} />
+        <planeGeometry args={[floorW(floor), floorD(floor)]} />
         {/* Invisible material so the plane still hit-tests. */}
         <meshBasicMaterial visible={false} />
       </mesh>
 
       {placing && hoverCell && (
-        <Ghost kind={placing} cell={hoverCell} valid={valid} />
+        <Ghost kind={placing} cell={hoverCell} valid={valid} floor={floor} />
       )}
     </>
   );
@@ -72,13 +73,15 @@ function Ghost({
   kind,
   cell,
   valid,
+  floor,
 }: {
   kind: keyof typeof CATALOGUE;
   cell: GridCell;
   valid: boolean;
+  floor: FloorSpec;
 }) {
   const entry = CATALOGUE[kind];
-  const position = cellToWorld(cell, kind);
+  const position = cellToWorld(floor, cell, kind);
   const colour = valid ? entry.accent : SBX.heat;
 
   return (

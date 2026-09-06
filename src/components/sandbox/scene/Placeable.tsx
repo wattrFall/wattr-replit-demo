@@ -130,6 +130,7 @@ export function Placeable({
   // onto an occupied tile would silently do nothing rather than refuse.
   const placing = useSandboxStore((s) => s.mode.type === "placing");
   const connect = useSandboxStore((s) => s.connect);
+  const floor = useSandboxStore((s) => s.floor);
 
   /**
    * While a link is being drawn, mark the units it could legally reach. Showing
@@ -150,7 +151,7 @@ export function Placeable({
   const heat = item.kind === "rack" ? heatColour(rackHeatFraction(item, inletC)) : null;
 
   const entry = CATALOGUE[item.kind];
-  const position = cellToWorld(item.cell, item.kind);
+  const position = cellToWorld(floor, item.cell, item.kind);
   const accent = linkTarget === "valid" ? SBX.healthy : selected ? SBX.primaryBright : entry.accent;
 
   const handleClick = (event: ThreeEvent<MouseEvent>) => {

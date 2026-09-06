@@ -1,12 +1,14 @@
 import { Suspense, lazy, useEffect, useMemo, useRef } from "react";
 import { Crosshair, RotateCcw } from "lucide-react";
-import { CATALOGUE, GRID_D, GRID_W, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
+import { CATALOGUE, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
+import { gridD } from "@/lib/sandbox/geometry";
 import { useSandboxStore } from "@/lib/sandbox/store";
 import { demoScenario } from "@/lib/demoScenario";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { SButton } from "./primitives/SButton";
 import { SToggle } from "./primitives/SToggle";
 import { Palette } from "./panels/Palette";
+import { Floor } from "./panels/Floor";
 import { Inspector } from "./panels/Inspector";
 import { Telemetry } from "./panels/Telemetry";
 import { useSandboxSimulation } from "./useSandboxSimulation";
@@ -24,6 +26,7 @@ export function SandboxShell() {
   const telemetry = useSandboxStore((s) => s.telemetry);
   const items = useSandboxStore((s) => s.items);
   const connections = useSandboxStore((s) => s.connections);
+  const floor = useSandboxStore((s) => s.floor);
   const selectedId = useSandboxStore((s) => s.selectedId);
   const remove = useSandboxStore((s) => s.remove);
   const mode = useSandboxStore((s) => s.mode);
@@ -77,7 +80,7 @@ export function SandboxShell() {
    */
   const sceneSummary = useMemo(() => {
     if (items.length === 0) {
-      return `Empty floor plan, ${GRID_W} by ${GRID_D} tiles. No equipment placed yet.`;
+      return `Empty site: a ${floor.hallW} by ${gridD(floor)} tile raised floor and a ${floor.plantW} tile plant yard. No equipment placed yet.`;
     }
     const counts = new Map<string, number>();
     for (const item of items) {
@@ -95,8 +98,8 @@ export function SandboxShell() {
         ? ` PUE ${telemetry.pue.toFixed(3)}, peak inlet ${telemetry.maxInletC.toFixed(1)} degrees, ${telemetry.totalPowerKw.toFixed(0)} kilowatts total, under ${controlMode === "wattr" ? "Wattr control" : "baseline control"}.`
         : "";
 
-    return `Floor plan ${GRID_W} by ${GRID_D} tiles containing ${parts.join(", ")}. ${linkPart}${readout}`;
-  }, [items, connections, telemetry, controlMode]);
+    return `Site with a ${floor.hallW} by ${gridD(floor)} tile raised floor and a ${floor.plantW} tile plant yard, containing ${parts.join(", ")}. ${linkPart}${readout}`;
+  }, [items, connections, telemetry, controlMode, floor]);
 
   const selectedItem = items.find((i) => i.id === selectedId) ?? null;
 
@@ -158,8 +161,9 @@ export function SandboxShell() {
         </header>
 
         <div className="flex flex-col gap-3 p-3 lg:flex-row">
-          <div className="lg:w-[210px]">
+          <div className="flex flex-col gap-3 lg:w-[210px]">
             <Palette />
+            <Floor />
           </div>
 
           <div

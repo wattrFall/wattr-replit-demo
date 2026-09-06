@@ -8,13 +8,18 @@
  * headroom to make things worse, and headroom for the controller to make them
  * better.
  */
-import type { ComponentKind, ParamSpec } from "./types";
+import type { ComponentKind, ParamSpec, Zone } from "./types";
 
 export interface CatalogueEntry {
   kind: ComponentKind;
   label: string;
   /** One line, shown in the palette and read out by screen readers. */
   blurb: string;
+  /**
+   * Where this equipment belongs. Racks and the cooling that serves them
+   * directly live on the raised floor; heat rejection lives outside it.
+   */
+  zone: Zone;
   /** Footprint in grid cells. */
   footprint: { w: number; d: number };
   /** Height in world units, for the 3D box. */
@@ -29,6 +34,7 @@ export interface CatalogueEntry {
 export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
   rack: {
     kind: "rack",
+    zone: "hall",
     label: "GPU rack",
     blurb: "A cabinet of accelerators. The heat source.",
     footprint: { w: 1, d: 1 },
@@ -81,6 +87,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   crac: {
     kind: "crac",
+    zone: "hall",
     label: "CRAC unit",
     blurb: "Computer-room air handler. Moves cold air to the racks.",
     footprint: { w: 1, d: 1 },
@@ -135,6 +142,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   cdu: {
     kind: "cdu",
+    zone: "hall",
     label: "CDU",
     blurb: "Coolant distribution unit for direct-to-chip liquid loops.",
     footprint: { w: 1, d: 1 },
@@ -187,6 +195,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   chiller: {
     kind: "chiller",
+    zone: "plant",
     label: "Chiller",
     blurb: "Rejects the hall's heat to outside. The big electrical load.",
     footprint: { w: 2, d: 1 },
@@ -231,6 +240,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   sensor: {
     kind: "sensor",
+    zone: "hall",
     label: "Sensor",
     blurb: "Reports inlet temperature from a point on the floor.",
     footprint: { w: 1, d: 1 },
@@ -274,10 +284,6 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
 /** Palette order — also the order the number-key shortcuts follow. */
 export const PALETTE_ORDER: ComponentKind[] = ["rack", "crac", "cdu", "chiller", "sensor"];
-
-/** Floor plan size in cells. */
-export const GRID_W = 12;
-export const GRID_D = 8;
 
 /** Build a fresh param map from the catalogue defaults. */
 export function defaultParams(kind: ComponentKind): Record<string, number> {
