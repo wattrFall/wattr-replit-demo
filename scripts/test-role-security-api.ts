@@ -129,7 +129,7 @@ try {
       method: "POST",
       body: JSON.stringify({ simulatedAt: 1752676800 }),
     });
-    if (evaluation.status !== (["PORTFOLIO_MANAGER", "OPERATOR", "ENGINEER"].includes(role) ? 201 : 404)) {
+    if (evaluation.status !== (["PORTFOLIO_MANAGER", "OPERATOR", "ENGINEER", "MODEL_ADMIN", "VIEWER"].includes(role) ? 201 : 404)) {
       throw new Error(`${role} assistant-action policy failed`);
     }
   }

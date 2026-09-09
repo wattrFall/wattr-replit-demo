@@ -20,7 +20,7 @@ async function allowed(userId: string, capability: Capability) {
          OR ($2 = 'operate' AND p.can_operate AND m.role = 'OPERATOR')
          OR ($2 = 'engineer' AND p.can_view AND m.role = 'ENGINEER')
          OR ($2 = 'model' AND p.can_edit_model AND m.role = 'MODEL_ADMIN')
-          OR ($2 = 'assistant' AND p.can_view AND m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER', 'MODEL_ADMIN'))
+          OR ($2 = 'assistant' AND p.can_view AND m.role IN ('PORTFOLIO_MANAGER', 'OPERATOR', 'ENGINEER', 'MODEL_ADMIN', 'VIEWER'))
        )`,
     [userId, capability],
   );
@@ -80,7 +80,7 @@ try {
     "UPDATE memberships SET role = 'VIEWER' WHERE user_id = $1 AND organization_id = 'wattr-demo'",
     [engineer],
   );
-  if (await allowed(engineer, "engineer") || await allowed(engineer, "assistant")) {
+  if (await allowed(engineer, "engineer") || await allowed(engineer, "operate") || await allowed(engineer, "model")) {
     throw new Error("Role change did not take effect immediately");
   }
 

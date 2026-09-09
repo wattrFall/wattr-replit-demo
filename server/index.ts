@@ -503,6 +503,25 @@ async function ensureDemoAccess(userId: string) {
       "INSERT INTO user_preferences (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
       [userId],
     );
+    // Replit project collaboration and Wattr product authorization are separate.
+    // In preview, admit authenticated collaborators as read-only demo viewers.
+    if (process.env.NODE_ENV !== "production" && process.env.NODE_ENV !== "test") {
+      await client.query(
+        `INSERT INTO memberships (user_id, organization_id, role, is_admin)
+         VALUES ($1, $2, 'VIEWER', false)
+         ON CONFLICT (user_id, organization_id) DO NOTHING`,
+        [userId, DEMO_ORGANIZATION_ID],
+      );
+      await client.query(
+        `INSERT INTO facility_permissions
+           (user_id, facility_id, can_view, can_operate, can_edit_model)
+         SELECT $1, f.id, true, false, false
+         FROM facilities f
+         WHERE f.organization_id = $2
+         ON CONFLICT (user_id, facility_id) DO NOTHING`,
+        [userId, DEMO_ORGANIZATION_ID],
+      );
+    }
     const organization = await client.query(
       "SELECT owner_user_id FROM organizations WHERE id = $1 FOR UPDATE",
       [DEMO_ORGANIZATION_ID],
