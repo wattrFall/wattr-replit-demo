@@ -1,0 +1,2293 @@
+# Wattr Operator Prototype — Complete Product, UX and Replit Build Specification
+
+## Mission
+
+Refactor and extend the existing Wattr prototype into an operator-grade decision cockpit for AI/HPC data-center thermal operations.
+
+This is NOT a generic DCIM dashboard.
+
+Wattr should make the relationship between compute activity and physical infrastructure understandable.
+
+The central operating workflow is:
+
+IT WORKLOAD CHANGE
+→ PHYSICAL HEAT GENERATION
+→ THERMAL PROPAGATION
+→ COOLING RESPONSE
+→ FUTURE THERMAL STATE
+→ WATTR RECOMMENDATION
+→ SAFETY VALIDATION
+→ EXPECTED OUTCOME
+→ HUMAN DECISION
+→ AUDIT HISTORY
+
+The product must make this chain visually understandable.
+
+The prototype currently has no calibrated customer digital twin.
+
+Therefore:
+
+DO NOT claim that the synthetic facility model is an accurate digital twin of a real customer facility.
+
+Build a deterministic SYNTHETIC FACILITY MODEL / DEMO TWIN that demonstrates how Wattr would operate if connected to real telemetry and a calibrated physics model.
+
+The product architecture must allow the synthetic model to be replaced later by:
+
+- customer topology
+- BMS/DCIM telemetry
+- historian data
+- CFD models
+- Modelica/FMUs
+- reduced-order physical models
+- live workload telemetry
+
+without redesigning the operator experience.
+
+---
+
+# 1. FIRST: AUDIT THE EXISTING APPLICATION
+
+Before adding features, inspect every existing page, route, component, control and interaction.
+
+Produce an internal inventory of:
+
+- existing routes
+- existing widgets
+- reusable components
+- unused components
+- dead buttons
+- broken links
+- non-functional dropdowns
+- duplicate components
+- inconsistent styles
+- inconsistent units
+- inconsistent terminology
+- hardcoded values that contradict other screens
+- layout overflow
+- console errors
+- React warnings
+- accessibility problems
+- unused dependencies
+- generated-code duplication
+- components that are far more complicated than necessary
+- components that mix UI, simulation and data logic unnecessarily
+
+Fix these problems before extending the interface.
+
+The application must run with zero console errors during the primary demonstration flow.
+
+Do not unnecessarily rewrite architecture that already works.
+
+---
+
+# 2. PRODUCT HIERARCHY
+
+The application should use this mental model:
+
+PORTFOLIO
+→ FACILITY
+→ HALL / ZONE
+→ SYSTEM
+→ ASSET
+
+Example:
+
+North America Portfolio
+
+→ SFO-01
+
+→ GPU Hall B
+
+→ Liquid Cooling Loop B
+
+→ CDU-03
+
+This hierarchy must remain consistent throughout the application.
+
+Users should always understand where they are.
+
+---
+
+# 3. PRODUCT SURFACES
+
+There are three major surfaces.
+
+## A. Portfolio Command
+
+Primary users:
+
+- data-center manager
+- regional operations manager
+- infrastructure leadership
+
+Purpose:
+
+Understand which facilities require attention.
+
+## B. Operations
+
+Primary users:
+
+- facility operator
+- facilities engineer
+- cooling engineer
+- NOC / operations technician
+
+Purpose:
+
+Understand what is happening inside one facility and decide what to do.
+
+## C. Model Studio
+
+Primary users:
+
+- commissioning engineer
+- solutions engineer
+- facility engineering administrator
+- Wattr deployment engineer
+- advanced customer administrator
+
+Purpose:
+
+Construct/configure the representation that Operations consumes.
+
+Model Studio is NOT intended to be the everyday operator interface.
+
+---
+
+# 4. ROLE-BASED ACCESS
+
+Implement proper role-aware UI.
+
+Suggested roles:
+
+PORTFOLIO_MANAGER
+
+OPERATOR
+
+ENGINEER
+
+MODEL_ADMIN
+
+VIEWER
+
+Different roles should have different default landing pages.
+
+Portfolio Manager:
+Portfolio Command
+
+Operator:
+Facility Operations
+
+Engineer:
+Facility Operations with deeper analysis access
+
+Model Admin:
+Model Studio
+
+Viewer:
+Read-only screens
+
+Do not merely hide navigation links.
+
+Authorization must also be enforced in application logic.
+
+---
+
+# 5. AUTHENTICATION
+
+Use branded authentication appropriate for a customer-facing Wattr application.
+
+Users should log into Wattr rather than feeling like they are logging into a Replit prototype.
+
+Persist:
+
+- account
+- organization
+- role
+- authorized facilities
+- preferences
+- tutorial progress
+- saved views
+
+A user should only see sites they are authorized to access.
+
+---
+
+# 6. PORTFOLIO COMMAND
+
+This should be the managerial entry point.
+
+Top area:
+
+Organization
+Number of sites
+Sites requiring attention
+Total IT Load
+Fleet PUE
+Thermal compliance
+Active high-severity incidents
+
+Main facility table/cards:
+
+Facility
+Region
+Current IT Load
+PUE
+Thermal Headroom
+Predicted Risk
+Open Incidents
+Active Wattr Recommendations
+Telemetry Health
+Operating Mode
+
+Example:
+
+SFO-01
+Healthy
+3.8 MW IT
+PUE 1.19
+4.1°C thermal headroom
+No critical forecast
+
+SJC-02
+Attention
+6.4 MW IT
+PUE 1.24
+1.2°C thermal headroom
+Thermal risk predicted in 11 minutes
+
+The manager can search:
+
+"SFO"
+
+"GPU"
+
+"sites with risk"
+
+or select a site.
+
+Selecting a facility enters Operations.
+
+Portfolio should not expose unnecessary rack-level detail until the user drills down.
+
+---
+
+# 7. OPERATIONS HOME
+
+The facility landing page must answer:
+
+1. Is anything wrong now?
+2. What is likely to go wrong next?
+3. Where is it happening?
+4. Why is it happening?
+5. What does Wattr recommend?
+
+Use a restrained top KPI strip:
+
+IT Load
+Cooling Power
+PUE
+Thermal Compliance
+Thermal Headroom
+Active Incidents
+
+The primary visual focus should NOT simply be dashboard cards.
+
+The synthetic digital twin / facility visualization should occupy significant screen area.
+
+Recommended desktop composition:
+
+TOP:
+global facility context
+
+LEFT / CENTER ~60%:
+facility visualization
+
+RIGHT ~40%:
+context-sensitive intelligence panel
+
+BOTTOM:
+timeline / workload / thermal evolution
+
+This should feel closer to a command environment than an analytics website.
+
+---
+
+# 8. SYNTHETIC FACILITY MODEL
+
+Create a coherent fake facility for the demo.
+
+Example:
+
+SITE:
+SFO-01
+
+HALLS:
+GPU Hall A
+GPU Hall B
+
+RACKS:
+40–80 synthetic racks
+
+COMPUTE:
+GPU Cluster A
+GPU Cluster B
+General Compute Cluster
+
+COOLING:
+CDU-01
+CDU-02
+CDU-03
+
+CRAH-01
+CRAH-02
+CRAH-03
+
+CHILLER-01
+CHILLER-02
+
+Cooling Tower / Heat Rejection
+
+POWER:
+Facility Power
+UPS
+Rack PDUs
+
+ENVIRONMENT:
+Outdoor dry bulb
+Wet bulb
+Humidity
+
+The facility should have consistent topology.
+
+Do not generate devices randomly every reload.
+
+---
+
+# 9. MODEL STUDIO
+
+Model Studio edits the facility representation.
+
+Operations consumes the representation but does not casually modify it.
+
+Model Studio should support:
+
+## Facility Layout
+
+Create hall
+Create row
+Place rack
+Move rack
+Create cooling asset
+Position cooling asset
+
+## Logical Mapping
+
+Assign rack → workload cluster
+
+Assign rack → cooling zone
+
+Assign rack → CDU
+
+Assign CDU → cooling loop
+
+Assign loop → chiller
+
+Assign sensors → equipment
+
+## Telemetry Mapping
+
+Metric name
+Unit
+Source
+Asset
+Sampling period
+Quality state
+
+## Constraints
+
+Temperature bounds
+Flow bounds
+Pressure bounds
+Rate limits
+Equipment lockouts
+Maintenance state
+Safety margins
+
+## Simulation Parameters
+
+Thermal mass
+Heat coupling
+Cooling capacity
+Response lag
+Flow effectiveness
+Ambient conditions
+
+Model Studio should clearly say:
+
+DEMO MODEL
+
+when operating on synthetic data.
+
+---
+
+# 10. DIGITAL TWIN VISUAL STYLE
+
+Do NOT build a photorealistic data center.
+
+Do NOT spend P0 engineering effort building expensive CFD rendering.
+
+Use a clean 2.5D / lightweight 3D representation.
+
+The visual should feel spatial and interactive.
+
+Users should be able to:
+
+pan
+zoom
+rotate where useful
+select racks
+select cooling assets
+focus on zones
+change overlay
+inspect relationships
+
+Possible overlays:
+
+Current Temperature
+Predicted Temperature
+Rack Power
+Thermal Margin
+Cooling Allocation
+Risk
+Air/Liquid Cooling
+Workload
+
+Clicking an asset opens a contextual side panel.
+
+The visualization is a navigation interface for operational information.
+
+It is not decoration.
+
+---
+
+# 11. PHYSICAL VIEW / THERMAL VIEW SWITCHING
+
+Provide several ways to understand the same facility.
+
+PHYSICAL
+
+Shows rack/cooling layout.
+
+THERMAL
+
+Shows temperature and thermal margin.
+
+POWER
+
+Shows workload/rack power.
+
+DEPENDENCY
+
+Shows heat/cooling relationships.
+
+FORECAST
+
+Shows future predicted thermal state.
+
+The user should be able to transition between these without losing their selected rack/zone.
+
+---
+
+# 12. THERMAL DEPENDENCY GRAPH
+
+Build a graph analogous to a data-lineage graph, but for physical thermal relationships.
+
+Do NOT call it a DAG.
+
+Call it:
+
+THERMAL DEPENDENCY GRAPH
+
+or
+
+HEAT-FLOW TOPOLOGY
+
+Possible nodes:
+
+GPU workload
+Rack
+Cooling zone
+CDU
+Secondary loop
+Primary loop
+Chiller
+Cooling tower
+Environment
+
+Possible edges:
+
+generates heat
+thermally influences
+receives coolant from
+returns heat to
+shares cooling capacity with
+depends on
+controlled by
+
+Example:
+
+GPU TRAINING JOB
+↓
+GPU CLUSTER B
+↓
+RACKS 12–18
+↓
+LIQUID LOOP B
+↓
+CDU-03
+↓
+PRIMARY COOLING LOOP
+↓
+CHILLER-02
+↓
+HEAT REJECTION
+
+Selecting Rack 14 should highlight:
+
+UPSTREAM:
+What affects Rack 14?
+
+DOWNSTREAM:
+What systems carry away Rack 14's heat?
+
+IMPACT:
+What would be affected if CDU-03 degraded?
+
+Edges can animate to indicate:
+
+heat intensity
+flow
+risk propagation
+
+Allow graph switching between:
+
+TOPOLOGY
+CURRENT STATE
+FORECAST STATE
+
+---
+
+# 13. PRIMARY DEMO SCENARIO
+
+Build one excellent deterministic scenario.
+
+GPU Cluster B begins a large training run.
+
+The workload scheduler indicates a future load increase.
+
+Rack electrical power begins increasing.
+
+Heat generation rises.
+
+CDU-03 responds with physical lag.
+
+Traditional reactive cooling is late.
+
+Wattr detects the upstream workload/power signal.
+
+Wattr predicts thermal margin degradation before the temperature limit is reached.
+
+Affected racks become highlighted.
+
+An incident is generated.
+
+The Thermal Dependency Graph highlights:
+
+GPU Cluster B
+→ racks
+→ loop
+→ CDU-03
+
+Wattr proposes a pre-emptive adjustment.
+
+The Safety Shield validates it.
+
+The operator compares:
+
+BASELINE
+
+vs
+
+WATTR RECOMMENDATION
+
+The operator simulates the recommendation.
+
+Risk is reduced in the synthetic scenario.
+
+The operator marks the recommendation reviewed.
+
+The decision enters the audit log.
+
+Every screen must derive from the same scenario state.
+
+---
+
+# 14. TIME ENGINE
+
+The entire application should share one simulation clock.
+
+Controls:
+
+PAUSE
+PLAY
+1×
+5×
+10×
+30×
+60×
+STEP
+
+Optional:
+
+Jump to event
+
+Reset scenario
+
+The user can fast-forward through a 30–60 minute event in seconds.
+
+The digital twin, charts, incidents, recommendations and thermal graph must all update from the SAME simulation clock.
+
+Do not allow different components to independently animate fake data.
+
+---
+
+# 15. SIMPLE PHYSICS ENGINE
+
+The synthetic twin should not use random-number animation.
+
+Build a deterministic reduced-order thermal simulator.
+
+Conceptually:
+
+workload
+→ electrical power
+→ heat generation
+
+heat generation
++ neighboring thermal coupling
++ thermal mass
+− cooling removal
+= temperature evolution
+
+Cooling response should contain realistic lag.
+
+Each rack can contain state such as:
+
+power
+temperature
+thermal mass
+cooling effectiveness
+neighbor coupling
+
+Cooling equipment can contain:
+
+capacity
+flow
+setpoint
+response lag
+availability
+efficiency
+
+The model does NOT need CFD fidelity.
+
+It needs internal consistency.
+
+Changing:
+
+rack power
+
+CDU flow
+
+cooling setpoint
+
+ambient temperature
+
+must create sensible downstream effects.
+
+Label resulting metrics:
+
+SIMULATED
+
+unless they come from real data.
+
+---
+
+# 16. FORECAST VIEW
+
+Create synchronized time-series charts for:
+
+Workload
+Rack Power
+Cooling Response
+Current Temperature
+Forecast Temperature
+Configured Limit
+Confidence Interval
+
+Forecast horizons:
+
+5 min
+15 min
+30 min
+
+Hovering any point on one chart should synchronize the other charts and facility visualization.
+
+Differentiate clearly:
+
+ACTUAL
+FORECAST
+COUNTERFACTUAL
+
+---
+
+# 17. TRUST COCKPIT
+
+This remains the most important product workflow.
+
+Every recommendation must explain:
+
+## WHAT
+
+Increase CDU-03 secondary pump speed.
+
+61% → 68%
+
+## WHY
+
+GPU Cluster B load is rising.
+
+Based on current loop response, thermal margin for Rows 12–16 is predicted to fall below the configured threshold in 7 minutes.
+
+## WHERE
+
+GPU Hall B
+Rows 12–16
+CDU-03
+
+## EXPECTED EFFECT
+
+Thermal margin
+Peak temperature
+Cooling power
+PUE impact
+Risk duration
+GPU throttling exposure
+
+## CONFIDENCE
+
+Forecast confidence
+Model uncertainty
+Forecast horizon
+
+## SAFETY SHIELD
+
+Sensor freshness
+Equipment availability
+Temperature bounds
+Pressure limits
+Flow limits
+Rate limits
+Alarm state
+Model confidence
+Out-of-distribution state
+
+Each returns:
+
+PASS
+WARNING
+BLOCK
+
+Final recommendation state:
+
+ALLOWED AS ADVISORY
+
+or
+
+BLOCKED
+
+---
+
+# 18. SHADOW MODE
+
+Operating mode must always be visible.
+
+Possible modes:
+
+OBSERVE
+
+SHADOW
+
+ADVISORY
+
+Do not expose CLOSED LOOP as a functioning prototype mode.
+
+Provide a tooltip/tutorial explanation:
+
+OBSERVE:
+Wattr analyzes telemetry only.
+
+SHADOW:
+Wattr generates recommendations and evaluates hypothetical outcomes but no equipment changes occur.
+
+ADVISORY:
+Operators receive recommendations and choose whether to manually implement them.
+
+Never imply Wattr currently controls customer OT equipment.
+
+---
+
+# 19. WHAT-IF SIMULATION
+
+Allow comparison between:
+
+BASELINE
+
+WATTR
+
+ALTERNATIVE
+
+Expose:
+
+peak temperature
+thermal margin
+cooling energy
+PUE
+risk duration
+cooling response
+control activity
+
+Allow users to modify:
+
+CDU pump speed
+TCS supply temperature
+CRAH fan speed
+workload intensity
+outside temperature
+
+The simulation must remain deterministic.
+
+---
+
+# 20. INCIDENT SYSTEM
+
+Do not convert every alarm into an incident.
+
+Correlate signals.
+
+Example:
+
+INC-204
+
+CDU-03 thermal response degradation
+
+SEVERITY:
+HIGH
+
+17 raw signals correlated
+
+AFFECTED:
+GPU Hall B
+Rows 12–16
+CDU-03
+
+FORECAST IMPACT:
+Thermal margin breach in 11 minutes
+
+LIKELY CAUSE:
+Reduced CDU flow response during workload ramp
+
+Allow:
+
+View on Twin
+
+View Thermal Path
+
+View Timeline
+
+View Recommendation
+
+---
+
+# 21. ANOMALIES
+
+Avoid meaningless messages such as:
+
+"Temperature anomaly."
+
+Instead produce contextual findings.
+
+Example:
+
+"CDU-03 is using 14% more pump power than its normalized operating baseline at equivalent IT load."
+
+Explain:
+
+what changed
+
+when it changed
+
+magnitude
+
+equipment affected
+
+comparison baseline
+
+likely contributing factors
+
+recommended investigation
+
+---
+
+# 22. ASK WATTR
+
+Build an operator assistant over structured facility state.
+
+Example questions:
+
+"Why is CDU-03 consuming more power?"
+
+"Show racks likely to exceed 26°C."
+
+"What changed before 14:32?"
+
+"What happens if I increase CDU-03 flow?"
+
+"Show everything affected by CDU-03."
+
+"Which facility has the lowest thermal headroom?"
+
+"Why did Wattr issue recommendation REC-193?"
+
+Ask Wattr should be capable of taking UI actions.
+
+For example:
+
+highlight racks
+
+focus twin
+
+open incident
+
+change time window
+
+open thermal topology
+
+run comparison
+
+generate chart
+
+Avoid long generic chatbot answers.
+
+The assistant must answer from available structured state.
+
+If information is unavailable, say so.
+
+Never invent telemetry.
+
+---
+
+# 23. MANAGER VS OPERATOR ASSISTANT
+
+Ask Wattr should understand role context.
+
+Manager question:
+
+"Which sites require my attention?"
+
+Operator question:
+
+"Why is CDU-03 behaving abnormally?"
+
+Model Admin question:
+
+"Which racks are currently mapped to Liquid Loop B?"
+
+The assistant should use the same underlying data but respond at the appropriate level.
+
+---
+
+# 24. SPIKING NEURAL NETWORK / PHYSICAL AI VIEW
+
+SNN internals should NOT dominate the normal operator interface.
+
+Operators primarily care whether Wattr's recommendations are:
+
+useful
+safe
+early
+explainable
+
+However, provide an advanced:
+
+MODEL LAB
+
+or
+
+PHYSICAL AI
+
+view.
+
+This is useful for technical demos and engineering conversations.
+
+---
+
+# 25. CONTROLLER COMPARISON
+
+Allow the same synthetic scenario to run using:
+
+REACTIVE BASELINE
+
+ANN / RL POLICY
+
+SNN / RL POLICY
+
+All controllers must receive the same scenario.
+
+Compare:
+
+thermal violations
+thermal degree-minutes
+maximum temperature
+warning lead time
+cooling energy
+control smoothness
+number of control interventions
+number of model inference events
+reward / objective value
+
+Do NOT invent an SNN energy-efficiency percentage.
+
+If compute-energy measurement is unavailable, do not show it as measured.
+
+Instead show architectural metrics such as:
+
+inference events
+spike events
+active neurons
+event sparsity
+
+and label these correctly.
+
+---
+
+# 26. SNN VISUALIZATION
+
+Create an optional synchronized technical view containing:
+
+Sensor Event Stream
+
+Spike Raster
+
+Neuron / population activity
+
+Controller output
+
+Facility response
+
+The user should be able to press Play.
+
+As workload changes:
+
+sensor events increase
+
+spike activity changes
+
+controller output responds
+
+facility temperature responds
+
+The same global simulation clock controls this view.
+
+Allow slow-motion playback around important events.
+
+This should help explain:
+
+EVENT
+→ SPIKE RESPONSE
+→ POLICY ACTION
+→ PHYSICAL RESPONSE
+
+without pretending that watching spikes itself proves superiority.
+
+---
+
+# 27. SNN DEMO PRINCIPLE
+
+The product should demonstrate a hypothesis:
+
+An event-driven temporal model may react intelligently to changing physical conditions without continuously treating every time step as equally informative.
+
+The prototype should demonstrate:
+
+event sparsity
+
+temporal behavior
+
+controller decisions
+
+and resulting simulated physical outcomes.
+
+Do NOT claim:
+
+"the SNN uses 90% less energy"
+
+or similar unless measured under a defined hardware/software environment.
+
+---
+
+# 28. ONBOARDING — GAME-LIKE TUTORIAL
+
+First-time users should not land on a complex dashboard with no explanation.
+
+Build an interactive onboarding system inspired by game tutorials.
+
+First login:
+
+"Welcome to Wattr."
+
+"Wattr connects workload behavior with physical thermal behavior so operators can anticipate cooling risk."
+
+Then role-specific tutorial.
+
+Use:
+
+spotlight
+popover
+Next
+Back
+Skip Tutorial
+
+Persist tutorial progress.
+
+Allow tutorial restart from Help.
+
+Do not make tutorial compulsory.
+
+---
+
+# 29. OPERATOR TUTORIAL
+
+Suggested sequence:
+
+STEP 1
+
+"This is your facility."
+
+Highlight synthetic twin.
+
+STEP 2
+
+"Thermal overlays show where cooling headroom is changing."
+
+Highlight overlay controls.
+
+STEP 3
+
+"Wattr is currently in SHADOW MODE."
+
+Explain Shadow.
+
+STEP 4
+
+"Wattr predicts future thermal risk before limits are crossed."
+
+Highlight forecast.
+
+STEP 5
+
+"Select a predicted risk to understand its thermal dependencies."
+
+Open Thermal Dependency Graph.
+
+STEP 6
+
+"Wattr recommendations always pass through the Safety Shield."
+
+Open Trust Cockpit.
+
+STEP 7
+
+"Simulate the recommendation before deciding what to do."
+
+Open what-if.
+
+Complete.
+
+---
+
+# 30. MANAGER TUTORIAL
+
+Focus on:
+
+portfolio health
+
+site ranking
+
+predicted risk
+
+facility drilldown
+
+business/operational outcomes
+
+Do not teach rack-level controls immediately.
+
+---
+
+# 31. MODEL ADMIN TUTORIAL
+
+Focus on:
+
+facility model
+
+asset placement
+
+topology mapping
+
+telemetry mapping
+
+constraints
+
+validation
+
+publishing model changes
+
+---
+
+# 32. PROGRESSIVE DISCLOSURE
+
+Game-like usability should come from progressive disclosure.
+
+Do not expose every control immediately.
+
+Default:
+
+simple view
+
+Selected asset:
+more information
+
+Advanced:
+technical detail
+
+Engineering:
+model-level information
+
+A new operator should not need to understand:
+
+model hash
+OOD score
+SNN architecture
+telemetry schema
+
+to understand that Rack 14 is predicted to become hot.
+
+Those details remain available when requested.
+
+---
+
+# 33. CONTEXTUAL HUD
+
+Treat the UI somewhat like a well-designed strategy game HUD.
+
+Selecting an object changes the relevant controls.
+
+Select rack:
+
+rack information
+
+Select CDU:
+
+CDU information
+
+Select incident:
+
+incident information
+
+Select recommendation:
+
+Trust Cockpit
+
+Do not navigate the user to unrelated full pages for every small interaction.
+
+Use contextual drawers/panels where appropriate.
+
+---
+
+# 34. AUDIT LOG
+
+Every recommendation generates a traceable record containing:
+
+timestamp
+site
+assets
+telemetry snapshot
+model version
+model confidence
+raw recommendation
+Safety Shield result
+blocked/clipped constraints
+final advisory recommendation
+operator response
+simulation result
+
+Allow filtering.
+
+Selecting an audit record should reconstruct the historical state where practical.
+
+---
+
+# 35. MODEL / DATA TRANSPARENCY
+
+Expose compact operational transparency.
+
+DATA QUALITY
+
+Completeness
+Freshness
+Missing sensors
+Stale sensors
+
+MODEL
+
+Version
+Last evaluation
+Forecast MAE
+Forecast RMSE
+Confidence
+Drift status
+
+CONTROLLER
+
+Type
+Version
+Operating mode
+
+Do not claim high model accuracy without displaying how it was measured.
+
+---
+
+# 36. KPI SYSTEM
+
+Track:
+
+critical telemetry completeness
+
+forecast MAE
+
+forecast RMSE
+
+forecast warning lead time
+
+thermal compliance
+
+thermal headroom
+
+cooling kW
+
+IT kW
+
+PUE
+
+predicted excursions
+
+thermal degree-minutes
+
+peak temperature
+
+recommendation count
+
+recommendation status
+
+Safety Shield blocks
+
+incident count
+
+raw alerts correlated per incident
+
+operator review time
+
+tutorial completion
+
+time to first meaningful action
+
+Do not hardcode Wattr savings claims.
+
+Synthetic outcomes must be labelled:
+
+SIMULATED
+
+---
+
+# 37. BUILT-IN PRODUCT VALIDATION
+
+This prototype exists partly to learn from operators.
+
+Instrument important events:
+
+login
+
+tutorial start
+
+tutorial completion
+
+tutorial skip
+
+facility selected
+
+twin interaction
+
+thermal graph opened
+
+incident opened
+
+recommendation opened
+
+Safety Shield expanded
+
+simulation run
+
+Ask Wattr query
+
+model comparison opened
+
+time control used
+
+Track task completion and abandonment.
+
+Do not use analytics merely for vanity metrics.
+
+The goal is to learn:
+
+What operators actually use.
+
+What they ignore.
+
+Where they become confused.
+
+---
+
+# 38. OPERATOR TEST MODE
+
+Provide a predefined operator test flow.
+
+Task examples:
+
+"Which facility needs attention?"
+
+"What system is causing the predicted thermal risk?"
+
+"What happens if Wattr's recommendation is used?"
+
+"Why did Wattr make this recommendation?"
+
+"Which racks depend on CDU-03?"
+
+Measure:
+
+task completion
+
+time
+
+errors
+
+unnecessary clicks
+
+tutorial dependence
+
+Ask afterwards:
+
+"What confused you?"
+
+"What would you normally open to investigate this?"
+
+"What information is missing?"
+
+"Would you use the physical view or thermal graph?"
+
+"What would stop you trusting this recommendation?"
+
+The Thermal Dependency Graph should be treated as a feature hypothesis until operator testing validates it.
+
+---
+
+# 39. FEEDBACK
+
+Provide a small:
+
+Send Feedback
+
+control.
+
+During operator pilots this should make feedback extremely easy.
+
+Capture:
+
+current route
+
+selected facility
+
+selected asset
+
+simulation time
+
+optional screenshot/context
+
+user comment
+
+The goal is continuous prototype refinement.
+
+---
+
+# 40. REPLIT FOUNDATION
+
+Use Replit primarily as the rapid product-development environment.
+
+Use:
+
+managed Postgres database
+
+authentication
+
+object/app storage where needed
+
+Secrets for API keys
+
+deployment
+
+logging
+
+App Testing
+
+Code Optimizations
+
+version checkpoints
+
+Do not create unnecessary infrastructure outside Replit for the prototype.
+
+---
+
+# 41. REPLIT DATABASE
+
+Use the database for:
+
+users
+
+organizations
+
+roles
+
+facility permissions
+
+facilities
+
+assets
+
+topology
+
+saved configurations
+
+tutorial progress
+
+recommendations
+
+incidents
+
+audit records
+
+feedback
+
+Do NOT store high-frequency synthetic telemetry row-by-row in the database if it makes the system unnecessarily heavy.
+
+The deterministic simulation can generate/reconstruct high-frequency state from scenario definitions.
+
+---
+
+# 42. AI INTEGRATION
+
+Use an appropriate managed AI integration for Ask Wattr.
+
+The language model should NOT directly invent operational answers.
+
+Create structured functions/tools such as:
+
+getFacilityState()
+
+getRackState()
+
+getCoolingPath()
+
+getForecast()
+
+getRecommendation()
+
+getIncident()
+
+runSimulation()
+
+focusAsset()
+
+setTimeRange()
+
+compareScenario()
+
+The model should interpret the question and call these functions.
+
+Structured application state remains authoritative.
+
+---
+
+# 43. USEFUL EXTERNAL INTEGRATIONS
+
+Only add integrations that strengthen the demo.
+
+P0:
+
+Authentication
+
+Database
+
+AI integration
+
+Error monitoring
+
+Product analytics
+
+P1:
+
+Slack / Teams-style incident notification
+
+Example:
+
+"Wattr predicts thermal risk at SFO-01 in 11 minutes."
+
+Open Wattr
+
+Do not add:
+
+payments
+CRM
+calendar
+marketing tools
+
+just because integrations exist.
+
+This is operational infrastructure software.
+
+---
+
+# 44. PROJECT-SPECIFIC REPLIT SKILLS
+
+Create a small number of highly focused persistent skills.
+
+Recommended:
+
+wattr-design-system
+
+Contains:
+visual language
+spacing
+component rules
+light/dark behavior
+anti-slop rules
+
+wattr-domain-model
+
+Contains:
+data-center terminology
+facility hierarchy
+asset relationships
+units
+
+wattr-simulation-consistency
+
+Contains:
+simulation clock rules
+synthetic physics principles
+single-source-of-truth requirements
+
+wattr-safety
+
+Contains:
+Shadow/Advisory behavior
+Safety Shield rules
+no-control-loop restrictions
+
+wattr-quality-gates
+
+Contains:
+testing checklist
+accessibility
+console errors
+responsive layout
+dead controls
+data consistency
+
+Do not install dozens of unrelated skills.
+
+---
+
+# 45. REPLIT WORKFLOW
+
+## PHASE A — DESIGN CANVAS
+
+Before changing application architecture, create visual concepts for:
+
+Portfolio Command
+
+Facility Operations
+
+Trust Cockpit
+
+Thermal Dependency Graph
+
+Model Studio
+
+Compare variants.
+
+Lock the major navigation and spatial layout.
+
+## PHASE B — PLAN MODE
+
+Have Agent inspect the current project.
+
+Ask it to:
+
+inventory architecture
+
+identify reusable code
+
+identify technical debt
+
+map required data models
+
+create implementation dependencies
+
+create migration sequence
+
+create test plan
+
+Do not modify code yet.
+
+## PHASE C — POWER MODE
+
+Use Power for:
+
+architecture changes
+
+global state model
+
+simulation engine
+
+authentication
+
+authorization
+
+database schema
+
+major new screens
+
+thermal graph
+
+Model Studio
+
+Ask Wattr
+
+Keep:
+
+App Testing ON
+
+Code Optimizations ON
+
+## PHASE D — POWER / TURBO
+
+Only use Turbo where speed is worth the additional usage.
+
+Good candidates:
+
+difficult cross-cutting refactors
+
+large simulator implementation
+
+complex broken-state recovery
+
+Do not keep Turbo enabled for simple visual tweaks.
+
+## PHASE E — LITE
+
+Use Lite for:
+
+spacing
+
+text
+
+component sizing
+
+small responsive bugs
+
+labels
+
+tooltips
+
+minor styling
+
+specific isolated fixes
+
+---
+
+# 46. PARALLEL TASKS
+
+If parallel tasks are available, separate work by architecture boundary.
+
+Safe examples:
+
+TASK A:
+simulation engine
+
+TASK B:
+analytics event schema
+
+TASK C:
+tutorial content
+
+TASK D:
+test suite
+
+Avoid having several agents independently rewrite the same shared layout/components simultaneously.
+
+---
+
+# 47. UX QUALITY GATES
+
+Before declaring the application complete:
+
+0 broken routes
+
+0 dead buttons
+
+0 meaningless controls
+
+0 placeholder content
+
+0 Lorem Ipsum
+
+0 console errors
+
+0 React warnings
+
+0 conflicting values between screens
+
+0 unexplained unit changes
+
+0 unexplained timestamp differences
+
+0 critical states communicated using color alone
+
+0 unlabelled synthetic data
+
+0 unsafe recommendations bypassing Safety Shield
+
+0 recommendations without reason/context
+
+0 primary-view horizontal scrolling
+
+0 overlapping text
+
+0 clipped graphs
+
+0 truncated primary actions
+
+0 fake loading spinners purely for visual effect
+
+Every interactive control needs appropriate:
+
+hover
+focus
+active
+disabled
+
+states.
+
+---
+
+# 48. DESIGN SYSTEM
+
+Default theme:
+
+LIGHT
+
+Also support:
+
+DARK
+
+SYSTEM
+
+Persist selection.
+
+Light mode should be comfortable and professional.
+
+Avoid pure bright white across huge areas.
+
+Use restrained neutral surfaces and strong contrast.
+
+Mission-critical status colors:
+
+critical
+warning
+healthy
+informational
+
+Never rely on color alone.
+
+---
+
+# 49. VISUAL LANGUAGE
+
+Prefer:
+
+clear typography
+
+thin borders
+
+compact spacing
+
+small/moderate radii
+
+subtle elevation
+
+professional tables
+
+clear charts
+
+consistent status labels
+
+high information density
+
+Avoid:
+
+glassmorphism
+
+neon glow
+
+crypto aesthetics
+
+huge rounded cards
+
+excessive gradients
+
+meaningless gauges
+
+random animation
+
+decorative sci-fi UI
+
+The application should feel like serious industrial software with modern game-quality interaction design.
+
+---
+
+# 50. ACCESSIBILITY
+
+Target WCAG AA-style quality.
+
+Normal text:
+>= 4.5:1 contrast
+
+Large text:
+>= 3:1
+
+Support keyboard navigation.
+
+Use semantic controls.
+
+Provide accessible labels.
+
+Do not encode critical state using red/green alone.
+
+---
+
+# 51. RESPONSIVENESS
+
+Primary target:
+
+desktop operator workstation
+
+Optimize:
+
+1440 px
+1728 px
+1920 px
+
+Support approximately 1280 px laptops.
+
+Mobile is secondary.
+
+Do not destroy desktop information density to produce oversized mobile cards.
+
+---
+
+# 52. PERFORMANCE
+
+The simulation and visualization should feel immediate.
+
+Avoid rendering thousands of unnecessary components every simulation tick.
+
+Separate:
+
+simulation state
+
+derived state
+
+render state
+
+Throttle visual updates where appropriate while preserving deterministic simulation timing.
+
+The user should be able to run 60× playback without the UI becoming unusable.
+
+---
+
+# 53. SINGLE SOURCE OF TRUTH
+
+Never independently hardcode KPI values into components.
+
+Canonical state should contain:
+
+simulation clock
+
+facility
+
+zones
+
+racks
+
+workloads
+
+cooling assets
+
+topology
+
+telemetry
+
+forecasts
+
+recommendations
+
+incidents
+
+safety policies
+
+controller
+
+scenario
+
+All screens derive from the same state.
+
+If CDU-03 changes in the simulator:
+
+its charts
+
+facility visualization
+
+thermal graph
+
+forecast
+
+recommendation
+
+incident
+
+KPI
+
+must update consistently.
+
+---
+
+# 54. DEMO CONTROLS
+
+Provide a discreet DEMO control.
+
+Scenarios:
+
+Normal Operation
+
+GPU Training Ramp
+
+CDU Degradation
+
+Hot Weather
+
+Sensor Failure
+
+Cooling Unit Offline
+
+Primary scripted demo:
+
+GPU Training Ramp
+
+Provide:
+
+Start Demo
+
+Pause
+
+Fast Forward
+
+Reset
+
+The presenter must be able to repeat the same demonstration reliably.
+
+---
+
+# 55. PRIORITY ORDER
+
+## P0 — MUST BE EXCELLENT
+
+Existing-code cleanup
+
+Design system
+
+Light mode
+
+Authentication / roles
+
+Portfolio Command
+
+Facility Operations
+
+Synthetic facility model
+
+Global simulation clock
+
+Deterministic thermal simulator
+
+Physical/thermal visualization
+
+Forecast
+
+Trust Cockpit
+
+Safety Shield
+
+What-if simulation
+
+Incidents
+
+Audit log
+
+Interactive onboarding tutorial
+
+Primary GPU workload scenario
+
+No broken interactions
+
+## P1
+
+Thermal Dependency Graph
+
+Ask Wattr
+
+Model Studio editing
+
+SNN/RL comparison
+
+Advanced anomaly explanation
+
+Product analytics
+
+Feedback system
+
+Slack-style notifications
+
+## P2
+
+High-quality full 3D rendering
+
+Complex CFD-like visualization
+
+Multiple sophisticated synthetic facilities
+
+General-purpose DCIM functionality
+
+CMDB
+
+Full ESG platform
+
+Electrical one-line modeling
+
+Generic enterprise workflows
+
+---
+
+# 56. DEFINITION OF DONE
+
+A new data-center operator should be able to enter Wattr and determine:
+
+which facility needs attention
+
+what is happening
+
+where it is happening
+
+what caused it
+
+what is likely to happen next
+
+how heat/cooling dependencies are connected
+
+what Wattr recommends
+
+why Wattr recommends it
+
+why the action passed or failed Safety Shield checks
+
+what happens if they follow the recommendation
+
+what happens if they do nothing
+
+without requiring a Wattr founder to explain the application.
+
+A manager should be able to understand:
+
+which sites require attention
+
+why
+
+and where to drill down.
+
+A commissioning/model user should be able to understand:
+
+how the facility representation is constructed
+
+how assets and telemetry are mapped
+
+and what constraints govern recommendations.
+
+The application should demonstrate Wattr's central product thesis:
+
+COMPUTE LOAD IS NOT SEPARATE FROM PHYSICAL INFRASTRUCTURE.
+
+Wattr connects workload intent to physical thermal behavior early enough for facility teams to understand risk, simulate alternatives and make safer cooling decisions.
+
+The digital twin is the spatial interface.
+
+The Thermal Dependency Graph is the causal/topological interface.
+
+The timeline is the temporal interface.
+
+The Trust Cockpit is the decision interface.
+
+The Safety Shield is the trust interface.
+
+Ask Wattr is the natural-language interface.
+
+The underlying physical-AI/controller layer—potentially including SNN/RL models—is the intelligence that connects them.

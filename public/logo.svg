@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 42" role="img" aria-label="Wattr">
+  <rect width="42" height="42" rx="8" fill="#49c9d4"/>
+  <path d="M10 13l5 17 6-12 6 12 5-17" fill="none" stroke="#071218" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="54" y="29" fill="#e8f0f8" font-family="Arial,sans-serif" font-size="24" font-weight="700" letter-spacing="4">WATTR</text>
+</svg>

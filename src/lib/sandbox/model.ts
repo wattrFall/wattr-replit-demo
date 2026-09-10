@@ -416,7 +416,10 @@ export function stepSim(
   const byId = new Map(controls.map((c) => [c.id, c]));
   const inletC: Record<string, number> = {};
 
-  const stepCount = Math.max(0, Math.min(MAX_SLICES_PER_CALL, Math.floor(slices)));
+  // The interactive sandbox limits calls before they reach the kernel. Keeping
+  // the pure kernel unbounded lets deterministic replay batch many identical
+  // fixed slices without changing the integration timestep.
+  const stepCount = Math.max(0, Math.floor(slices));
   const stepScale = SIM_DT_S * STEPS_PER_SECOND;
 
   for (const rack of layout.items) {
