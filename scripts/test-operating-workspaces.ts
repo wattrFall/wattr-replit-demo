@@ -119,4 +119,57 @@ assert.deepEqual(focused.highlightedPath, ["gpu-b", "cdu-03", "chiller-01"]);
 assert.equal(focused.focusedIncidentId, "inc-204");
 assert.equal(focused.playing, false, "focus and audit reconstruction must pause replay");
 
+// A published build gets names, a graph and scenario records from its layout.
+const { FACILITY_TEMPLATES } = await import("../src/lib/facility/templates");
+const { facilityAssets, itemLabel } = await import("../src/lib/cockpit/facilityAssets");
+const { facilityPlant } = await import("../src/lib/cockpit/simulation");
+const { REFERENCE_SCENARIO_RECORDS, SCENARIO_INCIDENT_AT, scenarioRecords } = await import("../src/lib/cockpit/scenarioRecords");
+
+const referenceAssets = facilityAssets(DEFAULT_FACILITY_MODEL);
+assert.deepEqual(
+  referenceAssets.assets.map((asset) => asset.id),
+  ["A01", "A02", "B01", "B02", "cdu-03", "chiller-01", "sensor-01", "sensor-02"],
+  "the reference twin lists the SFO-01 equipment under the ids its snapshot and graph use",
+);
+assert.equal(referenceAssets.workload.id, "gpu-b");
+assert.equal(referenceAssets.hallLabel, "GPU Hall B");
+assert.equal(itemLabel({ id: "chiller-01", kind: "chiller" }), "Chiller-01");
+assert.equal(itemLabel({ id: "crac-02", kind: "crac" }), "CRAC-02");
+assert.equal(itemLabel({ id: "rack-a01", kind: "rack" }), "Rack A01");
+
+const airModel = { ...DEFAULT_FACILITY_MODEL, layout: FACILITY_TEMPLATES.find((template) => template.id === "air-cooled-rows")!.layout };
+const airAssets = facilityAssets(airModel);
+assert.equal(airAssets.workload.label, "Data hall workload");
+assert.equal(airAssets.byId.get("crac-01")?.label, "CRAC-01");
+const airGraph = thermalGraph(replayCockpitSnapshot(simulatedAt, airModel), "forecast");
+assert.equal(new Set(airGraph.nodes.map((node) => node.id)).size, airGraph.nodes.length, "graph node ids must be unique");
+const nodeIds = new Set(airGraph.nodes.map((node) => node.id));
+assert(airGraph.edges.every((edge) => nodeIds.has(edge.from) && nodeIds.has(edge.to)), "every graph edge must join two nodes");
+const crac = graphSelection(airGraph, "crac-01");
+assert.deepEqual(crac.impact.map((node) => node.id).sort(), ["A01", "A02", "A03", "A04", "A05", "A06"], "a CRAC unit's impact is the row it serves");
+assert(crac.upstream.some((node) => node.id === airAssets.workload.id), "CRAC traversal must reach the workload source");
+assert(crac.downstream.some((node) => node.id === "chiller-01"), "CRAC traversal must reach heat rejection");
+
+assert.equal(SCENARIO_INCIDENT_AT, 1_752_677_460, "scenario records are raised when the seeded incident is");
+assert.equal(scenarioRecords(DEFAULT_FACILITY_MODEL), REFERENCE_SCENARIO_RECORDS, "models without a build keep the seeded records");
+const airRecords = scenarioRecords(airModel);
+assert.equal(airRecords.recommendation.command.assetId, facilityPlant(airModel).advisedUnit.id, "the recommendation commands the advised unit");
+assert.match(airRecords.incident.title, /^CRAC-0[12] thermal response degradation$/);
+assert.match(airRecords.recommendation.explanation.what, /^Increase CRAC-0[12] flow to 78% for 20 minutes\.$/);
+assert(
+  airRecords.incident.thermalPath.every((id) => id === airAssets.workload.id || airModel.layout.items.some((item) => item.id === id)),
+  "the thermal path names only the build's own equipment",
+);
+
+// The session follows a newly published build to a unit that exists in it.
+useScenarioSession.getState().reset();
+useScenarioSession.getState().selectAsset("cdu-03");
+useScenarioSession.getState().setModelConfig(airModel);
+assert.equal(useScenarioSession.getState().selectedAssetId, facilityPlant(airModel).advisedUnit.id, "a build without the selected asset selects its advised unit");
+assert.equal(useScenarioSession.getState().simulation.snapshot.rackCount, 12, "the session replays the published build");
+useScenarioSession.getState().selectAsset("A03");
+useScenarioSession.getState().setModelConfig(DEFAULT_FACILITY_MODEL);
+assert.equal(useScenarioSession.getState().selectedAssetId, "cdu-03", "returning to the reference selects CDU-03 when the selection is gone");
+useScenarioSession.getState().reset();
+
 console.log("Operating workspace model, traversal, and comparison tests passed.");

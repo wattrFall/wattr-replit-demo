@@ -1,6 +1,9 @@
+import type { SandboxItem } from "@/lib/sandbox/types";
+import { facilityAssets, twinAssetId } from "./facilityAssets";
 import {
   COMMAND_ENVELOPE,
   DEFAULT_ADVISORY_PARAMETERS,
+  facilityPlant,
   simulateVariant,
   type CockpitSnapshot,
 } from "./simulation";
@@ -22,10 +25,81 @@ export type ThermalGraphEdge = {
   label: string;
 };
 
+/**
+ * The heat-flow graph of a published build, generated from its layout: the
+ * workload heats every rack, each rack is cooled by the units wired to it, and
+ * those units return heat to the chillers feeding them.
+ */
+function buildThermalGraph(snapshot: CockpitSnapshot, view: GraphView): {
+  nodes: ThermalGraphNode[];
+  edges: ThermalGraphEdge[];
+} {
+  const plant = facilityPlant(snapshot.modelConfig);
+  const { workload, byId } = facilityAssets(snapshot.modelConfig);
+  const risk = snapshot.incident.open;
+  const itemsById = new Map(plant.items.map((item) => [item.id, item]));
+  const rackValue = (inletC: number) => view === "topology" ? "Thermal asset" : view === "forecast" ? `${snapshot.forecast.baselinePeakC.toFixed(1)}°C forecast` : `${inletC.toFixed(1)}°C current`;
+  const coolingValue = (unit: SandboxItem) => {
+    const advised = unit.id === plant.advisedUnit.id;
+    if (view === "topology") return unit.kind === "cdu" ? "Racks → coolant loop" : "Racks → cooling air";
+    if (view === "forecast") return advised ? `${snapshot.recommendation.flowPercent}% advisory` : "Baseline command";
+    return `${snapshot.fanPercent}% mean fan`;
+  };
+  const labelOf = (item: SandboxItem) => byId.get(twinAssetId(item))?.label ?? item.id;
+
+  const nodes: ThermalGraphNode[] = [
+    { id: workload.id, label: workload.label, kind: "workload", detail: "GPU Training Ramp", value: `${snapshot.workloadPercent}% load`, risk },
+    ...snapshot.racks.map((rack) => ({
+      id: rack.id,
+      label: `Rack ${rack.id}`,
+      kind: "rack",
+      detail: rack.atRisk ? "Forecast constraint" : "Within margin",
+      value: rackValue(rack.inletC),
+      risk: rack.atRisk,
+    })),
+    ...plant.items
+      .filter((item) => item.kind === "cdu" || item.kind === "crac")
+      .map((unit) => ({
+        id: unit.id,
+        label: labelOf(unit),
+        kind: "cooling",
+        detail: unit.kind === "cdu" ? "Cooling distribution unit" : "Computer room air conditioner",
+        value: coolingValue(unit),
+        risk: risk && unit.id === plant.advisedUnit.id,
+      })),
+    ...plant.items
+      .filter((item) => item.kind === "chiller")
+      .map((chiller) => ({
+        id: chiller.id,
+        label: labelOf(chiller),
+        kind: "cooling",
+        detail: "Heat rejection",
+        value: `${snapshot.chilledWaterC.toFixed(1)}°C water`,
+        risk: false,
+      })),
+  ];
+  const edges: ThermalGraphEdge[] = [
+    ...snapshot.racks.map((rack) => ({ from: workload.id, to: rack.id, label: "generates heat" })),
+    ...plant.connections.flatMap((link) => {
+      const from = itemsById.get(link.fromId);
+      const to = itemsById.get(link.toId);
+      if (!from || !to) return [];
+      if (to.kind === "rack") return [{ from: twinAssetId(to), to: from.id, label: "is cooled by" }];
+      if (from.kind === "chiller") return [{ from: to.id, to: from.id, label: "returns heat to" }];
+      return [];
+    }),
+  ];
+  return { nodes, edges };
+}
+
 export function thermalGraph(snapshot: CockpitSnapshot, view: GraphView = "current"): {
   nodes: ThermalGraphNode[];
   edges: ThermalGraphEdge[];
 } {
+  // A published build gets a graph generated from its layout. Models saved
+  // before the Builder keep the curated SFO-01 graph below, whose ids match
+  // the seeded topology, incident and assistant records.
+  if (snapshot.modelConfig.layout) return buildThermalGraph(snapshot, view);
   const risk = snapshot.incident.open;
   const rackValue = (inletC: number) => view === "topology" ? "Thermal asset" : view === "forecast" ? `${snapshot.forecast.baselinePeakC.toFixed(1)}°C forecast` : `${inletC.toFixed(1)}°C current`;
   return {

@@ -8,7 +8,9 @@ import {
   type CockpitSimulationState,
   type FacilityModelConfig,
   DEFAULT_FACILITY_MODEL,
+  facilityPlant,
 } from "./simulation";
+import { facilityAssets } from "./facilityAssets";
 
 export { SCENARIO_START_S } from "./simulation";
 
@@ -83,13 +85,14 @@ export const useScenarioSession = create<ScenarioSession>((set) => ({
     };
   }),
   setModelConfig: (modelConfig) => set((state) => {
+    // A newly published build changes the facility even when the physics do not.
+    const sameLayout = JSON.stringify(state.modelConfig.layout ?? null) === JSON.stringify(modelConfig.layout ?? null);
     if (
       state.modelConfig.seed === modelConfig.seed &&
       state.modelConfig.thermalMass === modelConfig.thermalMass &&
       state.modelConfig.responseLag === modelConfig.responseLag &&
       state.modelConfig.scenario === modelConfig.scenario &&
-      // A newly published build changes the facility even when the physics do not.
-      JSON.stringify(state.modelConfig.layout ?? null) === JSON.stringify(modelConfig.layout ?? null)
+      sameLayout
     ) return state;
     const elapsed = state.simulation.snapshot.elapsedS;
     const simulation = advanceCockpitSimulation(
@@ -98,11 +101,16 @@ export const useScenarioSession = create<ScenarioSession>((set) => ({
       SCENARIO_START_S,
       modelConfig,
     );
+    // A different build may not have the selected asset or the focused path,
+    // so select the unit its advice commands instead.
+    const keepSelection = sameLayout || facilityAssets(modelConfig).byId.has(state.selectedAssetId);
     return {
       modelConfig,
       simulatedAt: simulation.simulatedAt,
       playing: state.playing,
       simulation,
+      selectedAssetId: keepSelection ? state.selectedAssetId : facilityPlant(modelConfig).advisedUnit.id,
+      highlightedPath: sameLayout ? state.highlightedPath : [],
     };
   }),
   advance: (seconds) => set((state) => {

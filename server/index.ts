@@ -11,6 +11,7 @@ import {
   SCENARIO_DURATION_S,
   SCENARIO_START_S,
   counterfactualCockpitSnapshot,
+  facilityPlant,
   replayCockpitSnapshot,
   snapshotForAudit,
   type AdvisoryParameters,
@@ -30,6 +31,7 @@ import {
   validateFacilityLayout,
 } from "../src/lib/facility/layout";
 import { SFO_01_LAYOUT } from "../src/lib/facility/templates";
+import { SCENARIO_INCIDENT_KEY_SUFFIX, scenarioRecords } from "../src/lib/cockpit/scenarioRecords";
 import {
   canViewTopology,
   defaultLandingPath,
@@ -62,7 +64,8 @@ function replaySnapshot(simulatedAt: number, config?: FacilityModelConfig) {
   return replayCockpitSnapshot(simulatedAt, config);
 }
 
-type AdvisoryCommand = AdvisoryParameters & { assetId: "cdu-03" };
+/** An advisory command. Its asset must be the unit the facility model advises; see advisedAssetId. */
+type AdvisoryCommand = AdvisoryParameters & { assetId: string };
 type SafetyCheckResult = {
   id: string;
   status: "PASS" | "WARNING" | "BLOCK";
@@ -75,14 +78,14 @@ function parseAdvisoryCommand(value: unknown): AdvisoryCommand | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const command = value as Record<string, unknown>;
   if (
-    command.assetId !== "cdu-03" ||
+    typeof command.assetId !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(command.assetId) ||
     typeof command.flowPercent !== "number" || !Number.isFinite(command.flowPercent) ||
     command.flowPercent < 0 || command.flowPercent > 100 ||
     !Number.isInteger(command.durationMinutes) ||
     Number(command.durationMinutes) < 1 || Number(command.durationMinutes) > 60
   ) return undefined;
   return {
-    assetId: "cdu-03",
+    assetId: command.assetId,
     flowPercent: command.flowPercent,
     durationMinutes: Number(command.durationMinutes),
   };
@@ -96,6 +99,11 @@ function advisoryCommandsEqual(left: unknown, right: AdvisoryCommand): boolean {
     parsed.flowPercent === right.flowPercent &&
     parsed.durationMinutes === right.durationMinutes,
   );
+}
+
+/** The cooling unit a facility model's advisories command: the one serving the most IT load. */
+function advisedAssetId(config: FacilityModelConfig): string {
+  return facilityPlant(config).advisedUnit.id;
 }
 
 function safetyChecksFor(snapshot: ReturnType<typeof counterfactualCockpitSnapshot>, command: AdvisoryCommand): SafetyCheckResult[] {
@@ -119,7 +127,7 @@ function safetyChecksFor(snapshot: ReturnType<typeof counterfactualCockpitSnapsh
       id: "COMMAND_ENVELOPE",
       status: inEnvelope ? "PASS" : "BLOCK",
       pass: inEnvelope,
-      detail: `${command.flowPercent}% ${inEnvelope ? "is within" : "is outside"} the ${COMMAND_ENVELOPE.minFlowPercent}–${COMMAND_ENVELOPE.maxFlowPercent}% CDU-03 advisory envelope.`,
+      detail: `${command.flowPercent}% ${inEnvelope ? "is within" : "is outside"} the ${COMMAND_ENVELOPE.minFlowPercent}–${COMMAND_ENVELOPE.maxFlowPercent}% ${command.assetId.toUpperCase()} advisory envelope.`,
       evidence: { requestedFlowPercent: command.flowPercent, envelope: COMMAND_ENVELOPE },
     },
     {
@@ -1520,7 +1528,7 @@ function assistantActions(
       "Focus recommendation context",
       facility,
       records.recommendationId,
-      { assetId: "cdu-03", floor: 1, recommendationId: records.recommendationId, simulatedAt: records.simulatedAt },
+      { assetId: advisedAssetId(facility.model_config), floor: 1, recommendationId: records.recommendationId, simulatedAt: records.simulatedAt },
     ));
   }
   if (tool === "model_state" && role === "MODEL_ADMIN") {
@@ -1927,7 +1935,7 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
           membership.role,
           tool,
           "read-only recommendation counterfactual",
-          `If the recommendation (${command!.flowPercent}% CDU-03 flow for ${command!.durationMinutes} minutes) were modeled at this scenario time, the forecast peak is ${counterfactual.forecast.advisoryPeakC.toFixed(1)}°C versus ${inaction.forecast.baselinePeakC.toFixed(1)}°C with inaction, avoiding ${counterfactual.forecast.advisoryConstraintMinutes.toFixed(1)} of modeled constraint minutes versus ${inaction.forecast.baselineConstraintMinutes.toFixed(1)}.`,
+          `If the recommendation (${command!.flowPercent}% ${command!.assetId.toUpperCase()} flow for ${command!.durationMinutes} minutes) were modeled at this scenario time, the forecast peak is ${counterfactual.forecast.advisoryPeakC.toFixed(1)}°C versus ${inaction.forecast.baselinePeakC.toFixed(1)}°C with inaction, avoiding ${counterfactual.forecast.advisoryConstraintMinutes.toFixed(1)} of modeled constraint minutes versus ${inaction.forecast.baselineConstraintMinutes.toFixed(1)}.`,
           context,
           counterfactual.forecast.confidence,
           [citation, assistantCitation(context, `${recommendation.id}-what-if-${simulatedAt}`, "Read-only what-if outcome", "simulation.counterfactual", {
@@ -2151,7 +2159,7 @@ app.post("/api/assistant/action", requireAuth, async (req: AuthedRequest, res) =
             incidentId: row.id,
             simulatedAt: binding!.simulatedAt,
           }
-        : { assetId: parseAdvisoryCommand(row.command)?.assetId ?? "cdu-03", floor: 1, recommendationId: row.id, simulatedAt: binding!.simulatedAt };
+        : { assetId: parseAdvisoryCommand(row.command)?.assetId, floor: 1, recommendationId: row.id, simulatedAt: binding!.simulatedAt };
     }
   }
   res.json({
@@ -2694,11 +2702,110 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
   }
 });
 
-/** Make a version the one Operations runs, archiving whichever was published. */
+/**
+ * Make a version the one Operations runs, archiving whichever was published.
+ *
+ * The scenario, its incident and its recommendation follow the published
+ * model, so the incident page, Safety Shield and decisions work on the build
+ * that was just published. Decisions, safety evaluations, audit records and
+ * replay checkpoints keep the model they were made with.
+ */
 async function activateModelVersion(client: pg.PoolClient, facilityId: string, versionId: string) {
+  const facility = await client.query("SELECT model_version FROM facilities WHERE id = $1 FOR UPDATE", [facilityId]);
+  const previousVersionId: string | undefined = facility.rows[0]?.model_version;
   await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [facilityId]);
-  await client.query("UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1", [versionId]);
+  const activated = await client.query(
+    "UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1 RETURNING config",
+    [versionId],
+  );
   await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [versionId, facilityId]);
+  if (previousVersionId && previousVersionId !== versionId && activated.rows[0]) {
+    await rebindScenarioRecords(client, facilityId, previousVersionId, versionId, activated.rows[0].config);
+  }
+}
+
+/**
+ * Move a facility's published scenario, and the scenario incident and
+ * recommendation raised in it, from one model version to another, rewriting
+ * their content for the new model. A recommendation for a different model is a
+ * new version, open for review again; earlier decisions stay in the history.
+ */
+async function rebindScenarioRecords(
+  client: pg.PoolClient,
+  facilityId: string,
+  fromVersionId: string,
+  toVersionId: string,
+  config: unknown,
+) {
+  assertModelConfig(config);
+  const scenarios = await client.query(
+    `UPDATE scenarios s SET model_version_id = $3
+     WHERE s.facility_id = $1 AND s.model_version_id = $2 AND s.status = 'PUBLISHED'
+       AND NOT EXISTS (
+         SELECT 1 FROM scenarios t
+         WHERE t.facility_id = s.facility_id AND t.scenario_key = s.scenario_key AND t.model_version_id = $3
+       )
+     RETURNING s.id`,
+    [facilityId, fromVersionId, toVersionId],
+  );
+  if (!scenarios.rows.length) return;
+  const { incident, recommendation } = scenarioRecords(config);
+  const incidents = await client.query(
+    `UPDATE incidents
+     SET title = $4, affected_assets = $5::jsonb, likely_cause = $6, correlated_signals = $7::jsonb,
+         thermal_path = $8::jsonb, deduplication_key = $9, model_version = $3, model_version_id = $3,
+         model_config = $10::jsonb
+     WHERE facility_id = $1 AND model_version_id = $2 AND scenario_id = ANY($11::text[])
+       AND deduplication_key LIKE '%' || $12::text
+     RETURNING id`,
+    [
+      facilityId, fromVersionId, toVersionId,
+      incident.title, JSON.stringify(incident.affectedAssets), incident.likelyCause,
+      JSON.stringify(incident.correlatedSignals), JSON.stringify(incident.thermalPath), incident.deduplicationKey,
+      JSON.stringify(config), scenarios.rows.map((row) => row.id), SCENARIO_INCIDENT_KEY_SUFFIX,
+    ],
+  );
+  if (!incidents.rows.length) return;
+  await client.query(
+    `UPDATE recommendations
+     SET title = $4, rationale = $5, command = $6::jsonb, explanation = $7::jsonb, evidence = $8::jsonb,
+         model_version_id = $3, version = version + 1, status = 'PROPOSED'
+     WHERE facility_id = $1 AND model_version_id = $2 AND incident_id = ANY($9::text[])`,
+    [
+      facilityId, fromVersionId, toVersionId,
+      recommendation.title, recommendation.rationale, JSON.stringify(recommendation.command),
+      JSON.stringify(recommendation.explanation), JSON.stringify(recommendation.evidence),
+      incidents.rows.map((row) => row.id),
+    ],
+  );
+}
+
+/**
+ * db:setup reseeds the scenario records against the SFO-01 reference model.
+ * Bind them back to whichever model each facility actually publishes.
+ */
+async function reconcileScenarioBindings() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const stale = await client.query(
+      `SELECT f.id AS facility_id, f.model_version AS published_version_id, mv.config,
+              s.model_version_id AS bound_version_id
+       FROM facilities f
+       JOIN model_versions mv ON mv.id = f.model_version AND mv.status = 'PUBLISHED'
+       JOIN scenarios s ON s.facility_id = f.id AND s.status = 'PUBLISHED' AND s.model_version_id <> f.model_version
+       FOR UPDATE OF f`,
+    );
+    for (const row of stale.rows) {
+      await rebindScenarioRecords(client, row.facility_id, row.bound_version_id, row.published_version_id, row.config);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 type ModelVersionRow = {
@@ -2907,6 +3014,9 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if"
   assertModelConfig(row.model_config);
   const recommendedCommand = parseAdvisoryCommand(row.command);
   if (!recommendedCommand) return res.status(409).json({ error: "Persisted recommendation command is invalid" });
+  if (command.assetId !== recommendedCommand.assetId) {
+    return res.status(400).json({ error: `An alternative must command ${recommendedCommand.assetId.toUpperCase()}, the unit this recommendation advises` });
+  }
   const inaction = replaySnapshot(simulatedAt, row.model_config);
   const recommended = counterfactualCockpitSnapshot(simulatedAt, recommendedCommand, row.model_config);
   const alternative = counterfactualCockpitSnapshot(simulatedAt, command, row.model_config);
@@ -2919,7 +3029,7 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if"
       simulatedAt,
       initialState: snapshotForAudit(inaction),
       modelConfig: row.model_config,
-      events: ["GPU Training Ramp", "Rack heat rise", "CDU-03 modeled response lag"],
+      events: ["GPU Training Ramp", "Rack heat rise", `${facilityPlant(row.model_config).advisedLabel} modeled response lag`],
     },
     options: [
       {
@@ -2985,6 +3095,9 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/evaluate
   const model = await publishedModel(String(req.params.facilityId));
   if (!model || model.model_version !== row.model_version_id) {
     return res.status(409).json({ error: "Recommendation does not match the active facility model" });
+  }
+  if (command.assetId !== advisedAssetId(model.config)) {
+    return res.status(400).json({ error: "Invalid advisory command" });
   }
   const snapshot = counterfactualCockpitSnapshot(simulatedAt, command, model.config);
   const checks = safetyChecksFor(snapshot, command);
@@ -3107,6 +3220,10 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
       return res.status(409).json({ error: "Recommendation model is no longer active; request a new recommendation" });
     }
     assertModelConfig(recommendation.model_config);
+    if (command.assetId !== advisedAssetId(recommendation.model_config)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Invalid advisory command" });
+    }
     const snapshot = counterfactualCockpitSnapshot(simulatedAt, command, recommendation.model_config);
 
     let evaluation;
@@ -3310,6 +3427,7 @@ if (process.env.NODE_ENV === "production" || process.env.RELEASE_GATE === "1") {
   app.use(vite.middlewares);
 }
 
+void reconcileScenarioBindings().catch((error) => console.error("Scenario record reconciliation failed", error));
 void purgeExpiredLearningRecords().catch(() => {});
 const learningRetentionTimer = setInterval(() => {
   lastLearningPurgeAt = 0;

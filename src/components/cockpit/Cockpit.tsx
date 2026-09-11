@@ -18,6 +18,8 @@ import { assistantSuggestions, type AssistantResponse } from "@/lib/cockpit/assi
 import { learningSurfaceForPath, recordLearningEvent, reportLearningError } from "@/lib/cockpit/learning";
 import { GuidanceProvider, useGuidance } from "./Guidance";
 import { FacilityBuilder } from "@/components/builder/FacilityBuilder";
+import { facilityAssets } from "@/lib/cockpit/facilityAssets";
+import { facilityPlant } from "@/lib/cockpit/simulation";
 
 type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model: boolean; assistant: boolean };
 type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number; tutorial_role: Role | null };
@@ -29,7 +31,7 @@ type SafetyEvaluation = {
   id: string;
   outcome: "PASS" | "WARNING" | "BLOCK";
   checks: Array<{ id: string; status: "PASS" | "WARNING" | "BLOCK"; pass: boolean; detail: string; evidence: Record<string, unknown> }>;
-  command: { assetId: "cdu-03"; flowPercent: number; durationMinutes: number };
+  command: { assetId: string; flowPercent: number; durationMinutes: number };
   simulatedAt: number;
   recommendationVersion: number;
   modelVersionId: string;
@@ -41,7 +43,7 @@ type WhatIfComparison = {
   options: Array<{
     id: "inaction" | "recommendation" | "alternative";
     label: string;
-    command: { assetId: "cdu-03"; flowPercent: number; durationMinutes: number } | null;
+    command: { assetId: string; flowPercent: number; durationMinutes: number } | null;
     peakC: number;
     constraintMinutes: number;
     series: Array<{ simulatedAt: number; peakC: number }>;
@@ -71,6 +73,9 @@ const navigate = (path: string) => {
 };
 const e2eTestUserId = () =>
   (globalThis as typeof globalThis & { __WATTR_E2E_USER_ID__?: string }).__WATTR_E2E_USER_ID__;
+
+/** Sent after a model is published or restored, so every page reads the version Operations now runs. */
+const FACILITIES_CHANGED = "wattr:facilities-changed";
 
 class ApiError extends Error {
   status: number;
@@ -433,7 +438,9 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
   const [overlays, setOverlays] = useState<TwinOverlay[]>(["heat", "flow", "sensors", "labels", "incidents", "forecast"]);
   useEffect(() => { useScenarioSession.getState().setModelConfig(facility.model_config); }, [facility.id, facility.model_version]);
   const selectedRack = snapshot.racks.find((rack) => rack.id === selectedAsset);
-  const selectedLabel = selectedRack ? `Rack ${selectedRack.id}` : selectedAsset === "cdu-03" ? "CDU-03" : selectedAsset === "chiller-01" ? "Chiller-01" : selectedAsset === "pdu-01" ? "PDU-01" : selectedAsset === "pdu-02" ? "PDU-02" : selectedAsset.startsWith("sensor-") ? `Sensor ${selectedAsset.slice(-2)}` : selectedAsset.startsWith("rack-f2-") ? `Floor 2 rack ${selectedAsset.slice(-1).toUpperCase()}` : "GPU Cluster B";
+  const assets = facilityAssets(facility.model_config);
+  const selectedEquipment = assets.byId.get(selectedAsset);
+  const selectedLabel = selectedRack ? `Rack ${selectedRack.id}` : selectedEquipment && selectedEquipment.kind !== "workload" ? selectedEquipment.label : selectedAsset.startsWith("pdu-") ? selectedAsset.toUpperCase() : selectedAsset.startsWith("rack-f2-") ? `Floor 2 rack ${selectedAsset.slice(-1).toUpperCase()}` : assets.workload.label;
   const toggleOverlay = (overlay: TwinOverlay) => setOverlays((items) => items.includes(overlay) ? items.filter((item) => item !== overlay) : [...items, overlay]);
   const riskTone = snapshot.forecast.risk === "critical" ? "bad" : snapshot.forecast.risk === "watch" || snapshot.incident.open ? "warn" : "good";
   return <Shell data={data} facility={facility}>
@@ -457,7 +464,7 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
       </section>
       <aside className="min-w-0 space-y-4">
         {(s.focusedIncidentId || s.focusedRecommendationId) && <section className="panel border-purple-400/40 p-4" aria-label="Assistant twin focus"><div className="eyebrow text-purple-300">ASK WATTR FOCUS</div><div className="mt-2 flex flex-wrap items-center gap-2"><Status tone={s.focusedIncidentId ? "warn" : "good"}>{s.focusedIncidentId ? `Incident ${s.focusedIncidentId}` : `Recommendation ${s.focusedRecommendationId}`}</Status><span className="text-xs text-slate-400">{s.highlightedPath.length ? s.highlightedPath.join(" → ") : `${selectedLabel} at the cited scenario time`}</span></div></section>}
-        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAsset === "cdu-03" ? `Cooling distribution is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit online.` : selectedAsset === "chiller-01" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : selectedAsset.startsWith("pdu-") ? "Power distribution asset in the authorized facility topology. Facility power context remains synchronized to the replay clock." : selectedAsset.startsWith("sensor-") ? `Environmental sensor marker. Facility mean inlet is ${snapshot.meanInletC.toFixed(1)}°C at this replay instant.` : selectedAsset.startsWith("rack-f2-") ? "Floor 2 modeled compute asset. This floor has no rack-level telemetry in the canonical training scenario." : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}<ContextualHelp title="Why select an asset?"><p>Selection adds local state and dependencies without replacing the facility-wide summary. Use it when a site-level signal needs asset context.</p></ContextualHelp></section>
+        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedEquipment?.kind === "cooling" ? `${selectedEquipment.item?.kind === "crac" ? "Cooling air" : "Cooling distribution"} is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit${snapshot.coolingUnitCount === 1 ? "" : "s"} online.` : selectedEquipment?.kind === "chiller" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : selectedAsset.startsWith("pdu-") ? "Power distribution asset in the authorized facility topology. Facility power context remains synchronized to the replay clock." : selectedAsset.startsWith("sensor-") ? `Environmental sensor marker. Facility mean inlet is ${snapshot.meanInletC.toFixed(1)}°C at this replay instant.` : selectedAsset.startsWith("rack-f2-") ? "Floor 2 modeled compute asset. This floor has no rack-level telemetry in the canonical training scenario." : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}<ContextualHelp title="Why select an asset?"><p>Selection adds local state and dependencies without replacing the facility-wide summary. Use it when a site-level signal needs asset context.</p></ContextualHelp></section>
         <section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><div className="mt-2 flex items-center justify-between gap-3"><h2 className={`text-xl font-semibold ${riskTone === "good" ? "text-teal-300" : riskTone === "bad" ? "text-red-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : snapshot.incident.open ? `${snapshot.incident.severity} condition` : "Approaching limit"}</h2><Status tone={riskTone}>{snapshot.forecast.risk}</Status></div><p className="mt-3 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><ContextualHelp title="How to read this forecast"><p>The forecast extends the current replay state through the disclosed horizon. Risk describes whether modeled temperature approaches or crosses the limit; it is not a live alarm or certainty statement.</p></ContextualHelp><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section>
         <section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={(event) => s.setMode(event.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">{s.mode === "Observe" ? "Read-only view. No advisory is proposed." : s.mode === "Shadow" ? "Recommendations are simulated for comparison; no action is sent." : "Advisories may be reviewed, but human approval is required. No OT commands are issued."}</p><ContextualHelp title="What changes by mode?"><p><b>Observe</b> shows state only. <b>Shadow</b> computes recommendations for comparison. <b>Advisory</b> lets authorized operators review and record a disposition. None of these modes sends an OT command.</p></ContextualHelp></section>
         <Transparency facility={facility} snapshot={snapshot}/>
@@ -495,7 +502,9 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
   const [error, setError] = useState("");
   const [pendingReplacement, setPendingReplacement] = useState<{ decision: Disposition; current: CurrentDisposition | null } | null>(null);
   const replacementRef = useRef<HTMLDivElement>(null);
-  const command = { assetId: "cdu-03" as const, flowPercent, durationMinutes };
+  // The advisory commands the unit the published build advises, such as CDU-03.
+  const command = { assetId: snapshot.recommendation.command.assetId, flowPercent, durationMinutes };
+  const unitLabel = command.assetId.toUpperCase();
 
   useEffect(() => {
     void recordLearningEvent("RECOMMENDATION_INSPECTED", {
@@ -566,7 +575,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
   const evaluationTone = evaluation?.outcome === "PASS" ? "text-teal-300" : evaluation?.outcome === "WARNING" ? "text-amber-300" : "text-red-300";
 
   return <Shell data={data} facility={facility}>
-    <PageHead eyebrow="RECOMMENDATION / REC-17 / VERSION 1" title="Pre-emptive CDU-03 flow adjustment" detail={`Bound to ${formatSimulatedAt(snapshot.simulatedAt)}, GPU Training Ramp, and ${facility.model_version}.`}/>
+    <PageHead eyebrow="RECOMMENDATION / REC-17" title={`Pre-emptive ${unitLabel} flow adjustment`} detail={`Bound to ${formatSimulatedAt(snapshot.simulatedAt)}, GPU Training Ramp, and ${facility.model_version}.`}/>
     <ReplayBar/>
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(330px,.75fr)]">
       <div className="space-y-4">
@@ -595,7 +604,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
         <section className="p-5" data-guide="what-if">
           <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">WHAT-IF COMPARISON</div><h2 className="mt-2 text-lg font-semibold">Adjust a permitted advisory</h2><p className="copy">Only the advisory parameters change. Initial state, event stream, replay instant, and model version stay fixed.</p></div><SlidersHorizontal className="text-cyan-300"/></div>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
-            <label className="field">CDU-03 flow: <b>{flowPercent}%</b><input aria-label="Alternative CDU flow percent" type="range" min="60" max="85" step="1" value={flowPercent} onChange={(event) => setFlowPercent(Number(event.target.value))}/></label>
+            <label className="field">{unitLabel} flow: <b>{flowPercent}%</b><input aria-label={`Alternative ${unitLabel.split("-")[0]} flow percent`} type="range" min="60" max="85" step="1" value={flowPercent} onChange={(event) => setFlowPercent(Number(event.target.value))}/></label>
             <label className="field">Duration: <b>{durationMinutes} minutes</b><input aria-label="Alternative duration minutes" type="range" min="1" max="30" step="1" value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}/></label>
           </div>
           <button className="button secondary mt-5" onClick={compare}><Layers3 size={15}/>Compare identical-input outcomes</button>
@@ -696,7 +705,7 @@ function IncidentPage({ data, facility, incidentId }: { data: SessionData; facil
           <h2 id="incident-not-found" className="mt-3 text-xl font-semibold">Incident {incidentId} was not found</h2>
           <p className="copy">This facility has no incident with that ID, so nothing is shown in its place. The link may be out of date. Choose an incident from the list{incidents[0] ? ", or open the most recent one" : ""}.</p>
           {incidents[0] && <button className="button primary mt-4" onClick={() => navigate(`/facilities/${facility.id}/incidents/${incidents[0].id}`)}>Open {incidents[0].id} <ArrowRight size={15}/></button>}
-        </section> : incident && incidentState ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={stateTone(incidentState)}>{stateLabel(incidentState)}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Raised at {formatSimulatedAt(incidentState.recordedAt)} in the GPU Training Ramp. Status shown for replay time {replayTime}.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="deduplicated into one incident"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 grid gap-3 md:grid-cols-2"><div className="subpanel"><span className="eyebrow">CORRELATED EVIDENCE</span>{(incident.correlated_signals ?? []).map(signal => <div key={signal.id} className="text-xs text-slate-300"><b>{signal.assetId}</b> · {signal.metric.replace(/_/g, " ")} · {signal.direction}</div>)}</div><div className="subpanel"><span className="eyebrow">THERMAL PATH</span><div className="flex flex-wrap items-center gap-2 text-xs">{(incident.thermal_path ?? []).map((asset, index) => <span key={asset} className="flex items-center gap-2"><b>{asset}</b>{index < incident.thermal_path.length - 1 && <ArrowRight size={12} className="text-cyan-300"/>}</span>)}</div><small>Dedup key: {incident.deduplication_key}</small></div></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=cdu-03`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">{loaded ? "Choose an incident to inspect its correlated signals." : "Loading incidents…"}</section>}
+        </section> : incident && incidentState ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={stateTone(incidentState)}>{stateLabel(incidentState)}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Raised at {formatSimulatedAt(incidentState.recordedAt)} in the GPU Training Ramp. Status shown for replay time {replayTime}.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="deduplicated into one incident"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 grid gap-3 md:grid-cols-2"><div className="subpanel"><span className="eyebrow">CORRELATED EVIDENCE</span>{(incident.correlated_signals ?? []).map(signal => <div key={signal.id} className="text-xs text-slate-300"><b>{signal.assetId}</b> · {signal.metric.replace(/_/g, " ")} · {signal.direction}</div>)}</div><div className="subpanel"><span className="eyebrow">THERMAL PATH</span><div className="flex flex-wrap items-center gap-2 text-xs">{(incident.thermal_path ?? []).map((asset, index) => <span key={asset} className="flex items-center gap-2"><b>{asset}</b>{index < incident.thermal_path.length - 1 && <ArrowRight size={12} className="text-cyan-300"/>}</span>)}</div><small>Dedup key: {incident.deduplication_key}</small></div></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=${facilityPlant(facility.model_config).advisedUnit.id}`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">{loaded ? "Choose an incident to inspect its correlated signals." : "Loading incidents…"}</section>}
       </section>
     </div>
   </Shell>;
@@ -789,10 +798,9 @@ function GraphPage({ data, facility }: { data: SessionData; facility: Facility }
 }
 
 function FacilityBuilderPage({ data, facility }: { data: SessionData; facility: Facility }) {
-  // After a publish or restore, the replay session must pick up the newly published model.
+  // After a publish or restore, every page and the replay session must pick up the newly published model.
   const reloadPublishedModel = async () => {
-    const active = (await api<Facility[]>("/api/facilities")).find((item) => item.id === facility.id);
-    if (active) useScenarioSession.getState().setModelConfig(active.model_config);
+    dispatchEvent(new Event(FACILITIES_CHANGED));
   };
   return <Shell data={data} facility={facility}>
     <PageHead eyebrow="FACILITY BUILDER / LAYOUT" title="Facility builder" detail="Construct the data centre Operations runs: zones, equipment and connections, saved as versions that are checked and then published."/>
@@ -819,13 +827,15 @@ function ModelStudio({ data, facility }: { data: SessionData; facility: Facility
     });
   }, [facility.id]);
   const createDraft = async () => { try { const parsed = JSON.parse(config); const result = await post<ModelVersion>(`/api/facilities/${facility.id}/model/versions`, { config: parsed }); setVersions(v => [result, ...v]); setMessage(`${result.id} created as DRAFT`); setError(""); guidance.emit("model-draft"); } catch (e) { setError(String(e)); } };
-  const action = async (path: string, success: string, body: unknown = {}, reloadModel = false) => { try { await post(path, body); await refresh(); if (reloadModel) { const active = (await api<Facility[]>("/api/facilities")).find(item => item.id === facility.id); if (active) useScenarioSession.getState().setModelConfig(active.model_config); } setMessage(success); setError(""); guidance.emit(path.endsWith("/validate") ? "model-validate" : path.endsWith("/publish") ? "model-publish" : "model-rollback"); } catch (e) { setError(String(e)); } };
+  const action = async (path: string, success: string, body: unknown = {}, reloadModel = false) => { try { await post(path, body); await refresh(); if (reloadModel) dispatchEvent(new Event(FACILITIES_CHANGED)); setMessage(success); setError(""); guidance.emit(path.endsWith("/validate") ? "model-validate" : path.endsWith("/publish") ? "model-publish" : "model-rollback"); } catch (e) { setError(String(e)); } };
   const simulatedAt = useScenarioSession((state) => state.simulatedAt);
   const previewConfig = useMemo(() => {
     try {
       const parsed = JSON.parse(config) as FacilityModelConfig;
+      // A draft inherits the published build's layout, so it previews on that build.
+      const withLayout = parsed.layout || !facility.model_config.layout ? parsed : { ...parsed, layout: facility.model_config.layout };
       return parsed.scenario === "gpu-training-ramp-v1" && Number.isFinite(parsed.seed) && parsed.thermalMass > 0 && parsed.responseLag >= 0
-        ? parsed
+        ? withLayout
         : facility.model_config;
     } catch {
       return facility.model_config;
@@ -1180,6 +1190,19 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
 function ProtectedApp({path}:{path:string}){
   const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState("");
   useEffect(()=>{Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch(e=>setError(String(e)));},[]);
+  // A publish or restore changes the model Operations runs. Reload the
+  // facilities so Operations, the twin and the replay session all use it. If
+  // the reload fails, pages keep the facilities they already have.
+  useEffect(() => {
+    const reload = () => {
+      api<Facility[]>("/api/facilities").then((facilities) => {
+        if (facilities[0]?.model_config) useScenarioSession.getState().setModelConfig(facilities[0].model_config);
+        setData((current) => current ? { ...current, facilities } : current);
+      }).catch(() => {});
+    };
+    addEventListener(FACILITIES_CHANGED, reload);
+    return () => removeEventListener(FACILITIES_CHANGED, reload);
+  }, []);
   if(error)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-red-300">{error}</div>;
   if(!data)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Loading authorized facility context…</div>;
   const roleProgressMatches = data.me.tutorial_role === data.me.role;
