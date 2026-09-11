@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Show, SignIn, SignUp, useUser } from "@clerk/react";
 import {
-  Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ArrowDownUp, BookOpen, BrainCircuit, Check,
+  Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ArrowDownUp, BookOpen, Boxes, BrainCircuit, Check,
   CircleHelp, Clock3, Cpu, Gauge, GitBranch, History, LayoutDashboard, Layers3, Menu, MousePointer2,
   Pause, Play, RotateCcw, Search, Save, ShieldCheck, SkipForward, SlidersHorizontal, Sun, Moon, Monitor, Thermometer, Trash2, UserCog, X,
 } from "lucide-react";
@@ -17,6 +17,7 @@ import { incidentStateAt, selectIncident, type IncidentReplayState } from "@/lib
 import { assistantSuggestions, type AssistantResponse } from "@/lib/cockpit/assistant";
 import { learningSurfaceForPath, recordLearningEvent, reportLearningError } from "@/lib/cockpit/learning";
 import { GuidanceProvider, useGuidance } from "./Guidance";
+import { FacilityBuilder } from "@/components/builder/FacilityBuilder";
 
 type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model: boolean; assistant: boolean };
 type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number; tutorial_role: Role | null };
@@ -236,6 +237,8 @@ function Shell({ data, facility, children }: { data: SessionData; facility?: Fac
       ...(active.can_assistant && data.me.role !== "PORTFOLIO_MANAGER" ? [[BrainCircuit, "Ask Wattr", `/facilities/${active.id}/ask-wattr`] as [LucideIcon, string, string]] : []),
       ...(canViewTopology(data.me.role, data.me.is_owner) ? [[GitBranch, "Thermal graph", `/facilities/${active.id}/topology`] as [LucideIcon, string, string]] : []),
       ...(active.can_engineer ? [[BrainCircuit, "Model Lab", `/facilities/${active.id}/model-lab`] as [LucideIcon, string, string]] : []),
+      // Everyone with access to the facility can build for now; build permissions come later.
+      [Boxes, "Facility builder", `/facilities/${active.id}/builder`] as [LucideIcon, string, string],
       ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
     ] : []),
     ...(data.me.is_admin ? [[UserCog, "Access administration", "/admin"] as [LucideIcon, string, string]] : []),
@@ -785,6 +788,18 @@ function GraphPage({ data, facility }: { data: SessionData; facility: Facility }
   return <Shell data={data} facility={facility}><PageHead eyebrow="THERMAL DEPENDENCY GRAPH" title="Heat-flow topology" detail="Select an asset to trace what affects it, where heat goes, and what would be impacted by degradation."/><ReplayBar/><div className="mb-4 flex flex-wrap gap-2">{(["topology","current","forecast"] as GraphView[]).map(item => <button key={item} onClick={() => setView(item)} className={`button ${view === item ? "primary" : "secondary"}`}>{item === "topology" ? "Topology" : item === "current" ? "Current state" : "Forecast state"}</button>)}</div><div className="grid gap-4 xl:grid-cols-[1fr_340px]"><section className="panel p-5"><div className="mb-5 flex items-center justify-between"><div><h2 className="font-semibold">{view === "topology" ? "THERMAL DEPENDENCY GRAPH" : view.toUpperCase()}</h2><p className="mt-1 text-xs text-slate-500">GPU Training Ramp · {formatSimulatedAt(snapshot.simulatedAt)}</p></div><GitBranch className="text-cyan-300"/></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{graph.nodes.map(node => <button key={node.id} onClick={() => setSelectedId(node.id)} className={`rounded-md border p-4 text-left transition-colors ${nodeTone(node)} ${selected.id === node.id ? "ring-2 ring-cyan-300" : ""}`}><div className="flex justify-between gap-2"><span className="text-[10px] uppercase tracking-[.14em] text-slate-500">{node.kind}</span>{node.risk&&<span className="text-[10px] text-amber-300">RISK</span>}</div><b className="mt-2 block">{node.label}</b><span className="mt-1 block text-xs text-slate-500">{node.detail}</span><span className={`${mono} mt-3 block text-xs text-cyan-300`}>{node.value}</span></button>)}</div><div className="mt-5 border-t border-slate-800 pt-4"><div className="eyebrow">RELATIONSHIPS</div><div className="mt-3 grid gap-2 sm:grid-cols-2">{graph.edges.filter(edge => edge.from === selected.id || edge.to === selected.id).map(edge => <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 text-xs"><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.from)?.label}</span><ArrowRight size={13} className="text-cyan-300"/><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.to)?.label}</span><small className="text-slate-500">· {edge.label}</small></div>)}</div></div></section><aside className="panel p-5"><div className="eyebrow">SELECTED ASSET</div><h2 className="mt-2 text-xl font-semibold">{selected.label}</h2><p className="mt-2 text-sm text-slate-400">{selected.detail} · {selected.value}</p><div className="mt-6 space-y-5"><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowUp size={13}/>Upstream / what affects it</div><ul className="mt-2 space-y-1 text-sm">{related.upstream.length ? related.upstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Source node</li>}</ul></div><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowDown size={13}/>Downstream / carries heat away</div><ul className="mt-2 space-y-1 text-sm">{related.downstream.length ? related.downstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Terminal node</li>}</ul></div><div className="border-t border-slate-800 pt-4"><div className="text-[10px] uppercase tracking-[.14em] text-amber-300">Impact if degraded</div><p className="mt-2 text-sm leading-6 text-slate-400">{related.impact.length ? `${related.impact.map(node => node.label).join(", ")} would require review.` : "No downstream impact is modeled."}</p></div></div></aside></div></Shell>;
 }
 
+function FacilityBuilderPage({ data, facility }: { data: SessionData; facility: Facility }) {
+  // After a publish or restore, the replay session must pick up the newly published model.
+  const reloadPublishedModel = async () => {
+    const active = (await api<Facility[]>("/api/facilities")).find((item) => item.id === facility.id);
+    if (active) useScenarioSession.getState().setModelConfig(active.model_config);
+  };
+  return <Shell data={data} facility={facility}>
+    <PageHead eyebrow="FACILITY BUILDER / LAYOUT" title="Facility builder" detail="Construct the data centre Operations runs: zones, equipment and connections, saved as versions that are checked and then published."/>
+    <FacilityBuilder facilityId={facility.id} request={api} onPublished={reloadPublishedModel}/>
+  </Shell>;
+}
+
 function ModelStudio({ data, facility }: { data: SessionData; facility: Facility }) {
   const guidance = useGuidance();
   const [versions, setVersions] = useState<ModelVersion[]>([]), [config, setConfig] = useState('{"scenario":"gpu-training-ramp-v1","seed":4103,"thermalMass":0.82,"responseLag":12}'), [message, setMessage] = useState(""), [error, setError] = useState("");
@@ -1155,6 +1170,7 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   if(section==="ask-wattr")return <AssistantPage data={data} facility={facility}/>;
   if(section==="topology"&&!canViewTopology(data.me.role, data.me.is_owner))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
   if(section==="topology")return <GraphPage data={data} facility={facility}/>;
+  if(section==="builder")return <FacilityBuilderPage data={data} facility={facility}/>;
   if(section==="model-lab"&&!facility.can_engineer)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Engineering analysis access is required."/></Shell>;
   if(section==="model-lab")return <ModelLab data={data} facility={facility}/>;
   if(section==="model"&&!facility.can_edit_model)return <Shell data={data} facility={facility}><PageHead eyebrow="FORBIDDEN" title="Model Studio access required" detail="Your role cannot edit or publish facility models."/></Shell>;

@@ -442,9 +442,11 @@ try {
     await browser.close();
   }
 
-  const [appSource, sandboxSource, cssSource, builtHtml] = await Promise.all([
+  const [appSource, sandboxSource, stageSource, cssSource, builtHtml] = await Promise.all([
     readFile(new URL("../src/components/cockpit/Cockpit.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/components/sandbox/SandboxShell.tsx", import.meta.url), "utf8"),
+    // The 3D stage and its WebGL fallback are shared by the sandbox and the facility Builder.
+    readFile(new URL("../src/components/sandbox/SandboxStage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/index.css", import.meta.url), "utf8"),
     readFile(new URL("../dist/index.html", import.meta.url), "utf8"),
   ]);
@@ -452,7 +454,7 @@ try {
   for (const text of ["portfolio", "incidents", "recommendations", "audit"]) {
     assert(appSource.toLowerCase().includes(text), `browser flow missing ${text} surface`);
   }
-  assert(sandboxSource.includes("This preview does not provide WebGL"), "WebGL fallback is missing");
+  assert(stageSource.includes("This preview does not provide WebGL"), "WebGL fallback is missing");
   assert(sandboxSource.includes("aria-live=\"polite\""), "fallback status is not announced");
   assert(cssSource.includes("@media (max-width:767px)"), "primary responsive breakpoint is missing");
   assert(cssSource.includes("overflow-x"), "horizontal overflow handling is missing");
