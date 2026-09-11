@@ -2311,6 +2311,49 @@ app.get("/api/facilities/:facilityId/decisions", requireAuth, async (req: Authed
   res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
 });
 
+// A recommendation's status and the decisions recorded on it, newest first, so
+// the decision page shows what is in force before anyone acts on it.
+app.get("/api/facilities/:facilityId/recommendations/:recommendationId/history", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res)) return;
+  const recommendation = await pool.query(
+    "SELECT id, status, version, model_version_id FROM recommendations WHERE id = $1 AND facility_id = $2",
+    [req.params.recommendationId, facilityId],
+  );
+  const row = recommendation.rows[0];
+  if (!row) return res.status(404).json({ error: "Recommendation not found" });
+  const client = await pool.connect();
+  try {
+    const current = await currentDisposition(client, facilityId, row);
+    const decisions = await client.query(
+      `SELECT d.id, d.decision, d.outcome, d.simulated_at, d.created_at, d.model_version_id, u.display_name,
+              CASE WHEN d.payload->>'recommendationVersion' ~ '^[0-9]+$'
+                   THEN (d.payload->>'recommendationVersion')::int END AS recommendation_version
+       FROM operator_decisions d JOIN users u ON u.id = d.user_id
+       WHERE d.facility_id = $1 AND d.recommendation_id = $2
+       ORDER BY d.created_at DESC, d.id DESC LIMIT 10`,
+      [facilityId, row.id],
+    );
+    res.json({
+      recommendation: { id: row.id, status: row.status, version: row.version, modelVersionId: row.model_version_id },
+      current: current ?? null,
+      decisions: decisions.rows.map((decision) => ({
+        id: String(decision.id),
+        decision: String(decision.decision),
+        outcome: String(decision.outcome),
+        simulatedAt: Number(decision.simulated_at),
+        recordedAt: decision.created_at,
+        recordedBy: String(decision.display_name),
+        modelVersionId: decision.model_version_id,
+        recommendationVersion: decision.recommendation_version === null ? null : Number(decision.recommendation_version),
+      })),
+    });
+  } finally {
+    client.release();
+  }
+});
+
 app.get("/api/facilities/:facilityId/replay/checkpoints", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const facilityId = String(req.params.facilityId);

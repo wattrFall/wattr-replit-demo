@@ -213,4 +213,21 @@ assert(airSnapshot.racks.every((rack) => Number.isFinite(rack.inletC)), "every r
 const airAdvised = counterfactualCockpitSnapshot(SCENARIO_START_S + 900, { flowPercent: 85, durationMinutes: 20 }, airModel);
 assert(airAdvised.forecast.advisoryPeakC <= airSnapshot.forecast.baselinePeakC, "advice on the build's CRAC unit must not worsen its peak");
 
+// The benefit of acting depends on when: nothing is avoided at the start of the
+// ramp, the most around ten minutes in, and nothing once the limit is reached.
+const { advisoryTiming } = await import("../src/lib/cockpit/advisoryTiming");
+const timing = advisoryTiming(DEFAULT_FACILITY_MODEL);
+assert.deepEqual(timing.points.map((point) => point.elapsedS), [0, 300, 600, 900, 1_200, 1_500, 1_800]);
+for (const point of timing.points) {
+  assert.equal(
+    point.minutesAvoided,
+    replayCockpitSnapshot(SCENARIO_START_S + point.elapsedS).recommendation.constraintMinutesAvoided,
+    `advisory timing must read the replayed benefit at ${point.elapsedS}s`,
+  );
+}
+assert.equal(timing.points[0].minutesAvoided, 0, "acting at the start of the ramp avoids nothing yet");
+assert.deepEqual({ at: timing.best.elapsedS, avoided: timing.best.minutesAvoided }, { at: 600, avoided: 4.9 });
+assert.equal(timing.lastUsefulS, 1_200, "acting after the limit is reached avoids nothing");
+assert.equal(advisoryTiming(DEFAULT_FACILITY_MODEL), timing, "timing is computed once per model");
+
 console.log("Cockpit simulation golden and replay tests passed.");

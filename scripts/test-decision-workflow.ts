@@ -257,6 +257,20 @@ try {
   });
   assert.equal(staleReplacement.status, 409, "a stale confirmation must not overwrite a newer disposition");
   assert.equal(staleReplacement.body.currentDecision.id, currentDecisionId);
+
+  // The decision page reads the disposition in force and the decisions behind it.
+  const recommendationHistory = await request("/api/facilities/sfo-01/recommendations/rec-17/history");
+  assert.equal(recommendationHistory.status, 200, `history failed: ${JSON.stringify(recommendationHistory.body)}`);
+  assert.equal(recommendationHistory.body.current.id, currentDecisionId, "history must show the disposition in force");
+  assert.equal(recommendationHistory.body.current.recordedBy, "Decision workflow operator");
+  const storedStatus = await pool.query("SELECT status FROM recommendations WHERE id = 'rec-17'");
+  assert.equal(recommendationHistory.body.recommendation.status, storedStatus.rows[0].status);
+  const listedCurrent = recommendationHistory.body.decisions.find((item: { id: string }) => item.id === currentDecisionId);
+  assert(listedCurrent, "history must list the current decision");
+  assert.equal(listedCurrent.recommendationVersion, recommendationHistory.body.recommendation.version, "history must say which recommendation version a decision was made on");
+  const recordedAt = recommendationHistory.body.decisions.map((item: { recordedAt: string }) => Date.parse(item.recordedAt));
+  assert.deepEqual(recordedAt, [...recordedAt].sort((a, b) => b - a), "history must list the newest decision first");
+  assert.equal((await request("/api/facilities/sfo-01/recommendations/rec-999/history")).status, 404);
   const history = await pool.query(
     "SELECT decision FROM operator_decisions WHERE user_id = $1 AND recommendation_id = 'rec-17' ORDER BY created_at",
     [userId],
