@@ -75,7 +75,7 @@ assert(advisory.recommendation.command.flowPercent === 78);
 assert(advisory.recommendation.command.durationMinutes === 20);
 const comparison = compareControllers(baseline);
 assert.deepEqual(comparison.results.map((result) => result.id), ["baseline", "ann-rl", "snn-rl"]);
-assert(comparison.results[2].objective >= comparison.results[1].objective);
+assert(comparison.results[2].peakMarginC >= comparison.results[1].peakMarginC);
 
 const unservedLayout: SandboxLayout = {
   items: layout.items,

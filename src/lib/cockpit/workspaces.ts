@@ -106,7 +106,8 @@ export type ControllerComparison = {
     coolingEnergyKwh: number | null;
     interventions: number;
     inferenceEvents: number | null;
-    objective: number;
+    /** °C between the run's peak and the rack inlet limit; negative above the limit. */
+    peakMarginC: number;
     architecturalMetric: string;
     architecturalValue: string;
     inputFingerprint: string;
@@ -145,6 +146,13 @@ export function compareControllers(snapshot: CockpitSnapshot): ControllerCompari
       { flowPercent: controller.flowPercent, durationMinutes: controller.durationMinutes },
     ),
   }));
+  const limitC = snapshot.incident.limitC;
+  // Minutes until the uncontrolled trajectory first reaches the limit, if it
+  // does within the horizon. A predictive policy can warn that far ahead; a
+  // reactive controller only warns once the limit is reached.
+  const uncontrolled = runs.find(({ controller }) => controller.variant === "baseline")?.run;
+  const crossing = uncontrolled?.points.find((point) => point.baselinePeakC >= limitC);
+  const crossingMinutes = crossing ? Math.round((crossing.offsetS / 60) * 10) / 10 : null;
   return {
     simulatedAt: snapshot.simulatedAt,
     scenario: "GPU Training Ramp / shared event stream",
@@ -155,11 +163,11 @@ export function compareControllers(snapshot: CockpitSnapshot): ControllerCompari
       name: controller.name,
       peakC: run.peakC,
       degreeMinutes: run.degreeMinutes,
-      warningLeadMinutes: controller.id === "baseline" ? 0 : null,
+      warningLeadMinutes: crossingMinutes === null ? null : controller.variant === "baseline" ? 0 : crossingMinutes,
       coolingEnergyKwh: controller.id === "snn-rl" ? null : Math.round(run.coolingEnergyKwh * 10) / 10,
-      interventions: controller.id === "baseline" ? 0 : 1,
+      interventions: controller.durationMinutes > 0 ? 1 : 0,
       inferenceEvents: null,
-      objective: Math.max(0, Math.round(100 - Math.max(0, run.peakC - snapshot.incident.limitC) * 10)),
+      peakMarginC: Math.round((limitC - run.peakC) * 10) / 10,
       architecturalMetric: controller.id === "snn-rl" ? "SNN compute energy" : "control architecture",
       architecturalValue: controller.id === "snn-rl" ? "Unavailable — no measured implementation" : controller.id === "ann-rl" ? "Dense policy evaluation" : "Fixed reactive setpoint",
       inputFingerprint,

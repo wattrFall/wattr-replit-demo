@@ -46,6 +46,20 @@ assert(
   "degree-minutes must integrate the trajectory rather than multiply peak by duration",
 );
 
+// Model Lab values come from each run rather than fixed placeholders.
+const opening = compareControllers(replayCockpitSnapshot(SCENARIO_START_S));
+assert(opening.results.every((row) => row.warningLeadMinutes === null), "no warning lead without a limit crossing in the horizon");
+assert(new Set(opening.results.map((row) => row.peakMarginC)).size > 1, "controllers below the limit must still be distinguishable");
+for (const row of [...opening.results, ...comparison.results]) {
+  assert.equal(row.peakMarginC, Math.round((baseline.incident.limitC - row.peakC) * 10) / 10, "peak margin must derive from the run's peak");
+}
+const ramping = compareControllers(replayCockpitSnapshot(SCENARIO_START_S + 300));
+const leads = new Map(ramping.results.map((row) => [row.id, row.warningLeadMinutes]));
+assert.equal(leads.get("baseline"), 0, "a reactive controller warns only at the limit");
+assert((leads.get("ann-rl") ?? 0) > 0, "a predictive policy must warn before the limit crossing");
+assert.equal(leads.get("ann-rl"), leads.get("snn-rl"), "policies share one uncontrolled trajectory");
+assert.deepEqual(ramping.results.map((row) => row.interventions), [0, 1, 1], "interventions must follow each controller's commands");
+
 const session = useScenarioSession.getState();
 session.reset();
 session.selectAsset("A02");
