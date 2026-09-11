@@ -49,7 +49,7 @@ function SiteGround() {
 }
 
 /** One zone: its slab, tile grid, kerb in the zone kind's colour, and label. */
-function ZoneSlab({ zone, selected }: { zone: ZoneSpec; selected: boolean }) {
+export function ZoneSlab({ zone, selected }: { zone: ZoneSpec; selected: boolean }) {
   const { x, z, w, d } = boundsToWorld(zoneRect(zone));
   const meta = ZONE_CATALOGUE[zone.kind];
   const grid = useTileGrid(zone.w, zone.d);

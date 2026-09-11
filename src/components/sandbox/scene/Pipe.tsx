@@ -62,7 +62,7 @@ export function Pipe({
   return (
     <group>
       {paths.map((path) => (
-        <Run
+        <PipeRun
           key={path.role}
           path={path}
           reducedMotion={reducedMotion}
@@ -75,7 +75,8 @@ export function Pipe({
   );
 }
 
-function Run({
+/** One routed run: a pipe for fluid loops, a dashed line for air and sensor links. Also drawn by the Operations twin. */
+export function PipeRun({
   path,
   reducedMotion,
   dimmed,

@@ -18,7 +18,7 @@ import type { SandboxItem } from "@/lib/sandbox/types";
  * rather than a game. Detail comes from the accent colour and the edge lines,
  * not from polygon count.
  */
-function Body({ item, accent, heat }: { item: SandboxItem; accent: string; heat: string | null }) {
+export function Body({ item, accent, heat }: { item: SandboxItem; accent: string; heat: string | null }) {
   const { footprint, height } = CATALOGUE[item.kind];
   // Inset slightly so neighbouring units read as separate objects on the grid.
   const w = footprint.w - 0.16;
