@@ -2827,6 +2827,34 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/evaluate
   });
 });
 
+const DISPOSITION_STATUSES = ["APPROVED", "REJECTED", "DEFERRED", "ALTERNATIVE_REQUESTED"];
+
+/**
+ * The disposition in force for a recommendation, if any. The recommendation
+ * status says whether one is in force; the latest non-acknowledgement decision
+ * says who recorded it and when.
+ */
+async function currentDisposition(client: pg.PoolClient, facilityId: string, recommendation: { id: string; status: string }) {
+  if (!DISPOSITION_STATUSES.includes(recommendation.status)) return undefined;
+  const result = await client.query(
+    `SELECT d.id, d.decision, d.outcome, d.simulated_at, d.created_at, u.display_name
+     FROM operator_decisions d JOIN users u ON u.id = d.user_id
+     WHERE d.facility_id = $1 AND d.recommendation_id = $2 AND d.decision <> 'ACKNOWLEDGE'
+     ORDER BY d.created_at DESC, d.id DESC LIMIT 1`,
+    [facilityId, recommendation.id],
+  );
+  const row = result.rows[0];
+  if (!row) return undefined;
+  return {
+    id: String(row.id),
+    decision: String(row.decision),
+    outcome: String(row.outcome),
+    simulatedAt: Number(row.simulated_at),
+    recordedAt: row.created_at,
+    recordedBy: String(row.display_name),
+  };
+}
+
 app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decisions", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "operate");
@@ -2834,10 +2862,12 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
   const simulatedAt = req.body?.simulatedAt;
   const decision = req.body?.decision;
   const note = req.body?.note;
+  const replacesDecisionId = req.body?.replacesDecisionId;
   if (
     !isScenarioTimestamp(simulatedAt) ||
     !["APPROVE", "REJECT", "DEFER", "REQUEST_ALTERNATIVE", "ACKNOWLEDGE"].includes(decision) ||
-    (note !== undefined && (typeof note !== "string" || note.length > 500))
+    (note !== undefined && (typeof note !== "string" || note.length > 500)) ||
+    (replacesDecisionId !== undefined && typeof replacesDecisionId !== "string")
   ) return res.status(400).json({ error: "Invalid operator disposition" });
 
   const client = await pool.connect();
@@ -2894,7 +2924,26 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
     } else if (decision === "APPROVE") {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "A current server-verified Safety Shield PASS is required" });
-    } else {
+    }
+
+    // A disposition stays in force until an operator deliberately replaces it.
+    // The caller must name the disposition being replaced, so a stale screen
+    // cannot overwrite a newer decision. The decision history stays append-only.
+    const currentDecision = decision === "ACKNOWLEDGE"
+      ? undefined
+      : await currentDisposition(client, String(req.params.facilityId), recommendation);
+    if (decision !== "ACKNOWLEDGE" && (currentDecision?.id ?? null) !== (replacesDecisionId ?? null)) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: currentDecision
+          ? `This recommendation already has a ${currentDecision.decision.replace(/_/g, " ")} disposition. Confirm that this decision replaces it.`
+          : "The disposition being replaced is no longer current",
+        code: "DISPOSITION_REPLACEMENT_REQUIRED",
+        currentDecision: currentDecision ?? null,
+      });
+    }
+
+    if (!evaluation) {
       const checks = safetyChecksFor(snapshot, command);
       const id = randomUUID();
       const outcome = safetyOutcome(checks);
@@ -2944,6 +2993,9 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
       outcome,
       note: note ?? "",
       command,
+      replaces: currentDecision
+        ? { decisionId: currentDecision.id, decision: currentDecision.decision, outcome: currentDecision.outcome }
+        : null,
     };
     await client.query(
       `INSERT INTO operator_decisions

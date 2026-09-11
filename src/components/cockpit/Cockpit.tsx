@@ -71,6 +71,16 @@ const navigate = (path: string) => {
 const e2eTestUserId = () =>
   (globalThis as typeof globalThis & { __WATTR_E2E_USER_ID__?: string }).__WATTR_E2E_USER_ID__;
 
+class ApiError extends Error {
+  status: number;
+  body: Record<string, any>;
+  constructor(message: string, status: number, body: Record<string, any>) {
+    super(message);
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const testUserId = e2eTestUserId();
@@ -86,7 +96,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
           : "APPLICATION_FAULT";
       reportLearningError(category, `HTTP_${response.status}`, { route: location.pathname });
     }
-    throw new Error(body.error || `Request failed (${response.status})`);
+    throw new ApiError(body.error || `Request failed (${response.status})`, response.status, body);
   }
   return body as T;
 }
@@ -453,6 +463,23 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
   </Shell>;
 }
 
+type Disposition = "APPROVE" | "REJECT" | "DEFER" | "REQUEST_ALTERNATIVE" | "ACKNOWLEDGE";
+type CurrentDisposition = { id: string; decision: Disposition; outcome: string; simulatedAt: number; recordedAt: string; recordedBy: string };
+const DISPOSITION_LABELS: Record<Disposition, string> = {
+  APPROVE: "Approve",
+  REJECT: "Reject",
+  DEFER: "Defer",
+  REQUEST_ALTERNATIVE: "Request alternative",
+  ACKNOWLEDGE: "Acknowledge warning",
+};
+const DISPOSITION_PAST: Record<Disposition, string> = {
+  APPROVE: "approved it",
+  REJECT: "rejected it",
+  DEFER: "deferred it",
+  REQUEST_ALTERNATIVE: "requested an alternative",
+  ACKNOWLEDGE: "acknowledged the warning",
+};
+
 function Recommendation({ data, facility }: { data: SessionData; facility: Facility }) {
   const guidance = useGuidance();
   const snapshot = useScenarioSession((state) => state.simulation.snapshot);
@@ -463,6 +490,8 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [pendingReplacement, setPendingReplacement] = useState<{ decision: Disposition; current: CurrentDisposition | null } | null>(null);
+  const replacementRef = useRef<HTMLDivElement>(null);
   const command = { assetId: "cdu-03" as const, flowPercent, durationMinutes };
 
   useEffect(() => {
@@ -477,6 +506,10 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
     setEvaluation(null);
     setMessage("");
   }, [snapshot.simulatedAt, flowPercent, durationMinutes]);
+
+  useEffect(() => {
+    if (pendingReplacement) replacementRef.current?.focus();
+  }, [pendingReplacement]);
 
   const compare = async () => {
     setError("");
@@ -498,7 +531,9 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
       guidance.emit("safety-run");
     } catch (cause) { setError(String(cause)); }
   };
-  const decide = async (decision: "APPROVE" | "REJECT" | "DEFER" | "REQUEST_ALTERNATIVE" | "ACKNOWLEDGE") => {
+  // A later disposition replaces the current one only after the operator
+  // confirms it; the server rejects a replacement that has gone stale.
+  const decide = async (decision: Disposition, replacesDecisionId?: string) => {
     setError("");
     try {
       const record = await post<Audit>(
@@ -509,12 +544,19 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
           safetyEvaluationId: evaluation?.id,
           command,
           note,
+          replacesDecisionId,
         },
       );
-      setMessage(`${decision.replace(/_/g, " ")} recorded as immutable decision #${record.id}.`);
+      setMessage(`${decision.replace(/_/g, " ")} recorded as immutable decision #${record.id}.${replacesDecisionId ? " It replaces the earlier disposition, which stays in the audit history." : ""}`);
       guidance.emit("decision-record");
       setEvaluation(null);
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409 && cause.body.code === "DISPOSITION_REPLACEMENT_REQUIRED") {
+        setPendingReplacement({ decision, current: cause.body.currentDecision ?? null });
+        return;
+      }
+      setError(String(cause));
+    }
   };
   const evaluationTone = evaluation?.outcome === "PASS" ? "text-teal-300" : evaluation?.outcome === "WARNING" ? "text-amber-300" : "text-red-300";
 
@@ -579,6 +621,16 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
             <button className="button secondary justify-center" onClick={() => decide("REQUEST_ALTERNATIVE")}><RotateCcw size={14}/>Request alternative</button>
           </div>
           {evaluation?.outcome === "WARNING" && <button className="button secondary mt-2 w-full justify-center" onClick={() => decide("ACKNOWLEDGE")}>Acknowledge warning without approval</button>}
+          {pendingReplacement && <div ref={replacementRef} tabIndex={-1} role="alertdialog" aria-labelledby="replace-disposition-title" aria-describedby="replace-disposition-body" className="subpanel mt-4 border-amber-400/60">
+            <b id="replace-disposition-title">{pendingReplacement.current ? "Replace the current disposition?" : "The disposition has changed"}</b>
+            <p id="replace-disposition-body" className="text-xs leading-5 text-slate-400">{pendingReplacement.current
+              ? `${pendingReplacement.current.recordedBy} ${DISPOSITION_PAST[pendingReplacement.current.decision]} at scenario time ${formatSimulatedAt(pendingReplacement.current.simulatedAt).slice(11)}. Recording "${DISPOSITION_LABELS[pendingReplacement.decision]}" makes it the current disposition. The earlier decision stays in the audit history.`
+              : "The disposition you were replacing is no longer current. Review the recommendation, then record your decision again."}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {pendingReplacement.current && <button className="button primary" onClick={() => decide(pendingReplacement.decision, pendingReplacement.current!.id)}>Replace with {DISPOSITION_LABELS[pendingReplacement.decision]}</button>}
+              <button className="button secondary" onClick={() => setPendingReplacement(null)}>{pendingReplacement.current ? "Keep current disposition" : "Dismiss"}</button>
+            </div>
+          </div>}
           <p className="mt-3 text-[11px] leading-5 text-slate-500">Approval is available only for an unused, unexpired PASS. This records an advisory disposition; it never sends an equipment command.</p>
         </section> : <section className="panel p-6 text-sm leading-6 text-slate-500">View-only for your role. You can compare outcomes and preview the Safety Shield, but only an operator can approve, reject, defer, or request an alternative.</section>}
         {error && <p role="alert" className="panel p-4 text-sm text-red-300">{error}</p>}
