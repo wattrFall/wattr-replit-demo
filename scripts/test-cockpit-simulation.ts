@@ -173,4 +173,44 @@ const approaching = replayCockpitSnapshot(SCENARIO_START_S);
 assert.equal(approaching.forecast.risk, "watch", "a forecast just below the limit must read WATCH");
 assert.equal(approaching.incident.open, false, "approaching the limit must not open an incident");
 
+// Operations runs the published build. With the SFO-01 template published as
+// an explicit layout, every replayed number matches the reference model.
+const { FACILITY_TEMPLATES, SFO_01_LAYOUT } = await import("../src/lib/facility/templates");
+const { facilityPlant } = await import("../src/lib/cockpit/simulation");
+const publishedReference = { ...DEFAULT_FACILITY_MODEL, layout: SFO_01_LAYOUT };
+for (const elapsedS of [0, 300, 900, 1_800]) {
+  const reference = replayCockpitSnapshot(SCENARIO_START_S + elapsedS);
+  const built = replayCockpitSnapshot(SCENARIO_START_S + elapsedS, publishedReference);
+  assert.deepEqual(
+    { ...built, modelConfig: reference.modelConfig },
+    reference,
+    `the published SFO-01 build must replay exactly like the reference model at ${elapsedS}s`,
+  );
+}
+assert.equal(facilityPlant().advisedUnit.id, "cdu-03", "SFO-01 advice targets CDU-03");
+// The recommendation copy is generated from the layout; for SFO-01 it must read
+// exactly as it did when it was written by hand.
+const referenceAdvice = replayCockpitSnapshot(SCENARIO_START_S + 900).recommendation;
+assert.equal(referenceAdvice.what, `Increase CDU-03 flow to ${referenceAdvice.flowPercent}% for ${referenceAdvice.durationMinutes} minutes.`);
+assert.equal(referenceAdvice.why, "Pre-empt the modeled CDU-03 response lag before the workload ramp reaches the thermal constraint.");
+assert.equal(referenceAdvice.where, "GPU Hall B · GPU Training Zone · CDU-03 serving racks A01–B02.");
+assert.equal(referenceAdvice.limitations[1], "Advisory is bounded to the CDU-03 command envelope and does not send an OT command.");
+assert.equal(referenceAdvice.command.assetId, "cdu-03");
+
+// A different build runs its own equipment, limits and capacity.
+const airRows = FACILITY_TEMPLATES.find((template) => template.id === "air-cooled-rows")!;
+const airModel = { ...DEFAULT_FACILITY_MODEL, layout: airRows.layout };
+const airSnapshot = replayCockpitSnapshot(SCENARIO_START_S + 900, airModel);
+assert.equal(airSnapshot.rackCount, 12, "the air-cooled build simulates its twelve racks");
+assert.equal(airSnapshot.coolingUnitCount, 2);
+assert.equal(airSnapshot.forecast.thresholdC, 27, "forecasts use the build's own rack inlet limit");
+assert.equal(airSnapshot.incident.limitC, 27);
+assert.equal(airSnapshot.plant.ratedCapacityKw, 500, "rated capacity is the build's chiller capacity");
+assert.match(airSnapshot.recommendation.command.assetId, /^crac-0[12]$/, "advice targets a CRAC unit in the build");
+assert.match(airSnapshot.recommendation.what, /^Increase CRAC-0[12] flow to /);
+assert.match(airSnapshot.recommendation.where, /^Data hall · /);
+assert(airSnapshot.racks.every((rack) => Number.isFinite(rack.inletC)), "every rack in the build has a temperature");
+const airAdvised = counterfactualCockpitSnapshot(SCENARIO_START_S + 900, { flowPercent: 85, durationMinutes: 20 }, airModel);
+assert(airAdvised.forecast.advisoryPeakC <= airSnapshot.forecast.baselinePeakC, "advice on the build's CRAC unit must not worsen its peak");
+
 console.log("Cockpit simulation golden and replay tests passed.");
