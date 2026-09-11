@@ -237,6 +237,10 @@ try {
   assert.equal(detail.body.model.version, "sfo-rom-1.0.0");
   assert.equal(detail.body.safetyEvaluation.outcome, "PASS");
   assert.equal(detail.body.decision.note, "Approved as advisory only");
+  for (const invalidId of ["not-a-number", "1.5", "0", "-1", "99999999999999999999"]) {
+    const invalid = await request(`/api/facilities/sfo-01/audit/${invalidId}`);
+    assert.equal(invalid.status, 404, `audit id ${invalidId} returned ${invalid.status}, expected 404`);
+  }
 
   const legacyInsert = await pool.query(
     `INSERT INTO audit_records

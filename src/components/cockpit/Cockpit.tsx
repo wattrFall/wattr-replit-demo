@@ -614,6 +614,7 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
   const [decisionFilter, setDecisionFilter] = useState("");
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
+  const [filtersApplied, setFiltersApplied] = useState(false);
   const load = () => {
     const query = new URLSearchParams();
     if (decisionFilter) query.set("decision", decisionFilter);
@@ -650,7 +651,7 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
           const recordDecision = record.payload?.decision;
           return <button key={record.id} onClick={() => select(record)} className={`facility-row w-full text-left ${selected?.id === record.id ? "bg-slate-800/60" : ""}`}><div><Status tone={recordDecision?.decision === "APPROVE" ? "good" : recordDecision?.decision === "REJECT" ? "bad" : "warn"}>{record.action.replace("DECISION_", "").replace(/_/g, " ")}</Status><h2 className="mt-2 font-semibold">Recommendation {record.payload?.recommendation?.id ?? record.payload?.recommendationId}</h2><p className="mt-1 text-xs text-slate-500">{new Date(record.created_at).toLocaleString()} · {record.model_version}</p></div><div className="text-right"><b>{recordDecision?.outcome ?? record.payload?.outcome}</b><p className={`${mono} mt-1 text-[10px] text-slate-500`}>{formatSimulatedAt(record.simulated_at)}</p></div></button>;
         })}
-        {!records.length && !error && <p className="p-6 text-sm text-slate-500">No decisions match these filters.</p>}
+        {!records.length && !error && <p className="p-6 text-sm text-slate-500">{filtersApplied ? "No decisions match these filters." : "No decisions have been recorded for this facility yet."}</p>}
         {error && <p role="alert" className="p-6 text-red-300">{error}</p>}
       </section>
       <section className="panel p-6">

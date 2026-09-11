@@ -2373,12 +2373,15 @@ app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: A
   await ensureDemoAccess(req.userId!);
   const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res);
   if (!permission) return;
+  // audit_records.id is a bigint, so anything else cannot name a record.
+  const auditId = String(req.params.auditId);
+  if (!/^[1-9]\d{0,17}$/.test(auditId)) return res.status(404).json({ error: "Audit record not found" });
   const result = await pool.query(
     `SELECT a.id, a.action, a.scenario_id, a.simulated_at, a.model_version, a.payload, a.created_at
      FROM audit_records a
      JOIN facility_permissions p ON p.facility_id = a.facility_id
      WHERE p.user_id = $1 AND p.can_view = true AND a.facility_id = $2 AND a.id = $3`,
-    [req.userId, req.params.facilityId, req.params.auditId],
+    [req.userId, req.params.facilityId, auditId],
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Audit record not found" });
   const record = result.rows[0];
