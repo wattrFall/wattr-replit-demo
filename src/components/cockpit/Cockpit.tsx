@@ -12,7 +12,7 @@ import type { TwinOverlay, TwinView } from "@/components/twin/types";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { replayCockpitSnapshot, SCENARIO_DURATION_S, snapshotForAudit, type CockpitSnapshot, type FacilityModelConfig } from "@/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph, type GraphView, type ControllerComparison } from "@/lib/cockpit/workspaces";
-import { ROLES, type Role } from "@/lib/security/rolePolicy";
+import { canViewTopology, ROLES, type Role } from "@/lib/security/rolePolicy";
 import { assistantSuggestions, type AssistantResponse } from "@/lib/cockpit/assistant";
 import { learningSurfaceForPath, recordLearningEvent, reportLearningError } from "@/lib/cockpit/learning";
 import { GuidanceProvider, useGuidance } from "./Guidance";
@@ -223,7 +223,7 @@ function Shell({ data, facility, children }: { data: SessionData; facility?: Fac
       [ShieldCheck, "Recommendation", `/facilities/${active.id}/recommendations/rec-17`] as [LucideIcon, string, string],
       [History, "Audit history", `/facilities/${active.id}/audit`] as [LucideIcon, string, string],
       ...(active.can_assistant && data.me.role !== "PORTFOLIO_MANAGER" ? [[BrainCircuit, "Ask Wattr", `/facilities/${active.id}/ask-wattr`] as [LucideIcon, string, string]] : []),
-      ...(["OPERATOR", "ENGINEER"].includes(data.me.role) ? [[GitBranch, "Thermal graph", `/facilities/${active.id}/topology`] as [LucideIcon, string, string]] : []),
+      ...(canViewTopology(data.me.role, data.me.is_owner) ? [[GitBranch, "Thermal graph", `/facilities/${active.id}/topology`] as [LucideIcon, string, string]] : []),
       ...(active.can_engineer ? [[BrainCircuit, "Model Lab", `/facilities/${active.id}/model-lab`] as [LucideIcon, string, string]] : []),
       ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
     ] : []),
@@ -566,6 +566,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
           </> : <p className="copy">Run the server-side evaluation after choosing the command. A changed parameter, replay instant, model, or reused result invalidates approval.</p>}
           <ContextualHelp title="Who has decision authority?"><p>The Safety Shield verifies constraints but does not approve the advisory. Only an authorized operator can record a disposition, and approval never sends an equipment command.</p></ContextualHelp>
           {facility.can_assistant && <button className="button primary mt-5 w-full justify-center" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button>}
+          {!facility.can_operate && <p className="mt-3 text-xs leading-5 text-slate-500">You can run the Safety Shield to preview whether this command passes. Only an operator can use a PASS to approve.</p>}
         </section>
         {facility.can_operate ? <section className="panel p-6" data-guide="disposition">
           <div className="eyebrow">OPERATOR DISPOSITION</div>
@@ -578,7 +579,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
           </div>
           {evaluation?.outcome === "WARNING" && <button className="button secondary mt-2 w-full justify-center" onClick={() => decide("ACKNOWLEDGE")}>Acknowledge warning without approval</button>}
           <p className="mt-3 text-[11px] leading-5 text-slate-500">Approval is available only for an unused, unexpired PASS. This records an advisory disposition; it never sends an equipment command.</p>
-        </section> : <section className="panel p-6 text-sm text-slate-500">Read-only access: operator dispositions are unavailable for this role.</section>}
+        </section> : <section className="panel p-6 text-sm leading-6 text-slate-500">View-only for your role. You can compare outcomes and preview the Safety Shield, but only an operator can approve, reject, defer, or request an alternative.</section>}
         {error && <p role="alert" className="panel p-4 text-sm text-red-300">{error}</p>}
         {message && <p role="status" className="panel p-4 text-sm text-teal-300">{message}</p>}
       </aside>
@@ -1058,7 +1059,7 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   if(section==="audit")return <AuditPage data={data} facility={facility}/>;
   if(section==="ask-wattr"&&!facility.can_assistant)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Ask Wattr unavailable" detail="Assistant access requires an authorized role and facility view grant."/></Shell>;
   if(section==="ask-wattr")return <AssistantPage data={data} facility={facility}/>;
-  if(section==="topology"&&!["OPERATOR","ENGINEER"].includes(data.me.role))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
+  if(section==="topology"&&!canViewTopology(data.me.role, data.me.is_owner))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
   if(section==="topology")return <GraphPage data={data} facility={facility}/>;
   if(section==="model-lab"&&!facility.can_engineer)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Engineering analysis access is required."/></Shell>;
   if(section==="model-lab")return <ModelLab data={data} facility={facility}/>;

@@ -133,7 +133,7 @@ try {
     const model = await request(userId, "/api/facilities/sfo-01/model/versions");
     if (model.status !== (role === "MODEL_ADMIN" ? 200 : 404)) throw new Error(`${role} model policy failed`);
     const topology = await request(userId, "/api/facilities/sfo-01/topology");
-    if (topology.status !== (["OPERATOR", "ENGINEER"].includes(role) ? 200 : 404)) throw new Error(`${role} topology policy failed`);
+    if (topology.status !== (["OPERATOR", "ENGINEER", "MODEL_ADMIN"].includes(role) ? 200 : 404)) throw new Error(`${role} topology policy failed`);
     const evaluation = await request(userId, "/api/facilities/sfo-01/recommendations/rec-17/evaluate", {
       method: "POST",
       body: JSON.stringify({ simulatedAt: 1752676800 }),

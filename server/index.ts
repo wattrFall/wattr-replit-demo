@@ -24,6 +24,7 @@ import {
   syntheticProvenance,
 } from "../src/lib/cockpit/contracts";
 import {
+  canViewTopology,
   defaultLandingPath,
   ROLE_CAPABILITIES,
   ROLES,
@@ -2483,7 +2484,7 @@ app.get("/api/facilities/:facilityId/topology", requireAuth, async (req: AuthedR
   await ensureDemoAccess(req.userId!);
   const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res);
   if (!permission) return;
-  if (!["OPERATOR", "ENGINEER"].includes(permission.role)) {
+  if (!canViewTopology(permission.role, permission.is_owner)) {
     return res.status(404).json({ error: "Facility workspace unavailable" });
   }
   const [model, persisted] = await Promise.all([
