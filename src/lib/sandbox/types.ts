@@ -83,7 +83,9 @@ export type ControlMode = "baseline" | "wattr";
 export type InteractionMode =
   | { type: "idle" }
   | { type: "placing"; kind: ComponentKind }
-  | { type: "connecting"; fromId: string };
+  | { type: "connecting"; fromId: string }
+  /** Moving one end of an existing connection to a different unit. */
+  | { type: "rewiring"; connectionId: string; end: "from" | "to" };
 
 /** The full authored layout — everything needed to reproduce a scene. */
 export interface SandboxLayout {

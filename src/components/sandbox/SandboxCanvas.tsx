@@ -3,7 +3,7 @@ import { Canvas } from "@react-three/fiber";
 import { Room } from "./scene/Room";
 import { Placeable } from "./scene/Placeable";
 import { FloorPicker } from "./scene/FloorPicker";
-import { FlowPath } from "./scene/FlowPath";
+import { Pipe } from "./scene/Pipe";
 import { CameraRig } from "./scene/CameraRig";
 import { notePointerDown, notePointerMove, wasDragged } from "@/lib/sandbox/pointer";
 import { useSandboxStore } from "@/lib/sandbox/store";
@@ -20,7 +20,9 @@ export default function SandboxCanvas({ reducedMotion }: { reducedMotion: boolea
   const items = useSandboxStore((s) => s.items);
   const connections = useSandboxStore((s) => s.connections);
   const selectedId = useSandboxStore((s) => s.selectedId);
+  const selectedConnectionId = useSandboxStore((s) => s.selectedConnectionId);
   const select = useSandboxStore((s) => s.select);
+  const selectConnection = useSandboxStore((s) => s.selectConnection);
   const mode = useSandboxStore((s) => s.mode);
 
   return (
@@ -56,14 +58,19 @@ export default function SandboxCanvas({ reducedMotion }: { reducedMotion: boolea
         <Room />
         <FloorPicker />
         {connections.map((connection) => (
-          <FlowPath
+          <Pipe
             key={connection.id}
             connection={connection}
             items={items}
             reducedMotion={reducedMotion}
+            selected={connection.id === selectedConnectionId}
+            onSelect={selectConnection}
             // Links not touching the selection recede, so a busy floor stays
             // readable once something is selected.
-            dimmed={selectedId !== null && connection.fromId !== selectedId && connection.toId !== selectedId}
+            dimmed={
+              (selectedId !== null && connection.fromId !== selectedId && connection.toId !== selectedId) ||
+              (selectedConnectionId !== null && connection.id !== selectedConnectionId)
+            }
           />
         ))}
 

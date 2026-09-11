@@ -9,7 +9,7 @@
  */
 import { create } from "zustand";
 import { CATALOGUE, ZONE_CATALOGUE, defaultParams } from "./catalogue";
-import { checkConnection } from "./connections";
+import { checkConnection, checkRewire } from "./connections";
 import {
   MAX_ZONES,
   SITE,
@@ -60,9 +60,13 @@ export interface SandboxState {
   zones: ZoneSpec[];
   items: SandboxItem[];
   connections: Connection[];
+  /**
+   * What is selected. At most one of equipment, a zone or a connection is
+   * selected at a time; selecting one clears the others.
+   */
   selectedId: string | null;
-  /** The zone being edited. Selecting a zone clears the equipment selection. */
   selectedZoneId: string | null;
+  selectedConnectionId: string | null;
   mode: InteractionMode;
   controlMode: ControlMode;
   /** Last refusal message, shown then cleared by the UI. */
@@ -97,6 +101,7 @@ export interface SandboxState {
 
   select: (id: string | null) => void;
   selectZone: (id: string | null) => void;
+  selectConnection: (id: string | null) => void;
   setMode: (mode: InteractionMode) => void;
   setControlMode: (mode: ControlMode) => void;
   beginPlacing: (kind: ComponentKind) => void;
@@ -105,6 +110,10 @@ export interface SandboxState {
   beginConnecting: (fromId: string) => void;
   connect: (toId: string) => void;
   disconnect: (connectionId: string) => void;
+  /** Arm moving one end of a connection; arming the same end again disarms. */
+  beginRewire: (connectionId: string, end: "from" | "to") => void;
+  /** Move the armed end of the connection to this unit, if the rules allow. */
+  rewire: (itemId: string) => void;
   setParam: (id: string, key: string, value: number) => void;
   /** Add a zone of this kind at its default size, in the first clear space. */
   addZone: (kind: ZoneKind) => void;
@@ -197,13 +206,16 @@ function highestId(layout: SandboxLayout): number {
   }, 0);
 }
 
+const IDLE: InteractionMode = { type: "idle" };
+
 export const useSandboxStore = create<SandboxState>((set, get) => ({
   zones: DEFAULT_ZONES.map((zone) => ({ ...zone })),
   items: [],
   connections: [],
   selectedId: null,
   selectedZoneId: null,
-  mode: { type: "idle" },
+  selectedConnectionId: null,
+  mode: IDLE,
   controlMode: "baseline",
   notice: null,
   inletC: {},
@@ -253,7 +265,8 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       zones: [...zones, zone],
       selectedZoneId: zone.id,
       selectedId: null,
-      mode: { type: "idle" },
+      selectedConnectionId: null,
+      mode: IDLE,
       notice: null,
       activePresetId: null,
       viewResetNonce: get().viewResetNonce + 1,
@@ -336,8 +349,9 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
 
   // A refusal notice is transient: any further action clears it, so a stale
   // reason never sits under an unrelated interaction.
-  select: (id) => set({ selectedId: id, selectedZoneId: null, notice: null }),
-  selectZone: (id) => set({ selectedZoneId: id, selectedId: null, notice: null }),
+  select: (id) => set({ selectedId: id, selectedZoneId: null, selectedConnectionId: null, notice: null }),
+  selectZone: (id) => set({ selectedZoneId: id, selectedId: null, selectedConnectionId: null, notice: null }),
+  selectConnection: (id) => set({ selectedConnectionId: id, selectedId: null, selectedZoneId: null, notice: null }),
   setMode: (mode) => set({ mode, notice: null }),
   setControlMode: (controlMode) => set({ controlMode }),
   notify: (notice) => set({ notice }),
@@ -345,9 +359,10 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   beginPlacing: (kind) =>
     set((s) => ({
       // Clicking the active tool again puts the pointer back to selection.
-      mode: s.mode.type === "placing" && s.mode.kind === kind ? { type: "idle" } : { type: "placing", kind },
+      mode: s.mode.type === "placing" && s.mode.kind === kind ? IDLE : { type: "placing", kind },
       selectedId: null,
       selectedZoneId: null,
+      selectedConnectionId: null,
       notice: null,
     })),
 
@@ -364,7 +379,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
 
   beginConnecting: (fromId) =>
     set((s) => ({
-      mode: s.mode.type === "connecting" && s.mode.fromId === fromId ? { type: "idle" } : { type: "connecting", fromId },
+      mode: s.mode.type === "connecting" && s.mode.fromId === fromId ? IDLE : { type: "connecting", fromId },
       notice: null,
     })),
 
@@ -383,8 +398,9 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
     const link: Connection = { id: nextId("link"), fromId: mode.fromId, toId };
     set({
       connections: [...connections, link],
-      mode: { type: "idle" },
+      mode: IDLE,
       selectedId: mode.fromId,
+      selectedConnectionId: null,
       notice: null,
       activePresetId: null,
     });
@@ -393,19 +409,65 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   disconnect: (connectionId) =>
     set((s) => ({
       connections: s.connections.filter((c) => c.id !== connectionId),
+      selectedConnectionId: s.selectedConnectionId === connectionId ? null : s.selectedConnectionId,
+      mode: s.mode.type === "rewiring" && s.mode.connectionId === connectionId ? IDLE : s.mode,
+      notice: null,
       activePresetId: null,
     })),
 
-  remove: (id) =>
+  beginRewire: (connectionId, end) =>
     set((s) => ({
-      items: s.items.filter((i) => i.id !== id),
-      // Drop any link that pointed at the deleted item.
-      connections: s.connections.filter((c) => c.fromId !== id && c.toId !== id),
-      selectedId: s.selectedId === id ? null : s.selectedId,
-      // Cancel an in-progress link if its source has just been deleted.
-      mode: s.mode.type === "connecting" && s.mode.fromId === id ? { type: "idle" } : s.mode,
-      activePresetId: null,
+      mode:
+        s.mode.type === "rewiring" && s.mode.connectionId === connectionId && s.mode.end === end
+          ? IDLE
+          : { type: "rewiring", connectionId, end },
+      selectedConnectionId: connectionId,
+      selectedId: null,
+      selectedZoneId: null,
+      notice: null,
     })),
+
+  rewire: (itemId) => {
+    const { mode, items, connections } = get();
+    if (mode.type !== "rewiring") return;
+    const check = checkRewire(items, connections, mode.connectionId, mode.end, itemId);
+    if (!check.ok) {
+      // Stay armed so the user can pick a different unit without re-arming.
+      set({ notice: check.reason });
+      return;
+    }
+    set({
+      connections: connections.map((c) =>
+        c.id === mode.connectionId ? { ...c, [mode.end === "from" ? "fromId" : "toId"]: itemId } : c,
+      ),
+      mode: IDLE,
+      selectedConnectionId: mode.connectionId,
+      notice: null,
+      activePresetId: null,
+    });
+  },
+
+  remove: (id) =>
+    set((s) => {
+      // Drop any link that pointed at the deleted item.
+      const connections = s.connections.filter((c) => c.fromId !== id && c.toId !== id);
+      const survives = (connectionId: string | null) =>
+        connectionId !== null && connections.some((c) => c.id === connectionId);
+      // Cancel an in-progress link or rewire whose connection or source just went.
+      const mode =
+        (s.mode.type === "connecting" && s.mode.fromId === id) ||
+        (s.mode.type === "rewiring" && !survives(s.mode.connectionId))
+          ? IDLE
+          : s.mode;
+      return {
+        items: s.items.filter((i) => i.id !== id),
+        connections,
+        selectedId: s.selectedId === id ? null : s.selectedId,
+        selectedConnectionId: survives(s.selectedConnectionId) ? s.selectedConnectionId : null,
+        mode,
+        activePresetId: null,
+      };
+    }),
 
   setParam: (id, key, value) =>
     set((s) => ({
@@ -428,7 +490,8 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       connections: layout.connections.map((c) => ({ ...c })),
       selectedId: null,
       selectedZoneId: null,
-      mode: { type: "idle" },
+      selectedConnectionId: null,
+      mode: IDLE,
       notice: null,
       activePresetId: presetId,
       lastRun: null,
@@ -445,7 +508,8 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       connections: [],
       selectedId: null,
       selectedZoneId: null,
-      mode: { type: "idle" },
+      selectedConnectionId: null,
+      mode: IDLE,
       controlMode: "baseline",
       notice: null,
       activePresetId: null,

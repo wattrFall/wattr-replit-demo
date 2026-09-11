@@ -3,7 +3,7 @@ import type { ThreeEvent } from "@react-three/fiber";
 import { Edges } from "@react-three/drei";
 import { CATALOGUE } from "@/lib/sandbox/catalogue";
 import { useSandboxStore } from "@/lib/sandbox/store";
-import { checkConnection } from "@/lib/sandbox/connections";
+import { checkConnection, checkRewire } from "@/lib/sandbox/connections";
 import { wasDragged } from "@/lib/sandbox/pointer";
 import { cellToWorld } from "@/lib/sandbox/geometry";
 import { SBX, heatColour } from "@/lib/sandbox/tokens";
@@ -130,18 +130,27 @@ export function Placeable({
   // onto an occupied tile would silently do nothing rather than refuse.
   const placing = useSandboxStore((s) => s.mode.type === "placing");
   const connect = useSandboxStore((s) => s.connect);
+  const rewire = useSandboxStore((s) => s.rewire);
 
   /**
-   * While a link is being drawn, mark the units it could legally reach. Showing
-   * the legal targets up front is kinder than letting the user click and be
-   * told no, and it uses the same rule function as the refusal path.
+   * While a link is being drawn or rewired, mark the units it could legally
+   * reach. Showing the legal targets up front is kinder than letting the user
+   * click and be told no, and it uses the same rule functions as the refusal
+   * path.
    */
   const linkTarget = useSandboxStore((s) => {
-    if (s.mode.type !== "connecting") return null;
-    if (s.mode.fromId === item.id) return "source" as const;
-    return checkConnection(s.items, s.connections, s.mode.fromId, item.id).ok
-      ? ("valid" as const)
-      : null;
+    const mode = s.mode;
+    if (mode.type === "connecting") {
+      if (mode.fromId === item.id) return "source" as const;
+      return checkConnection(s.items, s.connections, mode.fromId, item.id).ok ? ("valid" as const) : null;
+    }
+    if (mode.type === "rewiring") {
+      // The end that stays put anchors the rewire, like the source of a new link.
+      const link = s.connections.find((c) => c.id === mode.connectionId);
+      if (link && (mode.end === "from" ? link.toId : link.fromId) === item.id) return "source" as const;
+      return checkRewire(s.items, s.connections, mode.connectionId, mode.end, item.id).ok ? ("valid" as const) : null;
+    }
+    return null;
   });
 
   // Inlet temperature drives the rack's colour. Published at 10Hz, so this
@@ -164,6 +173,10 @@ export function Placeable({
     event.stopPropagation();
     if (current.type === "connecting") {
       connect(item.id);
+      return;
+    }
+    if (current.type === "rewiring") {
+      rewire(item.id);
       return;
     }
     onSelect(item.id);

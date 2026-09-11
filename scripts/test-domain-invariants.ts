@@ -212,4 +212,119 @@ assert.equal(placedSensor.kind, "sensor", "a sensor can be placed in a moved hal
 assert(!idsBefore.has(placedSensor.id), "new ids never collide with a loaded layout's ids");
 sandbox().reset();
 
-console.log("Domain invariants, topology, bounds, lag, offline equipment, reset, comparison, graph, and zone checks passed.");
+// Connections: each link carries a medium, lands on ports that take only so
+// many, can have either end moved, and is drawn as straight runs from port to
+// port rather than floating arcs.
+const { MANIFOLD_FAN_OUT, checkConnection, checkRewire } = await import("../src/lib/sandbox/connections");
+const { linkMedium, linkPaths, portPosition } = await import("../src/lib/sandbox/routing");
+type Check = ReturnType<typeof checkConnection>;
+const refusal = (check: Check) => (check.ok ? "" : check.reason);
+
+assert.equal(linkMedium("chiller", "cdu"), "chilled-water");
+assert.equal(linkMedium("chiller", "crac"), "chilled-water");
+assert.equal(linkMedium("cdu", "rack"), "coolant");
+assert.equal(linkMedium("crac", "rack"), "air");
+assert.equal(linkMedium("sensor", "rack"), "signal");
+
+const liquid = PRESETS.find((preset) => preset.id === "liquid-gpu")!.layout;
+const cdus = liquid.items.filter((item) => item.kind === "cdu");
+const liquidRacks = liquid.items.filter((item) => item.kind === "rack");
+const liquidChiller = liquid.items.find((item) => item.kind === "chiller")!;
+const feedsRack = (fromId: string, toId: string) =>
+  liquid.connections.some((connection) => connection.fromId === fromId && connection.toId === toId);
+const rackOnFirstCdu = liquidRacks.find((rack) => feedsRack(cdus[0].id, rack.id))!;
+const rackOnSecondCdu = liquidRacks.find((rack) => feedsRack(cdus[1].id, rack.id))!;
+
+assert.match(
+  refusal(checkConnection(liquid.items, liquid.connections, cdus[1].id, rackOnFirstCdu.id)),
+  /one coolant supply/,
+  "a rack's liquid inlet takes coolant from one CDU",
+);
+
+const headerItems = [
+  { id: "cdu-h", kind: "cdu" as const, cell: { x: 0, z: 0 }, params: {} },
+  ...Array.from({ length: MANIFOLD_FAN_OUT + 1 }, (_, i) => ({
+    id: `rack-h${i}`,
+    kind: "rack" as const,
+    cell: { x: i + 1, z: 0 },
+    params: {},
+  })),
+];
+const headerBranches = Array.from({ length: MANIFOLD_FAN_OUT }, (_, i) => ({
+  id: `link-h${i}`,
+  fromId: "cdu-h",
+  toId: `rack-h${i}`,
+}));
+assert.match(
+  refusal(checkConnection(headerItems, headerBranches, "cdu-h", `rack-h${MANIFOLD_FAN_OUT}`)),
+  new RegExp(`at most ${MANIFOLD_FAN_OUT} branches`),
+  "a supply header is limited to its fan-out",
+);
+
+const firstSupply = liquid.connections.find(
+  (connection) => connection.fromId === cdus[0].id && connection.toId === rackOnFirstCdu.id,
+)!;
+assert.equal(
+  checkRewire(liquid.items, liquid.connections, firstSupply.id, "from", cdus[1].id).ok,
+  true,
+  "a rack's one coolant supply can move to another CDU",
+);
+assert.match(
+  refusal(checkRewire(liquid.items, liquid.connections, firstSupply.id, "to", rackOnSecondCdu.id)),
+  /one coolant supply/,
+  "a supply cannot be moved onto a rack that already has one",
+);
+assert.equal(
+  checkRewire(liquid.items, liquid.connections, firstSupply.id, "to", liquidChiller.id).ok,
+  false,
+  "rewiring still follows the pairing rules",
+);
+assert.match(
+  refusal(checkRewire(liquid.items, liquid.connections, firstSupply.id, "to", rackOnFirstCdu.id)),
+  /already runs there/,
+);
+
+sandbox().loadLayout(liquid, "liquid-gpu");
+sandbox().beginRewire(firstSupply.id, "from");
+assert.equal(sandbox().mode.type, "rewiring");
+sandbox().rewire(liquidChiller.id);
+assert.match(sandbox().notice ?? "", /chiller/i, "an illegal rewire is refused with a reason");
+assert.equal(sandbox().mode.type, "rewiring", "a refused rewire stays armed");
+sandbox().rewire(cdus[1].id);
+assert.equal(
+  sandbox().connections.find((connection) => connection.id === firstSupply.id)?.fromId,
+  cdus[1].id,
+  "rewiring moves one end of a connection",
+);
+assert.equal(sandbox().mode.type, "idle");
+assert.equal(sandbox().selectedConnectionId, firstSupply.id, "the rewired connection stays selected");
+sandbox().disconnect(firstSupply.id);
+assert.equal(sandbox().selectedConnectionId, null, "disconnecting clears the connection selection");
+assert(!sandbox().connections.some((connection) => connection.id === firstSupply.id));
+sandbox().reset();
+
+for (const preset of PRESETS) {
+  const { items, connections } = preset.layout;
+  for (const connection of connections) {
+    const from = items.find((item) => item.id === connection.fromId)!;
+    const to = items.find((item) => item.id === connection.toId)!;
+    const paths = linkPaths(connection, items);
+    assert(paths.length > 0, `${preset.name}: ${connection.id} must be drawn`);
+    for (const path of paths) {
+      for (let i = 1; i < path.points.length; i++) {
+        const moved = [0, 1, 2].filter((axis) => Math.abs(path.points[i][axis] - path.points[i - 1][axis]) > 1e-9);
+        assert.equal(moved.length, 1, `${preset.name}: ${connection.id} ${path.role} segment ${i} must run along one axis`);
+      }
+    }
+    const medium = linkMedium(from.kind, to.kind);
+    if (medium === "coolant" || medium === "chilled-water") {
+      const [supply, back] = paths;
+      assert.deepEqual(supply.points[0], portPosition(from, "b"), `${connection.id}: supply leaves the source outlet`);
+      assert.deepEqual(supply.points[supply.points.length - 1], portPosition(to, "a"), `${connection.id}: supply lands on the target inlet`);
+      assert.deepEqual(back.points[0], portPosition(to, "b"), `${connection.id}: return leaves the target outlet`);
+      assert.deepEqual(back.points[back.points.length - 1], portPosition(from, "a"), `${connection.id}: return lands on the source inlet`);
+    }
+  }
+}
+
+console.log("Domain invariants, topology, bounds, lag, offline equipment, reset, comparison, graph, zone, and connection checks passed.");

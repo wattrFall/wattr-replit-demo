@@ -1,6 +1,7 @@
 import { Component, Suspense, lazy, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Crosshair, Play, RotateCcw } from "lucide-react";
 import { CATALOGUE, PALETTE_ORDER, ZONE_CATALOGUE } from "@/lib/sandbox/catalogue";
+import { describeConnection } from "@/lib/sandbox/connections";
 import { useSandboxStore } from "@/lib/sandbox/store";
 import { demoScenario } from "@/lib/demoScenario";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
@@ -52,8 +53,10 @@ export function SandboxShell() {
   const zones = useSandboxStore((s) => s.zones);
   const selectedId = useSandboxStore((s) => s.selectedId);
   const selectedZoneId = useSandboxStore((s) => s.selectedZoneId);
+  const selectedConnectionId = useSandboxStore((s) => s.selectedConnectionId);
   const remove = useSandboxStore((s) => s.remove);
   const removeZone = useSandboxStore((s) => s.removeZone);
+  const disconnect = useSandboxStore((s) => s.disconnect);
   const mode = useSandboxStore((s) => s.mode);
   const notice = useSandboxStore((s) => s.notice);
   const controlMode = useSandboxStore((s) => s.controlMode);
@@ -81,11 +84,14 @@ export function SandboxShell() {
   selectedIdRef.current = selectedId;
   const selectedZoneIdRef = useRef<string | null>(null);
   selectedZoneIdRef.current = selectedZoneId;
+  const selectedConnectionIdRef = useRef<string | null>(null);
+  selectedConnectionIdRef.current = selectedConnectionId;
 
   /**
    * Global shortcuts: 1-5 arm a palette entry, Escape disarms, Delete removes
-   * the selected equipment or empty zone. Ignored while a text field or slider
-   * has focus so typing is never hijacked.
+   * the selected equipment, disconnects the selected connection, or removes the
+   * selected zone once it is empty. Ignored while a text field or slider has
+   * focus so typing is never hijacked.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -102,6 +108,9 @@ export function SandboxShell() {
         if (selectedIdRef.current) {
           event.preventDefault();
           remove(selectedIdRef.current);
+        } else if (selectedConnectionIdRef.current) {
+          event.preventDefault();
+          disconnect(selectedConnectionIdRef.current);
         } else if (selectedZoneIdRef.current) {
           event.preventDefault();
           removeZone(selectedZoneIdRef.current);
@@ -116,7 +125,7 @@ export function SandboxShell() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [beginPlacing, setMode, remove, removeZone]);
+  }, [beginPlacing, setMode, remove, removeZone, disconnect]);
 
   /**
    * Text equivalent of the canvas, announced politely. The 3D view is
@@ -153,8 +162,11 @@ export function SandboxShell() {
 
   const selectedItem = items.find((i) => i.id === selectedId) ?? null;
   const selectedZone = zones.find((zone) => zone.id === selectedZoneId) ?? null;
+  const selectedConnection = connections.find((c) => c.id === selectedConnectionId) ?? null;
 
   const connectSource = mode.type === "connecting" ? items.find((i) => i.id === mode.fromId) : null;
+  const rewiringConnection =
+    mode.type === "rewiring" ? connections.find((c) => c.id === mode.connectionId) ?? null : null;
 
   /**
    * What the pointer will do next, if anything. Kept separate from the scene
@@ -167,11 +179,15 @@ export function SandboxShell() {
       ? `Placing ${CATALOGUE[mode.kind].label} — click a tile, or press Escape to cancel.`
       : connectSource
         ? `Connecting from ${CATALOGUE[connectSource.kind].label} — click a highlighted target, or press Escape to cancel.`
-        : selectedItem
-          ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it.`
-          : selectedZone
-            ? `${selectedZone.name} selected. Edit it in the Zones panel, or press Delete to remove it once it is empty.`
-            : null;
+        : mode.type === "rewiring" && rewiringConnection
+          ? `Moving the ${mode.end === "from" ? "source" : "target"} of the ${describeConnection(items, rewiringConnection)} — click a highlighted unit, or press Escape to cancel.`
+          : selectedItem
+            ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it.`
+            : selectedConnection
+              ? `${describeConnection(items, selectedConnection)} selected. Press Delete to disconnect it.`
+              : selectedZone
+                ? `${selectedZone.name} selected. Edit it in the Zones panel, or press Delete to remove it once it is empty.`
+                : null;
 
   /**
    * What gets *announced*. Only the short, event-driven half: what the pointer

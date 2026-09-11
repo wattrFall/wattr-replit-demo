@@ -53,10 +53,10 @@ export function FloorPicker() {
     if (state.mode.type !== "idle") return;
     event.stopPropagation();
 
-    // A click on open floor first lets go of the selected equipment. With
-    // nothing selected, it picks the zone under the pointer for editing, and
-    // bare ground outside every zone clears the selection.
-    if (state.selectedId) {
+    // A click on open floor first lets go of the selected equipment or
+    // connection. With nothing selected, it picks the zone under the pointer
+    // for editing, and bare ground outside every zone clears the selection.
+    if (state.selectedId || state.selectedConnectionId) {
       select(null);
       return;
     }
