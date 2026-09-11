@@ -1,22 +1,52 @@
 /** The signed-in page frame, its navigation and the shared replay controls. */
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Activity, AlertTriangle, ArrowRight, Boxes, BrainCircuit, CircleHelp, Clock3, Gauge, GitBranch, History,
-  LayoutDashboard, Menu, Pause, Play, RotateCcw, ShieldCheck, SkipForward, SlidersHorizontal, UserCog,
+  LayoutDashboard, Menu, MessageSquare, Pause, Play, RotateCcw, ShieldCheck, SkipForward, SlidersHorizontal, UserCog,
   type LucideIcon,
 } from "lucide-react";
 import { learningSurfaceForPath } from "@/lib/cockpit/learning";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { SCENARIO_DURATION_S } from "@/lib/cockpit/simulation";
 import { canViewTopology } from "@/lib/security/rolePolicy";
-import { navigate, post } from "./api";
+import { describeError, navigate, post } from "./api";
 import type { Facility, SessionData } from "./types";
 import { Brand, mono, Status, ThemeControl } from "./ui";
 
-function ContextualFeedback({ facility }: { facility?: Facility }) {
+/**
+ * Feedback on the current workspace, from a small header control rather than a
+ * panel at the foot of every page. Structured choices only, so no
+ * facility-sensitive detail or operator notes enter learning records.
+ */
+function FeedbackControl({ facility }: { facility?: Facility }) {
+  const [open, setOpen] = useState(false);
   const [sentiment, setSentiment] = useState<"POSITIVE" | "NEUTRAL" | "NEGATIVE">("NEUTRAL");
   const [feedbackCode, setFeedbackCode] = useState("HELPFUL");
   const [message, setMessage] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.querySelector<HTMLElement>("button")?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const closeOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!panelRef.current?.contains(target) && !triggerRef.current?.contains(target)) setOpen(false);
+    };
+    addEventListener("keydown", closeOnEscape);
+    addEventListener("mousedown", closeOutside);
+    return () => {
+      removeEventListener("keydown", closeOnEscape);
+      removeEventListener("mousedown", closeOutside);
+    };
+  }, [open]);
+
   const submit = async () => {
     try {
       await post("/api/learning/feedback", {
@@ -25,22 +55,30 @@ function ContextualFeedback({ facility }: { facility?: Facility }) {
         sentiment,
         feedbackCode,
       });
-      setMessage("Feedback saved with this product surface.");
+      setMessage("Thanks. Your feedback was saved.");
     } catch (cause) {
-      setMessage(`Feedback was not saved: ${String(cause)}`);
+      setMessage(`Feedback was not saved. ${describeError(cause)}`);
     }
   };
-  return <details className="disclosure mt-8">
-    <summary>Share feedback on this workspace<ArrowRight size={13} aria-hidden="true"/></summary>
-    <div className="disclosure-content">
-      <p className="text-xs text-slate-500">Optional and non-blocking. Structured categories prevent facility-sensitive details or operator notes from entering learning records.</p>
-      <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Feedback sentiment">
-        {(["POSITIVE", "NEUTRAL", "NEGATIVE"] as const).map((item) => <button type="button" key={item} className={`speed ${sentiment === item ? "selected" : ""}`} aria-pressed={sentiment === item} onClick={() => setSentiment(item)}>{item.toLowerCase()}</button>)}
+
+  return <div className="feedback-control">
+    <button ref={triggerRef} type="button" className="feedback-trigger" aria-expanded={open} aria-controls={open ? panelId : undefined} onClick={() => { setOpen(!open); setMessage(""); }}>
+      <MessageSquare size={13} aria-hidden="true"/><span>Feedback</span>
+    </button>
+    {open && <div ref={panelRef} id={panelId} role="dialog" aria-label="Share feedback on this workspace" className="feedback-panel">
+      <b className="block text-sm">Feedback on this workspace</b>
+      <p className="mt-1 text-xs leading-5 text-slate-500">Optional. Structured choices only, so no facility details or notes are recorded.</p>
+      <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="How was this workspace?">
+        {([["POSITIVE", "Good"], ["NEUTRAL", "Okay"], ["NEGATIVE", "Poor"]] as const).map(([value, label]) => <button type="button" key={value} className={`speed ${sentiment === value ? "selected" : ""}`} aria-pressed={sentiment === value} onClick={() => setSentiment(value)}>{label}</button>)}
       </div>
-      <label className="field mt-3 block">What best describes this surface?<select className="select mt-2 w-full" value={feedbackCode} onChange={(event) => setFeedbackCode(event.target.value)}><option value="HELPFUL">Helpful</option><option value="UNCLEAR">Unclear</option><option value="MISSING_CONTEXT">Missing context</option><option value="TOO_SLOW">Too slow</option><option value="UNEXPECTED_RESULT">Unexpected result</option><option value="OTHER">Other product friction</option></select></label>
-      <div className="mt-3 flex items-center gap-3"><button type="button" className="button secondary" onClick={submit}>Send feedback</button>{message && <span className="text-xs text-slate-500" role="status">{message}</span>}</div>
-    </div>
-  </details>;
+      <label className="field mt-3 block">What best describes it?<select className="select mt-2 w-full" value={feedbackCode} onChange={(event) => setFeedbackCode(event.target.value)}><option value="HELPFUL">Helpful</option><option value="UNCLEAR">Unclear</option><option value="MISSING_CONTEXT">Missing context</option><option value="TOO_SLOW">Too slow</option><option value="UNEXPECTED_RESULT">Unexpected result</option><option value="OTHER">Other product friction</option></select></label>
+      <div className="mt-3 flex items-center gap-2">
+        <button type="button" className="button primary" onClick={submit}>Send feedback</button>
+        <button type="button" className="button secondary" onClick={() => { setOpen(false); triggerRef.current?.focus(); }}>Close</button>
+      </div>
+      {message && <p className="mt-2 text-xs leading-5 text-slate-400" role="status">{message}</p>}
+    </div>}
+  </div>;
 }
 
 export function Shell({ data, facility, children }: { data: SessionData; facility?: Facility; children: ReactNode }) {
@@ -71,11 +109,11 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
       <div className="flex items-center gap-4">
         <button ref={menuButtonRef} type="button" className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"} aria-expanded={mobile} aria-controls="cockpit-navigation"><Menu size={20} aria-hidden="true"/></button><Brand/>
       </div>
-      <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><Status>{data.me.role.replace(/_/g, " ")}</Status><ThemeControl/></div>
+      <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><Status>{data.me.role.replace(/_/g, " ")}</Status><FeedbackControl facility={facility}/><ThemeControl/></div>
     </header>
     {mobile && <button type="button" className="mobile-scrim md:hidden" aria-label="Close navigation" onClick={() => { setMobile(false); menuButtonRef.current?.focus(); }}/>}
     <aside id="cockpit-navigation" aria-label="Primary navigation" className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><nav className="space-y-1">{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/>{label}</button>)}</nav><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className="cockpit-nav"><CircleHelp size={16} aria-hidden="true"/>Help & tutorials</button></div></aside>
-    <main id="main-content" tabIndex={-1} className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}<ContextualFeedback facility={facility}/></div></main>
+    <main id="main-content" tabIndex={-1} className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}</div></main>
   </div>;
 }
 
