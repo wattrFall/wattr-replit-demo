@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { BookOpen, RotateCcw, X } from "lucide-react";
+import { ArrowRight, BookOpen, RotateCcw, X } from "lucide-react";
 import type { Role } from "@/lib/security/rolePolicy";
+import { tutorialPageLabel, tutorialRouteFor } from "@/lib/cockpit/tutorial";
 
 export type GuideStep = {
   id: string;
@@ -56,10 +57,6 @@ type GuidanceContextValue = { emit: (action: string) => void; restart: () => voi
 const GuidanceContext = createContext<GuidanceContextValue>({ emit: () => {}, restart: () => {} });
 export const useGuidance = () => useContext(GuidanceContext);
 
-function routeFor(step: GuideStep, facilityId?: string) {
-  return step.route === "/portfolio" ? "/portfolio" : facilityId ? `/facilities/${facilityId}${step.route}` : "/portfolio";
-}
-
 export function GuidanceProvider({ role, facilityId, initialStep, initialComplete, save, navigate, children }: {
   role: Role; facilityId?: string; initialStep: number; initialComplete: boolean;
   save: (step: number, complete: boolean) => Promise<void>; navigate: (path: string) => void; children: ReactNode;
@@ -82,9 +79,20 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     target?.focus({ preventScroll: true });
   };
 
+  // The tutorial never changes pages by itself. A step on another page offers
+  // an explicit "Open <page>" button instead.
+  const [path, setPath] = useState(() => location.pathname);
+  useEffect(() => {
+    const onNavigate = () => setPath(location.pathname);
+    addEventListener("popstate", onNavigate);
+    return () => removeEventListener("popstate", onNavigate);
+  }, []);
+  const stepPath = current ? tutorialRouteFor(current.route, facilityId) : "";
+  const onStepPage = path === stepPath;
+
   const locate = useCallback(() => {
     if (!open || !current) return;
-    const target = document.querySelector<HTMLElement>(current.target);
+    const target = onStepPage ? document.querySelector<HTMLElement>(current.target) : null;
     if (!target) {
       setRect(null);
       return;
@@ -96,7 +104,7 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     } else {
       setRect(target.getBoundingClientRect());
     }
-  }, [current, open]);
+  }, [current, open, onStepPage]);
   useLayoutEffect(() => {
     locate();
     addEventListener("resize", locate);
@@ -106,11 +114,6 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     const timer = window.setInterval(locate, 500);
     return () => { removeEventListener("resize", locate); removeEventListener("scroll", locate, true); observer.disconnect(); clearInterval(timer); };
   }, [locate]);
-  useEffect(() => {
-    if (!open || !current) return;
-    const wanted = routeFor(current, facilityId);
-    if (location.pathname !== wanted) navigate(wanted);
-  }, [open, current, facilityId, navigate]);
   useLayoutEffect(() => {
     if (!open || !cardRef.current) return;
     const update = () => {
@@ -155,7 +158,18 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
   }, [restart]);
 
   const next = () => { const finished = stepIndex + 1 >= steps.length; void persist(stepIndex + 1, finished); };
-  const skip = () => { setOpen(false); setNotice(`Tutorial paused at step ${stepIndex + 1}. Progress is saved.`); recoverFocus(); };
+  // Skipping is remembered: the tutorial won't open by itself again until it
+  // is restarted from Help.
+  const skip = async () => {
+    setOpen(false);
+    recoverFocus();
+    try {
+      await save(stepIndex, true);
+      setNotice("Tutorial skipped. You can restart it from Help at any time.");
+    } catch {
+      setNotice("Tutorial closed, but skipping couldn't be saved, so it may open again next time.");
+    }
+  };
   const cardStyle = (() => {
     if (!rect) return { right: 16, bottom: 16 };
     const margin = 16;
@@ -189,10 +203,11 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     {open && current && <div className="guide-layer" aria-live="polite">
       {rect && <div className="guide-spotlight" style={{ left: rect.left - 5, top: rect.top - 5, width: rect.width + 10, height: rect.height + 10 }}/>}
       <section ref={cardRef} tabIndex={-1} className="guide-card" style={cardStyle} role="region" aria-labelledby="guide-title" aria-describedby="guide-body">
-        <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">GUIDED TWIN · {stepIndex + 1}/{steps.length}</div><h2 id="guide-title" className="mt-1 font-semibold">{current.title}</h2></div><button className="icon-button" onClick={skip} aria-label="Skip tutorial for now"><X size={15}/></button></div>
+        <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">GUIDED TWIN · {stepIndex + 1}/{steps.length}</div><h2 id="guide-title" className="mt-1 font-semibold">{current.title}</h2></div><button className="icon-button" onClick={skip} aria-label="Close tutorial"><X size={15}/></button></div>
         <p id="guide-body" className="mt-3 text-xs leading-5 text-slate-300">{current.body}</p>
         <p className="mt-3 text-xs text-cyan-300">{current.actionLabel ? `Required: ${current.actionLabel}.` : "Review this area, then continue."}</p>
-        {!rect && <p className="mt-2 text-xs text-amber-300">This control is unavailable here. Skip this step or open its workspace.</p>}
+        {!onStepPage && <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-amber-300"><span>This step is on the {tutorialPageLabel(current.route)} page.</span><button className="button secondary" onClick={() => navigate(stepPath)}>Open {tutorialPageLabel(current.route)} <ArrowRight size={14}/></button></div>}
+        {onStepPage && !rect && <p className="mt-2 text-xs text-amber-300">This control isn't visible right now. Use Next to continue.</p>}
         {error && <p className="mt-2 text-xs text-red-300" role="alert">{error}</p>}
         <div className="mt-4 flex flex-wrap gap-2">
           <button className="button secondary" disabled={stepIndex === 0} onClick={() => void persist(stepIndex - 1, false)}>Back</button>

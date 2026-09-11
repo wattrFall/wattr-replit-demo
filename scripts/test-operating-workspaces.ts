@@ -8,6 +8,7 @@ import {
 import { compareControllers, graphSelection, thermalGraph } from "../src/lib/cockpit/workspaces";
 import { useScenarioSession } from "../src/lib/cockpit/session";
 import { incidentStateAt, selectIncident } from "../src/lib/cockpit/incidents";
+import { tutorialPageLabel, tutorialRouteFor } from "../src/lib/cockpit/tutorial";
 
 const simulatedAt = SCENARIO_START_S + SCENARIO_DURATION_S;
 const baseline = replayCockpitSnapshot(simulatedAt, DEFAULT_FACILITY_MODEL);
@@ -84,6 +85,13 @@ assert.equal(
   "the scenario incident must not read OPEN before the forecast reaches the limit",
 );
 assert.equal(incidentStateAt(incidentRecords[1], replayCockpitSnapshot(SCENARIO_START_S + 900)).status, "CLEAR", "other records keep their stored status");
+
+// Tutorial steps name the page they live on instead of redirecting to it.
+assert.equal(tutorialRouteFor("/operations", "sfo-01"), "/facilities/sfo-01/operations");
+assert.equal(tutorialRouteFor("/portfolio", "sfo-01"), "/portfolio");
+assert.equal(tutorialPageLabel("/model-lab"), "Model Lab");
+assert.equal(tutorialPageLabel("/model"), "Model Studio");
+assert.equal(tutorialPageLabel("/incidents/inc-204"), "Incidents");
 
 const session = useScenarioSession.getState();
 session.reset();

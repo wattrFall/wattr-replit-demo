@@ -371,19 +371,27 @@ try {
     await restartGuide.focus();
     await restartGuide.click();
     await page.getByText("Orient in orbit view", { exact: true }).waitFor();
+    assert.equal(new URL(page.url()).pathname, "/help", "tutorial changed pages by itself");
+    await page.getByRole("button", { name: "Open Operations" }).click();
     await page.locator(".guide-spotlight").waitFor({ state: "visible", timeout: 10_000 });
     assert(await page.getByRole("button", { name: "Next" }).isVisible(), "guidance did not provide consistent next navigation");
     assert.equal(await page.getByRole("button", { name: "Focus control" }).count(), 0, "obsolete focus control is still rendered");
     await page.locator("[data-guide='camera-orbit']").click();
     await page.getByText("Enter aisle-level walkthrough", { exact: true }).waitFor();
+    const skipSaved = page.waitForResponse((response) =>
+      response.url().endsWith("/api/me/tutorial") && response.request().method() === "PATCH");
     await page.getByRole("button", { name: "Skip tutorial", exact: true }).click();
     assert.equal(
       await page.evaluate(() => document.activeElement?.id),
       "main-content",
       "tutorial did not recover focus after its launcher left the current route",
     );
+    await skipSaved;
     const savedTutorial = await request("/api/me");
     assert.equal(savedTutorial.body.tutorial_step, 1, "tutorial action completion was not persisted");
+    assert.equal(savedTutorial.body.tutorial_complete, true, "skipping the tutorial was not remembered");
+    await page.reload({ waitUntil: "networkidle" });
+    assert.equal(await page.locator(".guide-card").count(), 0, "a skipped tutorial reopened on reload");
     await request("/api/me/tutorial", {
       method: "PATCH",
       body: JSON.stringify({ role: "OPERATOR", step: 10, complete: true }),

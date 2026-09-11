@@ -505,6 +505,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
     setComparison(null);
     setEvaluation(null);
     setMessage("");
+    setPendingReplacement(null);
   }, [snapshot.simulatedAt, flowPercent, durationMinutes]);
 
   useEffect(() => {
@@ -535,6 +536,7 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
   // confirms it; the server rejects a replacement that has gone stale.
   const decide = async (decision: Disposition, replacesDecisionId?: string) => {
     setError("");
+    setPendingReplacement(null);
     try {
       const record = await post<Audit>(
         `/api/facilities/${facility.id}/recommendations/rec-17/decisions`,
@@ -711,6 +713,7 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
     const query = new URLSearchParams();
     if (decisionFilter) query.set("decision", decisionFilter);
     if (search.trim()) query.set("search", search.trim());
+    setFiltersApplied(Boolean(decisionFilter || search.trim()));
     api<Audit[]>(`/api/facilities/${facility.id}/audit?${query}`).then(setRecords).catch((cause) => setError(String(cause)));
   };
   useEffect(() => { load(); }, [facility.id, decisionFilter]);
@@ -943,16 +946,16 @@ function GuidedHelp({ data }: { data: SessionData }) {
     <PageHead eyebrow={`HELP / ${data.me.role.replace(/_/g, " ")}`} title="Guided twin assistance" detail="Learn in the live workspace by performing the required operating actions."/>
     <div className="grid gap-4 lg:grid-cols-[1fr_.8fr]">
       <section className="panel p-6">
-        <div className="flex items-center gap-3"><BookOpen className="text-cyan-300"/><div><h2 className="font-semibold">Action-aware tutorial</h2><p className="text-xs text-slate-500">Progress is saved for your current role.</p></div></div>
-        <p className="copy">The guide opens the authorized workspace, spotlights the real control, and advances only after you perform its required action. The spotlight never intercepts clicks or hides operating state.</p>
+        <div className="flex items-center gap-3"><BookOpen className="text-cyan-300"/><div><h2 className="font-semibold">Action-aware tutorial</h2><p className="text-xs text-slate-500">Starts automatically the first time you sign in with a role, and saves progress for that role.</p></div></div>
+        <p className="copy">The guide spotlights the real control on each page and advances when you perform its action. It never changes pages on its own: when a step is on another page, it offers a button to open that page. The spotlight never intercepts clicks or hides operating state.</p>
         <div className="mt-5 flex flex-wrap gap-2"><button className="button primary" onClick={restart}><RotateCcw size={15}/>Restart guided tutorial</button></div>
       </section>
       <section className="panel p-6">
         <div className="eyebrow">AVAILABLE AT ANY TIME</div>
         <ul className="mt-4 space-y-3 text-sm text-slate-300">
           <li><b>Back</b> revisits the prior instruction.</li>
-          <li><b>Skip</b> bypasses an unavailable or familiar control.</li>
-          <li><b>Continue later</b> closes guidance without losing progress.</li>
+          <li><b>Next</b> moves on without performing the action.</li>
+          <li><b>Skip tutorial</b> closes guidance. It won't open by itself again; restart it here whenever you like.</li>
           <li><b>Escape</b> remains available for walkthrough pointer capture and emergency navigation.</li>
         </ul>
       </section>
