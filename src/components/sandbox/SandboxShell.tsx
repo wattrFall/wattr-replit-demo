@@ -1,14 +1,19 @@
 import { Component, Suspense, lazy, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { RotateCcw } from "lucide-react";
-import { CATALOGUE, GRID_D, GRID_W, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
+import { Crosshair, Play, RotateCcw } from "lucide-react";
+import { CATALOGUE, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
+import { gridD } from "@/lib/sandbox/geometry";
 import { useSandboxStore } from "@/lib/sandbox/store";
 import { demoScenario } from "@/lib/demoScenario";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { SButton } from "./primitives/SButton";
 import { SToggle } from "./primitives/SToggle";
 import { Palette } from "./panels/Palette";
+import { Floor } from "./panels/Floor";
 import { Inspector } from "./panels/Inspector";
 import { Telemetry } from "./panels/Telemetry";
+import { ResultsOverlay } from "./ResultsOverlay";
+import { Presets } from "./panels/Presets";
+import { OPENING_PRESET } from "@/lib/sandbox/presets";
 import { useSandboxSimulation } from "./useSandboxSimulation";
 
 /**
@@ -45,6 +50,7 @@ export function SandboxShell() {
   const telemetry = useSandboxStore((s) => s.telemetry);
   const items = useSandboxStore((s) => s.items);
   const connections = useSandboxStore((s) => s.connections);
+  const floor = useSandboxStore((s) => s.floor);
   const selectedId = useSandboxStore((s) => s.selectedId);
   const remove = useSandboxStore((s) => s.remove);
   const mode = useSandboxStore((s) => s.mode);
@@ -54,6 +60,21 @@ export function SandboxShell() {
   const beginPlacing = useSandboxStore((s) => s.beginPlacing);
   const setMode = useSandboxStore((s) => s.setMode);
   const reset = useSandboxStore((s) => s.reset);
+  const resetView = useSandboxStore((s) => s.resetView);
+  const runSimulation = useSandboxStore((s) => s.runSimulation);
+  const loadLayout = useSandboxStore((s) => s.loadLayout);
+
+  /**
+   * Open on a working hall rather than an empty grid. A first visitor should
+   * see a data centre reacting within a second or two, not a blank floor and a
+   * palette to work out.
+   */
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current) return;
+    opened.current = true;
+    loadLayout(OPENING_PRESET.layout, OPENING_PRESET.id);
+  }, [loadLayout]);
 
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
@@ -97,7 +118,7 @@ export function SandboxShell() {
    */
   const sceneSummary = useMemo(() => {
     if (items.length === 0) {
-      return `Empty floor plan, ${GRID_W} by ${GRID_D} tiles. No equipment placed yet.`;
+      return `Empty site: a ${floor.hallW} by ${gridD(floor)} tile raised floor and a ${floor.plantW} tile plant yard. No equipment placed yet.`;
     }
     const counts = new Map<string, number>();
     for (const item of items) {
@@ -115,21 +136,38 @@ export function SandboxShell() {
         ? ` PUE ${telemetry.pue.toFixed(3)}, peak inlet ${telemetry.maxInletC.toFixed(1)} degrees, ${telemetry.totalPowerKw.toFixed(0)} kilowatts total, under ${controlMode === "wattr" ? "Wattr control" : "baseline control"}.`
         : "";
 
-    return `Floor plan ${GRID_W} by ${GRID_D} tiles containing ${parts.join(", ")}. ${linkPart}${readout}`;
-  }, [items, connections, telemetry, controlMode]);
+    return `Site with a ${floor.hallW} by ${gridD(floor)} tile raised floor and a ${floor.plantW} tile plant yard, containing ${parts.join(", ")}. ${linkPart}${readout}`;
+  }, [items, connections, telemetry, controlMode, floor]);
 
   const selectedItem = items.find((i) => i.id === selectedId) ?? null;
 
   const connectSource = mode.type === "connecting" ? items.find((i) => i.id === mode.fromId) : null;
 
-  const statusLine =
+  /**
+   * What the pointer will do next, if anything. Kept separate from the scene
+   * description below: an armed tool used to replace the whole line, which hid
+   * what had been built at exactly the moment a screen-reader user was building
+   * it — and made the readout unverifiable while placing.
+   */
+  const modeHint =
     mode.type === "placing"
       ? `Placing ${CATALOGUE[mode.kind].label} — click a tile, or press Escape to cancel.`
       : connectSource
         ? `Connecting from ${CATALOGUE[connectSource.kind].label} — click a highlighted target, or press Escape to cancel.`
         : selectedItem
-          ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it. ${sceneSummary}`
-          : sceneSummary;
+          ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it.`
+          : null;
+
+  /**
+   * What gets *announced*. Only the short, event-driven half: what the pointer
+   * will do, and why something was refused.
+   *
+   * The scene description and the readout deliberately stay out of this. They
+   * carry PUE, inlet temperatures and power, republished ten times a second,
+   * and a polite live region containing them made a screen reader recite the
+   * numbers continuously while the model settled.
+   */
+  const announcement = notice ?? modeHint ?? "";
 
   return (
     <div className="mx-auto w-full max-w-[1240px] px-4 sm:px-6">
@@ -153,6 +191,15 @@ export function SandboxShell() {
                 { value: "wattr", label: "Wattr control" },
               ]}
             />
+            <SButton
+              variant="primary"
+              size="sm"
+              onClick={runSimulation}
+              aria-label="Validate the design and run a simulation"
+            >
+              <Play className="h-3.5 w-3.5" aria-hidden="true" />
+              Run simulation
+            </SButton>
             <SButton variant="ghost" size="sm" onClick={reset} aria-label="Reset the sandbox">
               <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
               Reset
@@ -160,12 +207,20 @@ export function SandboxShell() {
           </div>
         </header>
 
+        <Presets />
+
         <div className="flex flex-col gap-3 p-3 lg:flex-row">
-          <div className="lg:w-[210px]">
+          <div className="flex flex-col gap-3 lg:w-[210px]">
             <Palette />
+            <Floor />
           </div>
 
-          <div className="relative min-h-[340px] flex-1 overflow-hidden rounded-[10px] border border-[var(--sbx-border)] sm:min-h-[440px] lg:min-h-[520px]">
+          <div
+            className="relative min-h-[340px] flex-1 overflow-hidden rounded-[10px] border border-[var(--sbx-border)] sm:min-h-[440px] lg:min-h-[520px]"
+            role="group"
+            aria-label="Data centre floor plan"
+            aria-describedby="sandbox-scene-summary"
+          >
             <CanvasErrorBoundary
               fallback={
                 <div
@@ -197,6 +252,22 @@ export function SandboxShell() {
                 <SandboxCanvas reducedMotion={reducedMotion} />
               </Suspense>
             </CanvasErrorBoundary>
+
+            <div className="pointer-events-none absolute bottom-2.5 right-2.5 flex items-center gap-2">
+              <span className="hidden rounded-[6px] bg-[var(--sbx-surface-0)]/80 px-2 py-1 text-[10px] leading-none text-[var(--sbx-text-faint)] sm:inline">
+                Drag to orbit · right-drag to pan · scroll to zoom
+              </span>
+              <SButton
+                size="sm"
+                variant="ghost"
+                className="pointer-events-auto bg-[var(--sbx-surface-0)]/80"
+                onClick={resetView}
+                aria-label="Recentre the view"
+              >
+                <Crosshair className="h-3.5 w-3.5" aria-hidden="true" />
+                Recentre
+              </SButton>
+            </div>
           </div>
 
           <div className="flex flex-col gap-3 lg:w-[260px]">
@@ -206,15 +277,19 @@ export function SandboxShell() {
         </div>
 
         <footer className="border-t border-[var(--sbx-border)] px-4 py-2.5">
-          <p
-            role="status"
-            aria-live="polite"
-            className="font-[family-name:var(--sbx-font-mono)] text-[11px] leading-[1.5] text-[var(--sbx-text-faint)]"
-          >
-            {notice ?? statusLine}
+          <p className="font-[family-name:var(--sbx-font-mono)] text-[11px] leading-[1.5] text-[var(--sbx-text-faint)]">
+            <span role="status" aria-live="polite">
+              {announcement}
+            </span>{" "}
+            {/* The canvas is aria-hidden, so this is its text equivalent. It is
+                readable on demand — it is referenced by the canvas region — but
+                never announced, because it changes continuously. */}
+            <span id="sandbox-scene-summary">{sceneSummary}</span>
           </p>
         </footer>
       </div>
+
+      <ResultsOverlay />
 
       {/* Model scope and limitations travel with the sandbox, as they did with
           the walkthrough this page replaces. */}

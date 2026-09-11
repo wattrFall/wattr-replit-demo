@@ -16,7 +16,7 @@ import {
   resolvePlant,
   stepSim,
 } from "../src/lib/sandbox/model";
-import type { SandboxLayout } from "../src/lib/sandbox/types";
+import type { SimLayout } from "../src/lib/sandbox/types";
 import { useScenarioSession } from "../src/lib/cockpit/session";
 
 const assertFinite = (value: unknown, path = "value"): void => {
@@ -77,7 +77,7 @@ const comparison = compareControllers(baseline);
 assert.deepEqual(comparison.results.map((result) => result.id), ["baseline", "ann-rl", "snn-rl"]);
 assert(comparison.results[2].peakMarginC >= comparison.results[1].peakMarginC);
 
-const unservedLayout: SandboxLayout = {
+const unservedLayout: SimLayout = {
   items: layout.items,
   connections: layout.connections.filter(
     (connection) => !connection.toId.startsWith("rack-"),
@@ -103,7 +103,7 @@ const normalPlant = resolvePlant(
 );
 const laggedPlant = resolvePlant(coolingLagLayout, "baseline");
 assert.notDeepEqual(laggedPlant.controls, normalPlant.controls, "response lag must affect plant controls");
-const noLoadLayout: SandboxLayout = {
+const noLoadLayout: SimLayout = {
   ...layout,
   items: layout.items.map((item) =>
     item.kind === "rack"

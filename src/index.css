@@ -724,7 +724,7 @@ html[data-theme="light"] .chart-line { background: #087d88; }
   /* Text */
   --sbx-text: #E8F0F8;
   --sbx-text-muted: #9EBFDF;
-  --sbx-text-faint: rgba(158, 191, 223, 0.55);
+  --sbx-text-faint: rgba(158, 191, 223, 0.70);
 
   /* Semantic accents, straight from the existing palette */
   --sbx-primary: #70A0D0;

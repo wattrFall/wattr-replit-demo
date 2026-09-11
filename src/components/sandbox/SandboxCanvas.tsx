@@ -1,10 +1,11 @@
 import { Suspense } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
 import { Room } from "./scene/Room";
 import { Placeable } from "./scene/Placeable";
 import { FloorPicker } from "./scene/FloorPicker";
 import { FlowPath } from "./scene/FlowPath";
+import { CameraRig } from "./scene/CameraRig";
+import { notePointerDown, notePointerMove, wasDragged } from "@/lib/sandbox/pointer";
 import { useSandboxStore } from "@/lib/sandbox/store";
 import { SBX } from "@/lib/sandbox/tokens";
 
@@ -24,8 +25,17 @@ export default function SandboxCanvas({ reducedMotion }: { reducedMotion: boolea
 
   return (
     <Canvas
-      // A click that hits nothing clears the selection.
-      onPointerMissed={() => select(null)}
+      // Measure pointer travel in capture phase, before r3f dispatches its
+      // click, so scene handlers can tell a click from a camera drag.
+      onPointerDownCapture={notePointerDown}
+      onPointerMoveCapture={notePointerMove}
+      // Right-drag pans, so suppress the context menu over the canvas only.
+      onContextMenu={(event) => event.preventDefault()}
+      // A click that hits nothing clears the selection — but a camera drag that
+      // ends on empty space is not that click.
+      onPointerMissed={() => {
+        if (!wasDragged()) select(null);
+      }}
       // Isometric-ish: an orthographic camera set back on all three axes reads
       // as a technical drawing rather than a game camera.
       orthographic
@@ -67,22 +77,7 @@ export default function SandboxCanvas({ reducedMotion }: { reducedMotion: boolea
         ))}
       </Suspense>
 
-      <OrbitControls
-        makeDefault
-        enablePan={false}
-        // Keep the camera above the floor plane and out of extreme angles.
-        minPolarAngle={Math.PI / 6}
-        maxPolarAngle={Math.PI / 2.35}
-        minZoom={34}
-        maxZoom={110}
-        // Damping is a continuous animation; reduced-motion users get none.
-        // Rotating while armed makes it easy to place a unit by accident.
-        enableRotate={mode.type !== "placing"}
-        enableDamping={!reducedMotion}
-        dampingFactor={0.08}
-        rotateSpeed={0.6}
-        zoomSpeed={0.8}
-      />
+      <CameraRig reducedMotion={reducedMotion} interactive={mode.type === "idle"} />
     </Canvas>
   );
 }

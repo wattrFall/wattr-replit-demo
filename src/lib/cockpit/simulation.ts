@@ -6,7 +6,7 @@ import {
   type SimState,
   type Telemetry,
 } from "@/lib/sandbox/model";
-import type { SandboxItem, SandboxLayout } from "@/lib/sandbox/types";
+import type { SandboxItem, SimLayout } from "@/lib/sandbox/types";
 
 export { SIM_DT_S };
 export const SCENARIO_START_S = 1_752_676_800;
@@ -223,7 +223,7 @@ export function scenarioLayout(
   config: FacilityModelConfig = DEFAULT_FACILITY_MODEL,
   advisory: AdvisoryParameters = DEFAULT_ADVISORY_PARAMETERS,
   commandStartedAt: number = startAt,
-): SandboxLayout {
+): SimLayout {
   const ramp = rampAt(simulatedAt, startAt);
   const loadMultiplier =
     1 + RAMP_INCREASE * ramp *

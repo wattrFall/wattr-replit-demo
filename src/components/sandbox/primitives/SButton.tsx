@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 type Variant = "primary" | "ghost" | "danger";
@@ -21,21 +22,27 @@ const VARIANTS: Record<Variant, string> = {
     "hover:bg-[var(--sbx-heat)]/18 active:bg-[var(--sbx-heat)]/25",
 };
 
-export function SButton({
-  variant = "ghost",
-  size = "md",
-  children,
-  className = "",
-  ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: Variant;
-  size?: "sm" | "md";
-  children: ReactNode;
-}) {
+/**
+ * Ref-forwarding so callers can move focus to it — a dialog has to put focus
+ * somewhere when it opens, and its close button is the safe landing spot.
+ */
+export const SButton = forwardRef<
+  HTMLButtonElement,
+  ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: Variant;
+    size?: "sm" | "md";
+    children: ReactNode;
+  }
+>(function SButton({ variant = "ghost", size = "md", children, className = "", ...rest }, ref) {
   const sizing = size === "sm" ? "h-7 px-2.5 text-[11px]" : "h-8 px-3 text-xs";
   return (
-    <button type="button" className={`${BASE} ${VARIANTS[variant]} ${sizing} ${className}`} {...rest}>
+    <button
+      ref={ref}
+      type="button"
+      className={`${BASE} ${VARIANTS[variant]} ${sizing} ${className}`}
+      {...rest}
+    >
       {children}
     </button>
   );
-}
+});

@@ -30,8 +30,8 @@ export function useSandboxSimulation() {
     // Seed state and publish once up front, so the readout is correct even if
     // the animation loop never gets to run.
     {
-      const { items, connections, controlMode, publishSim } = useSandboxStore.getState();
-      const layout = { items, connections };
+      const { items, connections, floor, controlMode, publishSim } = useSandboxStore.getState();
+      const layout = { items, connections, floor };
       if (!sim.current) sim.current = createSimState(layout);
       publishSim(sim.current.inletC, readTelemetry(sim.current, layout, controlMode));
     }
@@ -57,8 +57,8 @@ export function useSandboxSimulation() {
       // A long stall would otherwise leave a large debt to work off.
       if (accumulator > MAX_SLICES_PER_CALL * SIM_DT_S) accumulator = 0;
 
-      const { items, connections, controlMode, publishSim } = useSandboxStore.getState();
-      const layout = { items, connections };
+      const { items, connections, floor, controlMode, publishSim } = useSandboxStore.getState();
+      const layout = { items, connections, floor };
 
       if (!sim.current) sim.current = createSimState(layout);
       if (slices > 0) sim.current = stepSim(sim.current, layout, controlMode, slices);
@@ -93,7 +93,7 @@ export function useSandboxSimulation() {
       // Guard against recursion: publishSim only writes inletC/telemetry, and
       // neither is compared above, so this cannot re-enter.
       if (!changed || !sim.current) return;
-      const layout = { items: state.items, connections: state.connections };
+      const layout = { items: state.items, connections: state.connections, floor: state.floor };
       // Stepping zero slices reconciles the state with the layout — racks just
       // placed get their starting temperature, deleted ones drop out — without
       // advancing time. Without this a rack added while the loop is throttled
