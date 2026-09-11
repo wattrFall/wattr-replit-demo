@@ -92,8 +92,11 @@ async function cleanup() {
 }
 
 await seed();
+// Start without a Clerk secret key: public routes must not depend on Clerk.
+const serverEnv = { ...process.env, NODE_ENV: "test", PORT: String(port) };
+delete serverEnv.CLERK_SECRET_KEY;
 const server = spawn("node_modules/.bin/tsx", ["server/index.ts"], {
-  env: { ...process.env, NODE_ENV: "test", PORT: String(port) },
+  env: serverEnv,
   stdio: ["ignore", "pipe", "pipe"],
 });
 let stderr = "";
@@ -112,6 +115,12 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   if (!healthy) throw new Error(`Test server did not start on ${port}: ${stderr}`);
+
+  // Without Clerk configured, public pages still load and protected routes fail closed.
+  const landing = await fetch(`${baseUrl}/`);
+  if (landing.status !== 200) throw new Error(`Landing page depends on Clerk: ${landing.status}`);
+  const anonymous = await fetch(`${baseUrl}/api/me`);
+  if (anonymous.status !== 401) throw new Error(`Unauthenticated API request without Clerk returned ${anonymous.status}, expected 401`);
 
   for (const role of ROLES) {
     const userId = users.get(role)!;

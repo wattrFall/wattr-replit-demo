@@ -463,12 +463,29 @@ async function requireLearningViewer(userId: string, res: Response) {
   return membership;
 }
 
+// Health checks answer even when the identity provider is missing or down.
+app.get("/api/health", (_req, res) => res.json({ ok: true, service: "wattr-operator-cockpit" }));
+
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(clerkMiddleware((req) => ({
-  publishableKey: publishableKeyFromHost(getClerkProxyHost(req) ?? "", process.env.CLERK_PUBLISHABLE_KEY),
-})));
+
+// Public pages and static assets never depend on Clerk. Without a secret key,
+// or when Clerk fails for a request, the request continues signed out and
+// requireAuth fails closed with 401 rather than the whole site returning 500.
+const clerk = process.env.CLERK_SECRET_KEY
+  ? clerkMiddleware((req) => ({
+    publishableKey: publishableKeyFromHost(getClerkProxyHost(req) ?? "", process.env.CLERK_PUBLISHABLE_KEY),
+  }))
+  : undefined;
+if (!clerk) console.warn("CLERK_SECRET_KEY is not set; authenticated API routes will return 401.");
+app.use((req, res, next) => {
+  if (!clerk) return next();
+  clerk(req, res, (error?: unknown) => {
+    if (error) console.error("Clerk middleware failed; continuing signed out.", error);
+    next();
+  });
+});
 
 type AuthedRequest = Request & { userId?: string };
 
@@ -480,8 +497,13 @@ function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
       return next();
     }
   }
-  const auth = getAuth(req);
-  const userId = auth?.sessionClaims?.userId as string | undefined || auth?.userId;
+  let userId: string | undefined;
+  try {
+    const auth = getAuth(req);
+    userId = auth?.sessionClaims?.userId as string | undefined || auth?.userId || undefined;
+  } catch {
+    // No Clerk context on this request: Clerk is unconfigured or failed.
+  }
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   req.userId = userId;
   next();
@@ -557,8 +579,6 @@ async function ensureDemoAccess(userId: string) {
     client.release();
   }
 }
-
-app.get("/api/health", (_req, res) => res.json({ ok: true, service: "wattr-operator-cockpit" }));
 
 app.use("/api", requireAuth, async (req: AuthedRequest, res: Response, next: NextFunction) => {
   try {
