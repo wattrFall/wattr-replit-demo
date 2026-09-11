@@ -17,6 +17,15 @@ export type ThermalGraphNode = {
   detail: string;
   value: string;
   risk?: boolean;
+  /**
+   * How much heat the node holds: 0 is cool and 1 is at its limit or capacity;
+   * above 1 is past it. Absent in the topology view, which shows structure only.
+   */
+  heat?: number;
+  /** What the heat reading compares, such as "load against capacity". */
+  heatBasis?: string;
+  /** The readings shown when the node is expanded. */
+  facts?: Array<{ label: string; value: string }>;
 };
 
 export type ThermalGraphEdge = {
@@ -92,14 +101,110 @@ function buildThermalGraph(snapshot: CockpitSnapshot, view: GraphView): {
   return { nodes, edges };
 }
 
+const kw = (value: number) => `${Math.round(value).toLocaleString()} kW`;
+
+/**
+ * How much heat each node holds in a view. A rack reads its inlet against its
+ * limit, a cooling unit or chiller its load against its capacity, and the
+ * workload its IT power against the facility's rated capacity. The forecast
+ * view projects every rack by the forecast rise in the facility's peak inlet.
+ */
+function heatReadings(snapshot: CockpitSnapshot, view: GraphView): Map<string, Pick<ThermalGraphNode, "heat" | "heatBasis" | "facts">> {
+  const readings = new Map<string, Pick<ThermalGraphNode, "heat" | "heatBasis" | "facts">>();
+  if (view === "topology") return readings;
+  const plant = facilityPlant(snapshot.modelConfig);
+  const { workload } = facilityAssets(snapshot.modelConfig);
+  const itemsById = new Map(plant.items.map((item) => [item.id, item]));
+  const racks = new Map(snapshot.racks.map((rack) => [rack.id, rack]));
+  const riseC = view === "forecast" ? Math.max(0, snapshot.forecast.baselinePeakC - snapshot.peakInletC) : 0;
+
+  for (const rack of snapshot.racks) {
+    const inletC = rack.inletC + riseC;
+    readings.set(rack.id, {
+      heat: (inletC - 20) / Math.max(1, rack.limitC - 20),
+      heatBasis: view === "forecast" ? "projected inlet against limit" : "inlet against limit",
+      facts: [
+        { label: view === "forecast" ? "Projected inlet" : "Inlet", value: `${inletC.toFixed(1)}°C` },
+        { label: "Limit", value: `${rack.limitC.toFixed(1)}°C` },
+        { label: "Margin", value: `${(rack.limitC - inletC).toFixed(1)}°C` },
+        { label: "IT heat", value: kw(rack.heatKw) },
+      ],
+    });
+  }
+
+  const unitLoadKw = new Map<string, number>();
+  for (const unit of plant.items.filter((item) => item.kind === "cdu" || item.kind === "crac")) {
+    const served = plant.connections
+      .filter((link) => link.fromId === unit.id)
+      .map((link) => itemsById.get(link.toId))
+      .filter((item): item is SandboxItem => item?.kind === "rack");
+    const loadKw = served.reduce((sum, item) => sum + (racks.get(twinAssetId(item))?.heatKw ?? 0), 0);
+    const capacityKw = unit.params.capacityKw;
+    unitLoadKw.set(unit.id, loadKw);
+    readings.set(unit.id, {
+      heat: loadKw / Math.max(1, capacityKw),
+      heatBasis: "load against capacity",
+      facts: [
+        { label: "Load", value: kw(loadKw) },
+        { label: "Capacity", value: kw(capacityKw) },
+        { label: "Headroom", value: kw(capacityKw - loadKw) },
+        { label: "Serves", value: `${served.length} ${served.length === 1 ? "rack" : "racks"}` },
+      ],
+    });
+  }
+  for (const chiller of plant.items.filter((item) => item.kind === "chiller")) {
+    const loadKw = plant.connections
+      .filter((link) => link.fromId === chiller.id)
+      .reduce((sum, link) => sum + (unitLoadKw.get(link.toId) ?? 0), 0);
+    const capacityKw = chiller.params.capacityKw;
+    readings.set(chiller.id, {
+      heat: loadKw / Math.max(1, capacityKw),
+      heatBasis: "heat rejected against capacity",
+      facts: [
+        { label: "Rejecting", value: kw(loadKw) },
+        { label: "Capacity", value: kw(capacityKw) },
+        { label: "Headroom", value: kw(capacityKw - loadKw) },
+        { label: "Chilled water", value: `${snapshot.chilledWaterC.toFixed(1)}°C` },
+      ],
+    });
+  }
+  readings.set(workload.id, {
+    heat: snapshot.itPowerKw / Math.max(1, snapshot.plant.ratedCapacityKw),
+    heatBasis: "IT power against rated capacity",
+    facts: [
+      { label: "IT power", value: kw(snapshot.itPowerKw) },
+      { label: "Workload", value: `${snapshot.workloadPercent}%` },
+      { label: "Rated capacity", value: kw(snapshot.plant.ratedCapacityKw) },
+      { label: "Headroom", value: kw(snapshot.headroomKw) },
+    ],
+  });
+  // The SFO-01 graph also shows the loops between its CDU and its chiller;
+  // each carries the heat of the equipment it joins.
+  if (!snapshot.modelConfig.layout) {
+    const secondary = readings.get("cdu-03");
+    const primary = readings.get("chiller-01");
+    if (secondary) readings.set("loop-b", secondary);
+    if (primary) readings.set("primary", primary);
+  }
+  return readings;
+}
+
 export function thermalGraph(snapshot: CockpitSnapshot, view: GraphView = "current"): {
   nodes: ThermalGraphNode[];
   edges: ThermalGraphEdge[];
 } {
   // A published build gets a graph generated from its layout. Models saved
-  // before the Builder keep the curated SFO-01 graph below, whose ids match
-  // the seeded topology, incident and assistant records.
-  if (snapshot.modelConfig.layout) return buildThermalGraph(snapshot, view);
+  // before the Builder keep the curated SFO-01 graph, whose ids match the
+  // seeded topology, incident and assistant records.
+  const graph = snapshot.modelConfig.layout ? buildThermalGraph(snapshot, view) : referenceThermalGraph(snapshot, view);
+  const readings = heatReadings(snapshot, view);
+  return { ...graph, nodes: graph.nodes.map((node) => ({ ...node, ...readings.get(node.id) })) };
+}
+
+function referenceThermalGraph(snapshot: CockpitSnapshot, view: GraphView): {
+  nodes: ThermalGraphNode[];
+  edges: ThermalGraphEdge[];
+} {
   const risk = snapshot.incident.open;
   const rackValue = (inletC: number) => view === "topology" ? "Thermal asset" : view === "forecast" ? `${snapshot.forecast.baselinePeakC.toFixed(1)}°C forecast` : `${inletC.toFixed(1)}°C current`;
   return {

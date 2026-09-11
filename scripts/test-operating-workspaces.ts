@@ -172,4 +172,47 @@ useScenarioSession.getState().setModelConfig(DEFAULT_FACILITY_MODEL);
 assert.equal(useScenarioSession.getState().selectedAssetId, "cdu-03", "returning to the reference selects CDU-03 when the selection is gone");
 useScenarioSession.getState().reset();
 
+// The thermal graph shows where the heat is: every asset carries a heat reading.
+const { LINEAGE_METRICS, heatTone, lineageEdgePath, lineageLayout } = await import("../src/lib/cockpit/graphLayout");
+const snapshot900 = replayCockpitSnapshot(SCENARIO_START_S + 900);
+const heatGraph = thermalGraph(snapshot900, "current");
+assert(heatGraph.nodes.every((node) => typeof node.heat === "number" && Number.isFinite(node.heat)), "every node has a heat reading in the current view");
+assert(thermalGraph(snapshot900, "topology").nodes.every((node) => node.heat === undefined), "the topology view shows structure only");
+assert.equal(
+  heatGraph.nodes.find((node) => node.id === "cdu-03")?.heat,
+  snapshot900.racks.reduce((sum, rack) => sum + rack.heatKw, 0) / 1_800,
+  "a CDU reads its served load against its capacity",
+);
+const hottestRack = snapshot900.racks.reduce((hot, rack) => rack.inletC > hot.inletC ? rack : hot);
+const rackNodes = heatGraph.nodes.filter((node) => node.kind === "rack");
+assert.equal(rackNodes.reduce((hot, node) => (node.heat ?? 0) > (hot.heat ?? 0) ? node : hot).id, hottestRack.id, "the hottest rack reads hottest");
+assert(
+  (thermalGraph(snapshot900, "forecast").nodes.find((node) => node.id === hottestRack.id)?.heat ?? 0) >=
+    (rackNodes.find((node) => node.id === hottestRack.id)?.heat ?? 0),
+  "during the ramp the forecast view never reads cooler than now",
+);
+assert(airGraph.nodes.every((node) => typeof node.heat === "number"), "a build's graph carries heat readings too");
+assert.equal(heatTone(0), "#3b82f6", "cool nodes are blue");
+assert.equal(heatTone(1), "#ef4444", "nodes at their limit are red");
+assert.equal(heatTone(2.5), "#ef4444", "nodes past their limit stay red");
+
+// The lineage layout reads left to right along the heat flow.
+for (const [name, graphUnderTest] of [["reference", heatGraph], ["air-cooled build", airGraph]] as const) {
+  const placed = lineageLayout(graphUnderTest.nodes, graphUnderTest.edges);
+  assert(graphUnderTest.edges.every((edge) => placed.nodes.get(edge.from)!.layer < placed.nodes.get(edge.to)!.layer), `${name}: every edge runs left to right`);
+  const boxes = [...placed.nodes.values()];
+  assert.equal(boxes.length, graphUnderTest.nodes.length, `${name}: every node is placed`);
+  assert(
+    boxes.every((a) => boxes.every((b) => a === b || a.layer !== b.layer || Math.abs(a.y - b.y) >= LINEAGE_METRICS.nodeHeight)),
+    `${name}: nodes in a column never overlap`,
+  );
+  assert(
+    boxes.every((box) => box.x + LINEAGE_METRICS.nodeWidth <= placed.width && box.y + LINEAGE_METRICS.nodeHeight <= placed.height),
+    `${name}: nodes fit inside the canvas`,
+  );
+  const first = graphUnderTest.edges[0];
+  assert.match(lineageEdgePath(placed.nodes.get(first.from)!, placed.nodes.get(first.to)!), /^M [\d.]+ [\d.]+ C /);
+}
+assert.deepEqual(lineageLayout(heatGraph.nodes, heatGraph.edges).layers[0], ["gpu-b"], "heat flow starts at the workload");
+
 console.log("Operating workspace model, traversal, and comparison tests passed.");

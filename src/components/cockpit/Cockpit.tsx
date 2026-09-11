@@ -22,6 +22,7 @@ import { facilityAssets } from "@/lib/cockpit/facilityAssets";
 import { facilityPlant } from "@/lib/cockpit/simulation";
 import { navigate, e2eTestUserId, FACILITIES_CHANGED, api, post, patch, remove } from "./api";
 import { Recommendation } from "./RecommendationPage";
+import { ThermalGraphPage } from "./ThermalGraphPage";
 import { ReplayBar, Shell } from "./Shell";
 import type { Me, Facility, Audit, Incident, ModelVersion, MemberFacility, Member, SessionData, LearningOutcomesData } from "./types";
 import { mono, ThemeProvider, ContextualHelp, DisclosureSection, ThemeControl, Brand, Status, Metric, PageHead } from "./ui";
@@ -348,25 +349,6 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
       </section>
     </div>
   </Shell>;
-}
-
-function GraphPage({ data, facility }: { data: SessionData; facility: Facility }) {
-  const guidance = useGuidance();
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot), selectedId = useScenarioSession((s) => s.selectedAssetId), highlightedPath = useScenarioSession((s) => s.highlightedPath), setSelectedId = useScenarioSession((s) => s.selectAsset), [view, setView] = useState<GraphView>("topology"), graph = useMemo(() => thermalGraph(snapshot, view), [snapshot, view]);
-  const selected = graph.nodes.find(node => node.id === selectedId) ?? graph.nodes[0], related = graphSelection(graph, selected.id);
-  const nodeTone = (node: typeof graph.nodes[number]) =>
-    highlightedPath.includes(node.id) ? "border-purple-400 bg-purple-400/10"
-      : related.upstream.some((item) => item.id === node.id) ? "border-sky-400 bg-sky-400/10"
-      : related.downstream.some((item) => item.id === node.id) ? "border-teal-400 bg-teal-400/10"
-        : view === "forecast" && node.risk ? "border-amber-400 bg-amber-400/10"
-          : "border-slate-700 bg-slate-900";
-  useEffect(() => {
-    void recordLearningEvent("ENGINEERING_TOOL_USED", {
-      facilityId: facility.id,
-      simulatedAt: snapshot.simulatedAt,
-    });
-  }, [facility.id, view]);
-  return <Shell data={data} facility={facility}><PageHead eyebrow="THERMAL DEPENDENCY GRAPH" title="Heat-flow topology" detail="Select an asset to trace what affects it, where heat goes, and what would be impacted by degradation."/><ReplayBar/><div className="mb-4 flex flex-wrap gap-2">{(["topology","current","forecast"] as GraphView[]).map(item => <button key={item} onClick={() => setView(item)} className={`button ${view === item ? "primary" : "secondary"}`}>{item === "topology" ? "Topology" : item === "current" ? "Current state" : "Forecast state"}</button>)}</div><div className="grid gap-4 xl:grid-cols-[1fr_340px]"><section className="panel p-5"><div className="mb-5 flex items-center justify-between"><div><h2 className="font-semibold">{view === "topology" ? "THERMAL DEPENDENCY GRAPH" : view.toUpperCase()}</h2><p className="mt-1 text-xs text-slate-500">GPU Training Ramp · {formatSimulatedAt(snapshot.simulatedAt)}</p></div><GitBranch className="text-cyan-300"/></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{graph.nodes.map(node => <button key={node.id} onClick={() => setSelectedId(node.id)} className={`rounded-md border p-4 text-left transition-colors ${nodeTone(node)} ${selected.id === node.id ? "ring-2 ring-cyan-300" : ""}`}><div className="flex justify-between gap-2"><span className="text-[10px] uppercase tracking-[.14em] text-slate-500">{node.kind}</span>{node.risk&&<span className="text-[10px] text-amber-300">RISK</span>}</div><b className="mt-2 block">{node.label}</b><span className="mt-1 block text-xs text-slate-500">{node.detail}</span><span className={`${mono} mt-3 block text-xs text-cyan-300`}>{node.value}</span></button>)}</div><div className="mt-5 border-t border-slate-800 pt-4"><div className="eyebrow">RELATIONSHIPS</div><div className="mt-3 grid gap-2 sm:grid-cols-2">{graph.edges.filter(edge => edge.from === selected.id || edge.to === selected.id).map(edge => <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 text-xs"><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.from)?.label}</span><ArrowRight size={13} className="text-cyan-300"/><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.to)?.label}</span><small className="text-slate-500">· {edge.label}</small></div>)}</div></div></section><aside className="panel p-5"><div className="eyebrow">SELECTED ASSET</div><h2 className="mt-2 text-xl font-semibold">{selected.label}</h2><p className="mt-2 text-sm text-slate-400">{selected.detail} · {selected.value}</p><div className="mt-6 space-y-5"><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowUp size={13}/>Upstream / what affects it</div><ul className="mt-2 space-y-1 text-sm">{related.upstream.length ? related.upstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Source node</li>}</ul></div><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowDown size={13}/>Downstream / carries heat away</div><ul className="mt-2 space-y-1 text-sm">{related.downstream.length ? related.downstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Terminal node</li>}</ul></div><div className="border-t border-slate-800 pt-4"><div className="text-[10px] uppercase tracking-[.14em] text-amber-300">Impact if degraded</div><p className="mt-2 text-sm leading-6 text-slate-400">{related.impact.length ? `${related.impact.map(node => node.label).join(", ")} would require review.` : "No downstream impact is modeled."}</p></div></div></aside></div></Shell>;
 }
 
 function FacilityBuilderPage({ data, facility }: { data: SessionData; facility: Facility }) {
@@ -751,7 +733,7 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   if(section==="ask-wattr"&&!facility.can_assistant)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Ask Wattr unavailable" detail="Assistant access requires an authorized role and facility view grant."/></Shell>;
   if(section==="ask-wattr")return <AssistantPage data={data} facility={facility}/>;
   if(section==="topology"&&!canViewTopology(data.me.role, data.me.is_owner))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
-  if(section==="topology")return <GraphPage data={data} facility={facility}/>;
+  if(section==="topology")return <ThermalGraphPage data={data} facility={facility}/>;
   if(section==="builder")return <FacilityBuilderPage data={data} facility={facility}/>;
   if(section==="model-lab"&&!facility.can_engineer)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Engineering analysis access is required."/></Shell>;
   if(section==="model-lab")return <ModelLab data={data} facility={facility}/>;

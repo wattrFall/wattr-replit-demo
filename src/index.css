@@ -698,6 +698,78 @@ html[data-theme="light"] .chart-line { background: #087d88; }
 }
 
 /* ==========================================================================
+   THERMAL GRAPH — lineage view
+   Nodes are tinted by --node-heat, set inline from the heat scale in
+   lib/cockpit/graphLayout.ts; everything else reads the cockpit theme, so the
+   graph follows light and dark appearance.
+   ========================================================================== */
+.lineage { padding:1rem; }
+.lineage-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem 1rem; }
+.lineage-legend { display:flex; align-items:center; gap:.45rem; color:var(--cockpit-faint); font:10px var(--font-mono); letter-spacing:.06em; text-transform:uppercase; }
+.lineage-legend i { display:block; width:128px; height:8px; border-radius:999px; background:var(--heat-gradient); }
+.lineage-note { color:var(--cockpit-faint); font:10px var(--font-mono); letter-spacing:.06em; }
+.lineage-time { margin-left:auto; }
+.lineage-hotspots { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem .5rem; margin-top:.85rem; }
+.lineage-hotspot { display:inline-flex; align-items:center; gap:.4rem; border:1px solid color-mix(in srgb, var(--node-heat) 50%, var(--cockpit-border-soft)); border-radius:999px; background:color-mix(in srgb, var(--node-heat) 12%, var(--cockpit-surface)); padding:.28rem .6rem; color:var(--cockpit-text); font-size:.72rem; }
+.lineage-hotspot i { width:.55rem; height:.55rem; border-radius:999px; background:var(--node-heat); }
+.lineage-hotspot b { font-family:var(--font-mono); font-weight:600; }
+.lineage-scroll { margin-top:.85rem; overflow-x:auto; overflow-y:hidden; border:1px solid var(--cockpit-border-soft); border-radius:7px; background:radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--cockpit-faint) 24%, transparent) 1px, transparent 0) 0 0 / 18px 18px, var(--cockpit-bg); }
+.lineage-frame { position:relative; margin:0 auto; }
+.lineage-canvas { position:absolute; left:0; top:0; transform-origin:0 0; }
+.lineage-edges { position:absolute; inset:0; overflow:visible; pointer-events:none; }
+.lineage-edge { fill:none; stroke:color-mix(in srgb, var(--cockpit-faint) 70%, transparent); stroke-width:1.6; opacity:.5; transition:opacity .2s ease, stroke-width .2s ease; }
+.lineage-edge.on-path { stroke-width:2.6; opacity:1; }
+.lineage-edge.flowing { stroke-dasharray:7 7; animation:lineage-flow 1.2s linear infinite; }
+@keyframes lineage-flow { to { stroke-dashoffset:-14; } }
+.lineage-node { --node-heat:color-mix(in srgb, var(--cockpit-faint) 80%, transparent); position:absolute; display:flex; flex-direction:column; justify-content:center; gap:1px; overflow:hidden; border:1px solid color-mix(in srgb, var(--node-heat) 45%, var(--cockpit-border-soft)); border-left:4px solid var(--node-heat); border-radius:6px; background:linear-gradient(100deg, color-mix(in srgb, var(--node-heat) 24%, var(--cockpit-surface)) 0%, var(--cockpit-surface) 72%); padding:.35rem .6rem .5rem .65rem; color:var(--cockpit-text); text-align:left; transition:transform .18s ease, box-shadow .18s ease, opacity .2s ease; }
+.lineage-node:hover { transform:translateY(-1px); box-shadow:0 8px 20px rgba(0,0,0,.25); }
+.lineage-node.selected { box-shadow:0 0 0 2px var(--cockpit-primary), 0 8px 22px rgba(0,0,0,.25); }
+.lineage-node.upstream { box-shadow:0 0 0 1px #38bdf8; }
+.lineage-node.downstream { box-shadow:0 0 0 1px #2dd4bf; }
+.lineage-node.focused { box-shadow:0 0 0 1px #a855f7; }
+.lineage.focus-mode .lineage-node.unrelated { opacity:.38; }
+.lineage.focus-mode .lineage-edge:not(.on-path) { opacity:.12; }
+.lineage-node-kind { color:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.14em; text-transform:uppercase; white-space:nowrap; }
+.lineage-node-label { overflow:hidden; font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
+.lineage-node-value { overflow:hidden; color:var(--cockpit-muted); font:10.5px var(--font-mono); text-overflow:ellipsis; white-space:nowrap; }
+.lineage-node-meter { position:absolute; left:0; bottom:0; height:3px; background:var(--node-heat); transition:width .4s ease; }
+.lineage-detail { position:absolute; z-index:4; border:1px solid color-mix(in srgb, var(--node-heat, var(--cockpit-primary)) 55%, var(--cockpit-border)); border-top:4px solid var(--node-heat, var(--cockpit-primary)); border-radius:8px; background:var(--cockpit-surface); padding:.85rem .95rem 1rem; color:var(--cockpit-text); box-shadow:0 22px 48px rgba(0,0,0,.35); animation:lineage-expand .24s cubic-bezier(.2,.8,.2,1); }
+.lineage-detail.from-left { transform-origin:left top; }
+.lineage-detail.from-right { transform-origin:right top; }
+.lineage-detail:focus { outline:none; }
+@keyframes lineage-expand { from { opacity:0; transform:scale(.9); } to { opacity:1; transform:scale(1); } }
+.lineage-detail-head { display:flex; justify-content:space-between; gap:.5rem; }
+.lineage-detail-head h2 { margin-top:.1rem; font-size:1rem; font-weight:600; }
+.lineage-detail-head p { color:var(--cockpit-faint); font-size:.72rem; }
+.lineage-detail-close { display:grid; flex:none; place-items:center; width:1.8rem; height:1.8rem; border-radius:5px; color:var(--cockpit-faint); }
+.lineage-detail-close:hover { background:var(--cockpit-raised); color:var(--cockpit-text); }
+.lineage-detail-heat { margin-top:.7rem; }
+.lineage-detail-heat b { font-family:var(--font-mono); font-size:1.1rem; }
+.lineage-detail-heat small { color:var(--cockpit-faint); font-size:.68rem; }
+.lineage-detail-meter { overflow:hidden; height:6px; margin:.4rem 0 .25rem; border-radius:999px; background:var(--cockpit-raised); }
+.lineage-detail-meter i { display:block; height:100%; border-radius:inherit; background:var(--node-heat); }
+.lineage-detail-copy { margin-top:.6rem; color:var(--cockpit-muted); font-size:.78rem; }
+.lineage-facts { display:grid; grid-template-columns:1fr 1fr; gap:.45rem .8rem; margin-top:.75rem; }
+.lineage-facts dt { color:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; }
+.lineage-facts dd { font-family:var(--font-mono); font-size:.8rem; }
+.lineage-detail-links { display:grid; gap:.5rem; margin-top:.8rem; border-top:1px solid var(--cockpit-border-soft); padding-top:.7rem; }
+.lineage-detail-links span, .lineage-contingency span { display:flex; align-items:center; gap:.3rem; color:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.12em; text-transform:uppercase; }
+.lineage-detail-links p, .lineage-contingency p { margin-top:.15rem; color:var(--cockpit-muted); font-size:.76rem; line-height:1.45; }
+.lineage-contingency { margin-top:.7rem; border-radius:6px; background:color-mix(in srgb, #f59e0b 10%, var(--cockpit-surface)); padding:.55rem .65rem; }
+.lineage-contingency span { color:color-mix(in srgb, #f59e0b 75%, var(--cockpit-text)); }
+@media (prefers-reduced-motion: reduce) {
+  .lineage-edge.flowing { animation:none; stroke-dasharray:none; }
+  .lineage-detail { animation:none; }
+  .lineage-node, .lineage-node-meter { transition:none; }
+}
+/* In a narrow panel the expanded card opens beneath the graph instead of over it. */
+.lineage-detail.sheet { position:relative; margin-top:.85rem; animation-name:lineage-sheet; }
+@keyframes lineage-sheet { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:none; } }
+@media (max-width:767px) {
+  .lineage-time { margin-left:0; }
+}
+
+/* ==========================================================================
    SANDBOX TOKENS — the /demo product window
    --------------------------------------------------------------------------
    The sandbox reads as a darker surface inset into the marketing page. Every
