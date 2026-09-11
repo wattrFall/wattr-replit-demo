@@ -23,6 +23,15 @@ const BASE_UTILISATION_PCT = 82;
 const RAMP_INCREASE = 0.25;
 const RACK_LIMIT_C = 32;
 const MAINTENANCE_LOCKOUT = false;
+/** A forecast peak within this many °C below the rack inlet limit reads as WATCH. */
+export const RISK_APPROACH_BAND_C = 1;
+
+/** Forecast risk: WATCH while approaching the limit, CRITICAL from 1 °C above it. */
+export function forecastRiskFor(peakC: number, limitC: number = RACK_LIMIT_C): ForecastSnapshot["risk"] {
+  if (peakC >= limitC + 1) return "critical";
+  if (peakC >= limitC - RISK_APPROACH_BAND_C) return "watch";
+  return "clear";
+}
 
 export type SimulationVariant = "baseline" | "advisory" | "alternative";
 export type AdvisoryParameters = {
@@ -362,12 +371,7 @@ function deriveSnapshot(
       };
     });
   const currentPeak = baselineTelemetry.maxInletC ?? RACK_LIMIT_C;
-  const forecastRisk =
-    baselineForecast.peakC >= RACK_LIMIT_C + 1
-      ? "critical"
-      : baselineForecast.peakC >= RACK_LIMIT_C
-        ? "watch"
-        : "clear";
+  const forecastRisk = forecastRiskFor(baselineForecast.peakC);
   const reductionC = Math.max(0, baselineForecast.peakC - advisoryForecast.peakC);
   const constraintMinutesAvoided = Math.max(0, baselineForecast.minutes - advisoryForecast.minutes);
   const headroomKw = Math.max(0, SCENARIO_RATED_CAPACITY_KW - baselineTelemetry.itPowerKw);
@@ -439,7 +443,8 @@ function deriveSnapshot(
     },
     incident: {
       id: "inc-204",
-      open: forecastRisk !== "clear" || baselineTelemetry.racksAtRisk > 0,
+      // Approaching the limit is a WATCH forecast, not an incident.
+      open: baselineForecast.peakC >= RACK_LIMIT_C || baselineTelemetry.racksAtRisk > 0,
       rackId: currentRacks.reduce((hot, item) => item.inletC > hot.inletC ? item : hot, currentRacks[0]).id,
       peakC: rounded(baselineForecast.peakC),
       limitC: RACK_LIMIT_C,

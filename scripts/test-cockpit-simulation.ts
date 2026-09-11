@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import {
   DEFAULT_FACILITY_MODEL,
+  RISK_APPROACH_BAND_C,
   SCENARIO_START_S,
   advanceCockpitSimulation,
   counterfactualCockpitSnapshot,
   createCockpitSimulation,
+  forecastRiskFor,
   replayCockpitSnapshot,
   scenarioLayout,
   snapshotForAudit,
@@ -30,7 +32,8 @@ const golden = [
     headroomKw: 520,
     forecastPeakC: 31.8,
     advisoryPeakC: 30.8,
-    risk: "clear",
+    // 31.8 °C is within RISK_APPROACH_BAND_C of the 32 °C limit.
+    risk: "watch",
   },
   {
     elapsedS: 300,
@@ -160,5 +163,14 @@ for (const elapsedS of [0, 300, 900, 1_800]) {
   const sample = replayCockpitSnapshot(SCENARIO_START_S + elapsedS);
   assert(sample.peakInletC >= 20, "thermal state must remain physically bounded");
 }
+
+// WATCH starts RISK_APPROACH_BAND_C below the limit; CRITICAL starts 1 °C above it.
+assert.equal(forecastRiskFor(32 - RISK_APPROACH_BAND_C - 0.1, 32), "clear");
+assert.equal(forecastRiskFor(32 - RISK_APPROACH_BAND_C, 32), "watch");
+assert.equal(forecastRiskFor(32.9, 32), "watch");
+assert.equal(forecastRiskFor(33, 32), "critical");
+const approaching = replayCockpitSnapshot(SCENARIO_START_S);
+assert.equal(approaching.forecast.risk, "watch", "a forecast just below the limit must read WATCH");
+assert.equal(approaching.incident.open, false, "approaching the limit must not open an incident");
 
 console.log("Cockpit simulation golden and replay tests passed.");
