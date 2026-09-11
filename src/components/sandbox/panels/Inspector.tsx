@@ -1,5 +1,5 @@
 import { ArrowRight, Link2, Shuffle, Trash2, Unlink, X } from "lucide-react";
-import { CATALOGUE } from "@/lib/sandbox/catalogue";
+import { CATALOGUE, paramSpec } from "@/lib/sandbox/catalogue";
 import { connectionsFor, targetsFor } from "@/lib/sandbox/connections";
 import { MEDIUM_STYLE, linkMedium } from "@/lib/sandbox/routing";
 import { useSandboxStore } from "@/lib/sandbox/store";
@@ -45,6 +45,7 @@ export function Inspector() {
   const disconnect = useSandboxStore((s) => s.disconnect);
   const selectConnection = useSandboxStore((s) => s.selectConnection);
   const beginRewire = useSandboxStore((s) => s.beginRewire);
+  const paramScale = useSandboxStore((s) => s.paramScale);
 
   const connection = connections.find((c) => c.id === selectedConnectionId) ?? null;
   const linkFrom = connection ? items.find((i) => i.id === connection.fromId) : undefined;
@@ -212,7 +213,7 @@ export function Inspector() {
       </div>
       <div className="max-h-[42vh] overflow-y-auto lg:max-h-[360px]">
         <div className="divide-y divide-[var(--sbx-border-hairline)]">
-          {entry.params.map((spec) => (
+          {entry.params.map((catalogueSpec) => paramSpec(item.kind, catalogueSpec, paramScale)).map((spec) => (
             <SSlider
               key={spec.key}
               label={spec.label}

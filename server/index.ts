@@ -24,6 +24,13 @@ import {
   syntheticProvenance,
 } from "../src/lib/cockpit/contracts";
 import {
+  assertFacilityLayout,
+  FacilityLayoutError,
+  normalizeFacilityLayout,
+  validateFacilityLayout,
+} from "../src/lib/facility/layout";
+import { SFO_01_LAYOUT } from "../src/lib/facility/templates";
+import {
   canViewTopology,
   defaultLandingPath,
   ROLE_CAPABILITIES,
@@ -2586,12 +2593,27 @@ app.post("/api/facilities/:facilityId/model/versions", requireAuth, async (req: 
   ) {
     return res.status(400).json({ error: "A DEMO MODEL requires the approved scenario, integer seed, thermalMass 0.2–2.0, and responseLag 1–120s" });
   }
+  // Model Studio tunes the physics. A draft without a layout keeps the
+  // published build's layout, so adjusting parameters never discards a build.
+  let storedConfig = config;
+  if (config.layout === undefined) {
+    const published = await publishedModel(String(req.params.facilityId));
+    if (published?.config.layout) storedConfig = { ...config, layout: published.config.layout };
+  } else {
+    try {
+      assertFacilityLayout(config.layout);
+      storedConfig = { ...config, layout: normalizeFacilityLayout(config.layout) };
+    } catch (error) {
+      if (error instanceof FacilityLayoutError) return res.status(400).json({ error: error.message });
+      throw error;
+    }
+  }
   const id = `sfo-rom-${randomUUID().slice(0, 8)}`;
   const result = await pool.query(
     `INSERT INTO model_versions (id, facility_id, status, config, created_by)
      VALUES ($1, $2, 'DRAFT', $3::jsonb, $4)
      RETURNING id, facility_id, status, config, published_at, created_by, created_at`,
-    [id, req.params.facilityId, JSON.stringify(config), req.userId],
+    [id, req.params.facilityId, JSON.stringify(storedConfig), req.userId],
   );
   res.status(201).json(result.rows[0]);
 });
@@ -2633,9 +2655,7 @@ app.post("/api/facilities/:facilityId/model/versions/:versionId/publish", requir
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "Validate this model before publishing" });
     }
-    await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [req.params.facilityId]);
-    await client.query("UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1", [req.params.versionId]);
-    await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [req.params.versionId, req.params.facilityId]);
+    await activateModelVersion(client, String(req.params.facilityId), String(req.params.versionId));
     await client.query("COMMIT");
     res.json({ id: req.params.versionId, status: "PUBLISHED" });
   } catch (error) {
@@ -2663,9 +2683,199 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Rollback target not found" });
     }
-    await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [req.params.facilityId]);
-    await client.query("UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1", [versionId]);
-    await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [versionId, req.params.facilityId]);
+    await activateModelVersion(client, String(req.params.facilityId), versionId);
+    await client.query("COMMIT");
+    res.json({ id: versionId, status: "PUBLISHED" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+/** Make a version the one Operations runs, archiving whichever was published. */
+async function activateModelVersion(client: pg.PoolClient, facilityId: string, versionId: string) {
+  await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [facilityId]);
+  await client.query("UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1", [versionId]);
+  await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [versionId, facilityId]);
+}
+
+type ModelVersionRow = {
+  id: string;
+  status: string;
+  config: FacilityModelConfig & { buildName?: string };
+  created_by: string | null;
+  created_at: string;
+  published_at: string | null;
+};
+
+/** A version as the Builder lists it: status, name and what its layout holds. */
+function buildSummary(row: ModelVersionRow) {
+  const layout = row.config?.layout;
+  return {
+    id: row.id,
+    status: row.status,
+    name: typeof row.config?.buildName === "string" ? row.config.buildName : null,
+    hasLayout: Boolean(layout),
+    counts: layout
+      ? { zones: layout.zones.length, items: layout.items.length, connections: layout.connections.length }
+      : null,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    publishedAt: row.published_at,
+  };
+}
+
+// Facility Builder. Builds are model versions that carry a layout, so they
+// share Model Studio's draft -> validate -> publish -> rollback lifecycle and
+// Operations always runs exactly one published version. For now every role
+// with a view grant can build; build permissions will be added later.
+
+app.get("/api/facilities/:facilityId/builds", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const model = await publishedModel(facilityId);
+  if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
+  const versions = await pool.query(
+    `SELECT id, status, config, created_by, created_at, published_at
+     FROM model_versions WHERE facility_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [facilityId],
+  );
+  res.json({
+    published: {
+      id: model.model_version,
+      layout: model.config.layout ?? SFO_01_LAYOUT,
+      reference: !model.config.layout,
+    },
+    versions: versions.rows.map(buildSummary),
+  });
+});
+
+app.get("/api/facilities/:facilityId/builds/:versionId", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const result = await pool.query(
+    `SELECT id, status, config, created_by, created_at, published_at
+     FROM model_versions WHERE id = $1 AND facility_id = $2`,
+    [req.params.versionId, facilityId],
+  );
+  const row = result.rows[0] as ModelVersionRow | undefined;
+  if (!row) return res.status(404).json({ error: "Build not found" });
+  res.json({ ...buildSummary(row), layout: row.config?.layout ?? SFO_01_LAYOUT, reference: !row.config?.layout });
+});
+
+app.post("/api/facilities/:facilityId/builds", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const name = req.body?.name;
+  if (name !== undefined && (typeof name !== "string" || name.length > 80)) {
+    return res.status(400).json({ error: "A build name must be text of at most 80 characters" });
+  }
+  try {
+    assertFacilityLayout(req.body?.layout);
+  } catch (error) {
+    if (error instanceof FacilityLayoutError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+  const model = await publishedModel(facilityId);
+  if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
+  // A build changes the layout; the physics parameters carry over from what is published.
+  const config = {
+    scenario: model.config.scenario,
+    seed: model.config.seed,
+    thermalMass: model.config.thermalMass,
+    responseLag: model.config.responseLag,
+    layout: normalizeFacilityLayout(req.body.layout),
+    ...(typeof name === "string" && name.trim() ? { buildName: name.trim() } : {}),
+  };
+  const id = `build-${randomUUID().slice(0, 8)}`;
+  const result = await pool.query(
+    `INSERT INTO model_versions (id, facility_id, status, config, created_by)
+     VALUES ($1, $2, 'DRAFT', $3::jsonb, $4)
+     RETURNING id, status, config, created_by, created_at, published_at`,
+    [id, facilityId, JSON.stringify(config), req.userId],
+  );
+  res.status(201).json(buildSummary(result.rows[0]));
+});
+
+app.post("/api/facilities/:facilityId/builds/:versionId/validate", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const result = await pool.query(
+    `SELECT id, status, config FROM model_versions WHERE id = $1 AND facility_id = $2`,
+    [req.params.versionId, facilityId],
+  );
+  const row = result.rows[0] as Pick<ModelVersionRow, "id" | "status" | "config"> | undefined;
+  if (!row) return res.status(404).json({ error: "Build not found" });
+  if (row.status !== "DRAFT") return res.status(409).json({ error: "Only a draft build can be validated" });
+  if (!row.config?.layout) return res.status(409).json({ error: "This version has no layout to validate" });
+  try {
+    assertModelConfig(row.config);
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "Invalid facility model configuration" });
+  }
+  const checks = validateFacilityLayout(row.config.layout);
+  if (!checks.ok) {
+    return res.status(409).json({
+      error: `${checks.errors.length} design problem${checks.errors.length === 1 ? "" : "s"} to fix before this build can be validated`,
+      findings: checks.findings,
+    });
+  }
+  await pool.query("UPDATE model_versions SET status = 'VALIDATED' WHERE id = $1 AND status = 'DRAFT'", [row.id]);
+  res.json({ id: row.id, status: "VALIDATED", findings: checks.findings });
+});
+
+app.post("/api/facilities/:facilityId/builds/:versionId/publish", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const version = await client.query(
+      `SELECT id, config FROM model_versions
+       WHERE id = $1 AND facility_id = $2 AND status = 'VALIDATED' FOR UPDATE`,
+      [req.params.versionId, facilityId],
+    );
+    if (!version.rows[0]?.config?.layout) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Validate this build before publishing" });
+    }
+    await activateModelVersion(client, facilityId, String(req.params.versionId));
+    await client.query("COMMIT");
+    res.json({ id: req.params.versionId, status: "PUBLISHED" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/facilities/:facilityId/builds/rollback", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const versionId = req.body?.versionId;
+  if (typeof versionId !== "string") return res.status(400).json({ error: "A version to restore is required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const version = await client.query(
+      `SELECT id FROM model_versions
+       WHERE id = $1 AND facility_id = $2 AND status IN ('ARCHIVED','VALIDATED','PUBLISHED') FOR UPDATE`,
+      [versionId, facilityId],
+    );
+    if (!version.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Rollback target not found" });
+    }
+    await activateModelVersion(client, facilityId, versionId);
     await client.query("COMMIT");
     res.json({ id: versionId, status: "PUBLISHED" });
   } catch (error) {

@@ -327,4 +327,62 @@ for (const preset of PRESETS) {
   }
 }
 
-console.log("Domain invariants, topology, bounds, lag, offline equipment, reset, comparison, graph, zone, and connection checks passed.");
+// Facility builds: templates meet the build contract and pass the design
+// checks, the contract rejects malformed builds, and the SFO-01 template is
+// exactly the equipment and wiring the replay model has always simulated.
+const { FACILITY_TEMPLATES, SFO_01_LAYOUT } = await import("../src/lib/facility/templates");
+const { assertFacilityLayout, normalizeFacilityLayout, validateFacilityLayout } = await import("../src/lib/facility/layout");
+const { assertModelConfig } = await import("../src/lib/cockpit/contracts");
+
+for (const template of FACILITY_TEMPLATES) {
+  assert.doesNotThrow(() => assertFacilityLayout(template.layout), `${template.name} must meet the build contract`);
+  const checks = validateFacilityLayout(template.layout);
+  assert(checks.ok, `${template.name} must pass design checks: ${checks.errors.map((f) => f.message).join("; ")}`);
+  assert.equal(checks.warnings.length, 0, `${template.name} should raise no warnings: ${checks.warnings.map((f) => f.message).join("; ")}`);
+}
+
+const reference = scenarioLayout(SCENARIO_START_S, SCENARIO_START_S, "baseline");
+assert.deepEqual(
+  SFO_01_LAYOUT.items.filter((item) => item.kind !== "sensor").map(({ id, kind, params }) => ({ id, kind, params })),
+  reference.items.map(({ id, kind, params }) => ({ id, kind, params })),
+  "the SFO-01 template must hold the replay model's equipment and parameters, in its order",
+);
+assert.deepEqual(
+  SFO_01_LAYOUT.connections.filter((connection) => !connection.fromId.startsWith("sensor-")),
+  reference.connections,
+  "the SFO-01 template must hold the replay model's wiring",
+);
+
+const broken = (mutate: (layout: typeof SFO_01_LAYOUT) => void) => {
+  const copy = structuredClone(SFO_01_LAYOUT);
+  mutate(copy);
+  return () => assertFacilityLayout(copy);
+};
+assert.throws(broken((layout) => { (layout.items[0] as { kind: string }).kind = "turbine"; }), /unknown kind/);
+assert.throws(broken((layout) => { layout.items[1].id = layout.items[0].id; }), /used twice/);
+assert.throws(broken((layout) => { layout.items[2].params.itLoadKw = 5000; }), /it load must be between/);
+assert.throws(broken((layout) => { layout.items[2].params.mystery = 1; }), /unknown parameter mystery/);
+assert.throws(broken((layout) => { layout.connections[0].toId = "missing"; }), /must join two items/);
+assert.throws(broken((layout) => { layout.zones[0].x = 60; }), /beyond the site/);
+assert.throws(() => assertFacilityLayout({ zones: [], items: "nope", connections: [] }), /must be arrays/);
+assert.deepEqual(
+  normalizeFacilityLayout({ ...structuredClone(SFO_01_LAYOUT), extra: true } as typeof SFO_01_LAYOUT),
+  SFO_01_LAYOUT,
+  "normalising keeps only the fields a build stores",
+);
+
+const miswired = structuredClone(SFO_01_LAYOUT);
+miswired.connections.push({ id: "link-chiller-rack", fromId: "chiller-01", toId: "rack-a01" });
+assert.match(
+  validateFacilityLayout(miswired).errors.map((finding) => finding.message).join(" "),
+  /breaks a wiring rule/,
+  "a saved build that breaks a wiring rule fails the design checks",
+);
+
+assert.doesNotThrow(() => assertModelConfig({ ...DEFAULT_FACILITY_MODEL, layout: SFO_01_LAYOUT }));
+assert.throws(
+  () => assertModelConfig({ ...DEFAULT_FACILITY_MODEL, layout: { zones: [], items: "nope", connections: [] } }),
+  /Invalid facility layout/,
+);
+
+console.log("Domain invariants, topology, bounds, lag, offline equipment, reset, comparison, graph, zone, connection, and facility build checks passed.");

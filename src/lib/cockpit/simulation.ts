@@ -7,6 +7,7 @@ import {
   type Telemetry,
 } from "@/lib/sandbox/model";
 import type { SandboxItem, SimLayout } from "@/lib/sandbox/types";
+import type { FacilityLayout } from "@/lib/facility/layout";
 
 export { SIM_DT_S };
 export const SCENARIO_START_S = 1_752_676_800;
@@ -47,6 +48,11 @@ export type FacilityModelConfig = {
   seed: number;
   thermalMass: number;
   responseLag: number;
+  /**
+   * The published facility build. Absent on models saved before the Builder,
+   * which run on the SFO-01 reference layout.
+   */
+  layout?: FacilityLayout;
 };
 export const DEFAULT_FACILITY_MODEL: FacilityModelConfig = {
   scenario: "gpu-training-ramp-v1",

@@ -87,7 +87,9 @@ export const useScenarioSession = create<ScenarioSession>((set) => ({
       state.modelConfig.seed === modelConfig.seed &&
       state.modelConfig.thermalMass === modelConfig.thermalMass &&
       state.modelConfig.responseLag === modelConfig.responseLag &&
-      state.modelConfig.scenario === modelConfig.scenario
+      state.modelConfig.scenario === modelConfig.scenario &&
+      // A newly published build changes the facility even when the physics do not.
+      JSON.stringify(state.modelConfig.layout ?? null) === JSON.stringify(modelConfig.layout ?? null)
     ) return state;
     const elapsed = state.simulation.snapshot.elapsedS;
     const simulation = advanceCockpitSimulation(

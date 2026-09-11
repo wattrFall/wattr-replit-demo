@@ -77,6 +77,9 @@ export function SandboxShell() {
   useEffect(() => {
     if (opened.current) return;
     opened.current = true;
+    // The store is shared with the facility Builder, which works at facility
+    // scale; the public sandbox always uses its own, smaller ranges.
+    useSandboxStore.getState().setParamScale("sandbox");
     loadLayout(OPENING_PRESET.layout, OPENING_PRESET.id);
   }, [loadLayout]);
 

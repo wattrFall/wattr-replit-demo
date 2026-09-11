@@ -8,7 +8,7 @@
  * moves. That is what makes the 60fps target reachable.
  */
 import { create } from "zustand";
-import { CATALOGUE, ZONE_CATALOGUE, defaultParams } from "./catalogue";
+import { CATALOGUE, ZONE_CATALOGUE, defaultParams, paramSpec, type ParamScale } from "./catalogue";
 import { checkConnection, checkRewire } from "./connections";
 import {
   MAX_ZONES,
@@ -98,6 +98,11 @@ export interface SandboxState {
   runFindings: ValidationResult | null;
   /** Which preset is loaded, or null once the user has edited the hall. */
   activePresetId: string | null;
+  /**
+   * Which parameter ranges apply: the sandbox's, or facility scale in the
+   * Builder, where one rack can stand for a 500 kW training pod.
+   */
+  paramScale: ParamScale;
 
   select: (id: string | null) => void;
   selectZone: (id: string | null) => void;
@@ -115,6 +120,7 @@ export interface SandboxState {
   /** Move the armed end of the connection to this unit, if the rules allow. */
   rewire: (itemId: string) => void;
   setParam: (id: string, key: string, value: number) => void;
+  setParamScale: (scale: ParamScale) => void;
   /** Add a zone of this kind at its default size, in the first clear space. */
   addZone: (kind: ZoneKind) => void;
   /**
@@ -225,6 +231,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   showResults: false,
   runFindings: null,
   activePresetId: null,
+  paramScale: "sandbox",
 
   publishSim: (inletC, telemetry) => set({ inletC, telemetry }),
   resetView: () => set((s) => ({ viewResetNonce: s.viewResetNonce + 1 })),
@@ -354,6 +361,7 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   selectConnection: (id) => set({ selectedConnectionId: id, selectedId: null, selectedZoneId: null, notice: null }),
   setMode: (mode) => set({ mode, notice: null }),
   setControlMode: (controlMode) => set({ controlMode }),
+  setParamScale: (paramScale) => set({ paramScale }),
   notify: (notice) => set({ notice }),
 
   beginPlacing: (kind) =>
@@ -473,7 +481,8 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
     set((s) => ({
       items: s.items.map((item) => {
         if (item.id !== id) return item;
-        const spec = CATALOGUE[item.kind].params.find((p) => p.key === key);
+        const found = CATALOGUE[item.kind].params.find((p) => p.key === key);
+        const spec = found ? paramSpec(item.kind, found, s.paramScale) : undefined;
         // Clamp defensively: keyboard entry and presets both land here.
         const clamped = spec ? Math.min(spec.max, Math.max(spec.min, value)) : value;
         return { ...item, params: { ...item.params, [key]: clamped } };

@@ -328,3 +328,27 @@ export function defaultParams(kind: ComponentKind): Record<string, number> {
   for (const spec of CATALOGUE[kind].params) out[spec.key] = spec.default;
   return out;
 }
+
+/**
+ * Which ranges parameters take. The catalogue's ranges suit a small
+ * containerised hall. A facility build models whole halls, where one rack can
+ * stand for a 500 kW training pod, so a few parameters widen.
+ */
+export type ParamScale = "sandbox" | "facility";
+
+/** Parameter ranges that widen at facility scale; everything else keeps the catalogue range. */
+export const FACILITY_PARAM_RANGES: Partial<Record<ComponentKind, Record<string, Pick<ParamSpec, "min" | "max" | "step">>>> = {
+  rack: { itLoadKw: { min: 2, max: 1000, step: 1 } },
+  crac: {
+    capacityKw: { min: 20, max: 2000, step: 10 },
+    airflowCmh: { min: 2000, max: 400000, step: 1000 },
+  },
+  cdu: { capacityKw: { min: 30, max: 4000, step: 10 } },
+  chiller: { capacityKw: { min: 50, max: 10000, step: 10 } },
+};
+
+/** A parameter's spec at the given scale. */
+export function paramSpec(kind: ComponentKind, spec: ParamSpec, scale: ParamScale): ParamSpec {
+  const range = scale === "facility" ? FACILITY_PARAM_RANGES[kind]?.[spec.key] : undefined;
+  return range ? { ...spec, ...range } : spec;
+}

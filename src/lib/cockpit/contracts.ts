@@ -5,6 +5,8 @@
  * the operator-facing model.
  */
 
+import { assertFacilityLayout, type FacilityLayout } from "@/lib/facility/layout";
+
 export const CONTRACT_VERSION = "wattr.contracts.v1" as const;
 
 export type ContractVersion = typeof CONTRACT_VERSION;
@@ -82,6 +84,7 @@ export function assertModelConfig(value: unknown): asserts value is {
   seed: number;
   thermalMass: number;
   responseLag: number;
+  layout?: FacilityLayout;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new RangeError("Invalid facility model configuration");
@@ -97,6 +100,9 @@ export function assertModelConfig(value: unknown): asserts value is {
   ) {
     throw new RangeError("Invalid facility model configuration");
   }
+  // A published build carries its layout. Models saved before the Builder have
+  // none and run on the SFO-01 reference layout.
+  if (config.layout !== undefined) assertFacilityLayout(config.layout);
 }
 
 export function syntheticProvenance(

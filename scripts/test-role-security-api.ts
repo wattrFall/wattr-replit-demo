@@ -143,6 +143,114 @@ try {
     }
   }
 
+  // Facility Builder: for now every role with a view grant can save, validate,
+  // publish and roll back a build. The published model is restored afterwards,
+  // even if a check fails, so later suites still run on the reference model.
+  const facilityBefore = await pool.query("SELECT model_version FROM facilities WHERE id = 'sfo-01'");
+  const originalModelVersion: string = facilityBefore.rows[0].model_version;
+  const createdVersions: string[] = [];
+  try {
+    const { SFO_01_LAYOUT } = await import("../src/lib/facility/templates");
+
+    for (const role of ROLES) {
+      const draft = await request(users.get(role)!, "/api/facilities/sfo-01/builds", {
+        method: "POST",
+        body: JSON.stringify({ name: `${role} build`, layout: SFO_01_LAYOUT }),
+      });
+      if (draft.status !== 201 || draft.body?.status !== "DRAFT") {
+        throw new Error(`${role} could not save a draft build: ${draft.status} ${JSON.stringify(draft.body)}`);
+      }
+      createdVersions.push(draft.body.id);
+    }
+
+    const builder = users.get("VIEWER")!;
+    const buildId = createdVersions[createdVersions.length - 1];
+    const listing = await request(builder, "/api/facilities/sfo-01/builds");
+    if (
+      listing.status !== 200 ||
+      listing.body?.published?.reference !== true ||
+      listing.body.published.layout?.items?.length !== SFO_01_LAYOUT.items.length ||
+      !listing.body.versions?.some((version: any) => version.id === buildId && version.hasLayout)
+    ) {
+      throw new Error(`Builds listing did not describe the reference layout and saved drafts: ${JSON.stringify(listing.body)}`);
+    }
+
+    const malformed = await request(builder, "/api/facilities/sfo-01/builds", {
+      method: "POST",
+      body: JSON.stringify({ layout: { zones: [], items: "nope", connections: [] } }),
+    });
+    if (malformed.status !== 400) throw new Error(`A malformed build was accepted: ${malformed.status}`);
+
+    const miswiredLayout = structuredClone(SFO_01_LAYOUT);
+    miswiredLayout.connections.push({ id: "link-chiller-rack", fromId: "chiller-01", toId: "rack-a01" });
+    const miswired = await request(builder, "/api/facilities/sfo-01/builds", {
+      method: "POST",
+      body: JSON.stringify({ layout: miswiredLayout }),
+    });
+    if (miswired.status !== 201) throw new Error("A structurally valid draft could not be saved");
+    createdVersions.push(miswired.body.id);
+    const refused = await request(builder, `/api/facilities/sfo-01/builds/${miswired.body.id}/validate`, { method: "POST" });
+    if (refused.status !== 409 || !refused.body?.findings?.some((finding: any) => /wiring rule/.test(finding.message))) {
+      throw new Error(`A miswired build passed validation: ${refused.status} ${JSON.stringify(refused.body)}`);
+    }
+
+    const validated = await request(builder, `/api/facilities/sfo-01/builds/${buildId}/validate`, { method: "POST" });
+    if (validated.status !== 200 || validated.body?.status !== "VALIDATED") {
+      throw new Error(`A sound build did not validate: ${validated.status} ${JSON.stringify(validated.body)}`);
+    }
+    const published = await request(builder, `/api/facilities/sfo-01/builds/${buildId}/publish`, { method: "POST" });
+    if (published.status !== 200) throw new Error(`A validated build did not publish: ${JSON.stringify(published.body)}`);
+    const operations = await request(builder, "/api/facilities");
+    if (
+      operations.body?.[0]?.model_version !== buildId ||
+      operations.body[0].model_config?.layout?.items?.length !== SFO_01_LAYOUT.items.length
+    ) {
+      throw new Error("Operations did not receive the published build");
+    }
+    // Compared structurally: jsonb does not keep object keys in the order they were written.
+    const { isDeepStrictEqual } = await import("node:util");
+    const loaded = await request(builder, `/api/facilities/sfo-01/builds/${buildId}`);
+    if (loaded.status !== 200 || !isDeepStrictEqual(loaded.body?.layout, SFO_01_LAYOUT)) {
+      throw new Error(`A saved build did not load back unchanged: ${JSON.stringify(loaded.body?.layout).slice(0, 300)}`);
+    }
+
+    const studioDraft = await request(users.get("MODEL_ADMIN")!, "/api/facilities/sfo-01/model/versions", {
+      method: "POST",
+      body: JSON.stringify({ config: { scenario: "gpu-training-ramp-v1", seed: 4103, thermalMass: 0.9, responseLag: 12 } }),
+    });
+    if (studioDraft.status !== 201 || studioDraft.body?.config?.layout?.items?.length !== SFO_01_LAYOUT.items.length) {
+      throw new Error(`A Model Studio draft dropped the published build's layout: ${JSON.stringify(studioDraft.body)}`);
+    }
+    createdVersions.push(studioDraft.body.id);
+
+    const restored = await request(builder, "/api/facilities/sfo-01/builds/rollback", {
+      method: "POST",
+      body: JSON.stringify({ versionId: originalModelVersion }),
+    });
+    const afterRollback = await request(builder, "/api/facilities");
+    if (restored.status !== 200 || afterRollback.body?.[0]?.model_version !== originalModelVersion) {
+      throw new Error("Rolling back did not restore the original model");
+    }
+  } finally {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = 'sfo-01' AND status = 'PUBLISHED' AND id <> $1",
+        [originalModelVersion],
+      );
+      await client.query("UPDATE model_versions SET status = 'PUBLISHED' WHERE id = $1", [originalModelVersion]);
+      await client.query("UPDATE facilities SET model_version = $1 WHERE id = 'sfo-01'", [originalModelVersion]);
+      if (createdVersions.length) await client.query("DELETE FROM model_versions WHERE id = ANY($1::text[])", [createdVersions]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   const deniedAdmin = await request(users.get("VIEWER")!, "/api/admin/memberships");
   if (deniedAdmin.status !== 403) throw new Error("Viewer reached organization administration");
   const createMember = await request(adminId, "/api/admin/memberships", {
