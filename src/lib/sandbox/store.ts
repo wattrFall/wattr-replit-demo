@@ -8,9 +8,20 @@
  * moves. That is what makes the 60fps target reachable.
  */
 import { create } from "zustand";
-import { CATALOGUE, defaultParams } from "./catalogue";
+import { CATALOGUE, ZONE_CATALOGUE, defaultParams } from "./catalogue";
 import { checkConnection } from "./connections";
-import { DEFAULT_FLOOR, FLOOR_LIMITS, footprintCells, gridD, gridW, zoneAt } from "./geometry";
+import {
+  MAX_ZONES,
+  SITE,
+  ZONE_LIMITS,
+  footprintsOverlap,
+  freeZoneSpot,
+  zoneAccepts,
+  zoneAt,
+  zoneOfFootprint,
+  zoneRect,
+  zonesOverlap,
+} from "./geometry";
 import type { Telemetry } from "./model";
 import { runEpisode, type RunResult } from "./run";
 import { validateLayout, type ValidationResult } from "./validate";
@@ -18,11 +29,12 @@ import type {
   ComponentKind,
   Connection,
   ControlMode,
-  FloorSpec,
   GridCell,
   InteractionMode,
   SandboxItem,
   SandboxLayout,
+  ZoneKind,
+  ZoneSpec,
 } from "./types";
 
 /**
@@ -38,11 +50,19 @@ const rewindIds = () => {
   idCounter = 0;
 };
 
+/** Where a fresh site starts: a raised floor and a plant yard, side by side. */
+export const DEFAULT_ZONES: readonly ZoneSpec[] = [
+  { id: "zone-hall", name: "Raised floor", kind: "compute", x: 15, z: 12, w: 12, d: 8 },
+  { id: "zone-plant", name: "Plant yard", kind: "plant", x: 28, z: 12, w: 4, d: 8 },
+];
+
 export interface SandboxState {
-  floor: FloorSpec;
+  zones: ZoneSpec[];
   items: SandboxItem[];
   connections: Connection[];
   selectedId: string | null;
+  /** The zone being edited. Selecting a zone clears the equipment selection. */
+  selectedZoneId: string | null;
   mode: InteractionMode;
   controlMode: ControlMode;
   /** Last refusal message, shown then cleared by the UI. */
@@ -76,6 +96,7 @@ export interface SandboxState {
   activePresetId: string | null;
 
   select: (id: string | null) => void;
+  selectZone: (id: string | null) => void;
   setMode: (mode: InteractionMode) => void;
   setControlMode: (mode: ControlMode) => void;
   beginPlacing: (kind: ComponentKind) => void;
@@ -85,54 +106,103 @@ export interface SandboxState {
   connect: (toId: string) => void;
   disconnect: (connectionId: string) => void;
   setParam: (id: string, key: string, value: number) => void;
+  /** Add a zone of this kind at its default size, in the first clear space. */
+  addZone: (kind: ZoneKind) => void;
+  /**
+   * Rename, retype, move or resize a zone. Moving carries its equipment along.
+   * Refuses, naming what is in the way, rather than overlapping another zone or
+   * stranding equipment.
+   */
+  updateZone: (id: string, patch: Partial<Omit<ZoneSpec, "id">>) => void;
+  /** Delete an empty zone. Refuses while it still holds equipment. */
+  removeZone: (id: string) => void;
   /** `presetId` marks which preset the layout came from, for the picker. */
   loadLayout: (layout: SandboxLayout, presetId?: string | null) => void;
   reset: () => void;
   notify: (message: string | null) => void;
   publishSim: (inletC: Record<string, number>, telemetry: Telemetry) => void;
   resetView: () => void;
-  /** Resize one dimension of the site. Refuses if equipment would be stranded. */
-  setFloor: (patch: Partial<FloorSpec>) => void;
   /** Validate, and run both control modes if the design holds up. */
   runSimulation: () => void;
   closeResults: () => void;
 }
 
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(value)));
+
+/** "4 GPU racks and 1 CDU", for refusals that name what is in the way. */
+export function describeItems(items: readonly SandboxItem[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const label = CATALOGUE[item.kind].label;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const parts = [...counts].map(([label, n]) => `${n} ${label}${n > 1 ? "s" : ""}`);
+  if (parts.length <= 1) return parts[0] ?? "nothing";
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/** Equipment belonging to a zone: everything whose origin tile lies in it. */
+export function membersOf(items: readonly SandboxItem[], zone: ZoneSpec): SandboxItem[] {
+  return items.filter((item) => zoneAt([zone], item.cell) !== null);
+}
+
+/** "compute hall or cooling room", for refusals that name the right place. */
+function allowedZones(kind: ComponentKind): string {
+  const labels = CATALOGUE[kind].zones.map((zone) => ZONE_CATALOGUE[zone].label.toLowerCase());
+  return labels.length > 1 ? `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}` : labels[0];
+}
+
 /**
- * True when every cell of the footprint sits in the right zone and is free.
- *
- * Zone is checked per cell, not per origin: a two-tile chiller straddling the
- * walkway has its origin in the plant yard but half of itself outside it.
+ * Why equipment cannot go at `cell`, or null if it can: the footprint must sit
+ * wholly inside a zone that takes it, on clear tiles.
  */
-export function canPlaceAt(
-  items: SandboxItem[],
+export function placementRefusal(
+  items: readonly SandboxItem[],
+  zones: readonly ZoneSpec[],
   kind: ComponentKind,
   cell: GridCell,
-  floor: FloorSpec,
-): boolean {
-  const { w, d } = CATALOGUE[kind].footprint;
-  const wanted = CATALOGUE[kind].zone;
-  for (const c of footprintCells(kind, cell)) {
-    if (zoneAt(floor, c) !== wanted) return false;
+): string | null {
+  const entry = CATALOGUE[kind];
+  const { w, d } = entry.footprint;
+  const home = zoneAt(zones, cell);
+  if (!home) return `Place a ${entry.label} inside a zone. It belongs in a ${allowedZones(kind)}.`;
+  if (!zoneAccepts(home.kind, kind)) {
+    return `A ${entry.label} belongs in a ${allowedZones(kind)}, not a ${ZONE_CATALOGUE[home.kind].label.toLowerCase()}.`;
   }
+  if (!zoneOfFootprint(zones, kind, cell)) {
+    return `A ${entry.label} needs ${w} by ${d} tiles and would hang off ${home.name} here.`;
+  }
+  if (items.some((item) => footprintsOverlap(item.kind, item.cell, kind, cell))) {
+    return `That space is already occupied. A ${entry.label} needs ${w} by ${d} clear ${w * d === 1 ? "tile" : "tiles"}.`;
+  }
+  return null;
+}
 
-  for (const item of items) {
-    const f = CATALOGUE[item.kind].footprint;
-    const overlaps =
-      cell.x < item.cell.x + f.w &&
-      cell.x + w > item.cell.x &&
-      cell.z < item.cell.z + f.d &&
-      cell.z + d > item.cell.z;
-    if (overlaps) return false;
-  }
-  return true;
+/** True when the footprint sits wholly inside a zone that takes it, on clear tiles. */
+export function canPlaceAt(
+  items: readonly SandboxItem[],
+  zones: readonly ZoneSpec[],
+  kind: ComponentKind,
+  cell: GridCell,
+): boolean {
+  return placementRefusal(items, zones, kind, cell) === null;
+}
+
+/** The highest numeric suffix in use, so new ids never collide with loaded ones. */
+function highestId(layout: SandboxLayout): number {
+  const ids = [...layout.items, ...layout.connections, ...layout.zones].map((entity) => entity.id);
+  return ids.reduce((max, id) => {
+    const n = Number(id.split("-").pop());
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
 }
 
 export const useSandboxStore = create<SandboxState>((set, get) => ({
-  floor: DEFAULT_FLOOR,
+  zones: DEFAULT_ZONES.map((zone) => ({ ...zone })),
   items: [],
   connections: [],
   selectedId: null,
+  selectedZoneId: null,
   mode: { type: "idle" },
   controlMode: "baseline",
   notice: null,
@@ -148,66 +218,126 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   resetView: () => set((s) => ({ viewResetNonce: s.viewResetNonce + 1 })),
 
   runSimulation: () => {
-    const { items, connections, floor } = get();
-    const layout = { items, connections, floor };
+    const { items, connections, zones } = get();
+    const layout = { items, connections, zones };
     const findings = validateLayout(layout);
 
     // A run on an incoherent hall would produce authoritative-looking numbers
-    // that mean nothing, so errors stop it. Warnings do not.
+    // that mean nothing, so errors stop it. Warnings do not. Either way the run
+    // is a new action, so an earlier refusal no longer applies.
     if (!findings.ok) {
-      set({ runFindings: findings, showResults: true, lastRun: null });
+      set({ runFindings: findings, showResults: true, lastRun: null, notice: null });
       return;
     }
 
-    set({ runFindings: findings, lastRun: runEpisode(layout), showResults: true });
+    set({ runFindings: findings, lastRun: runEpisode(layout), showResults: true, notice: null });
   },
 
   closeResults: () => set({ showResults: false }),
 
-  setFloor: (patch) => {
-    const { floor, items } = get();
-    const next: FloorSpec = { ...floor, ...patch };
-    (Object.keys(FLOOR_LIMITS) as (keyof FloorSpec)[]).forEach((key) => {
-      const { min, max } = FLOOR_LIMITS[key];
-      next[key] = Math.round(Math.min(max, Math.max(min, next[key])));
+  addZone: (kind) => {
+    const { zones } = get();
+    const label = ZONE_CATALOGUE[kind].label;
+    if (zones.length >= MAX_ZONES) {
+      set({ notice: `A site can hold up to ${MAX_ZONES} zones.` });
+      return;
+    }
+    const spot = freeZoneSpot(zones, kind);
+    if (!spot) {
+      set({ notice: `There is no clear space on the site for another ${label.toLowerCase()}. Move or shrink a zone first.` });
+      return;
+    }
+    const count = zones.filter((zone) => zone.kind === kind).length + 1;
+    const zone: ZoneSpec = { id: nextId("zone"), name: `${label} ${count}`, kind, ...spot };
+    set({
+      zones: [...zones, zone],
+      selectedZoneId: zone.id,
+      selectedId: null,
+      mode: { type: "idle" },
+      notice: null,
+      activePresetId: null,
+      viewResetNonce: get().viewResetNonce + 1,
     });
+  },
 
-    // The plant yard begins where the hall ends, so widening the hall slides
-    // the yard along the grid. Its contents ride with it: resizing one zone
-    // must not tear up the other, which is what happens if the cells are left
-    // where they were.
-    const shift = next.hallW - floor.hallW;
-    const moved =
-      shift === 0
-        ? items
-        : items.map((item) =>
-            CATALOGUE[item.kind].zone === "plant"
-              ? { ...item, cell: { ...item.cell, x: item.cell.x + shift } }
-              : item,
-          );
+  updateZone: (id, patch) => {
+    const { zones, items } = get();
+    const current = zones.find((zone) => zone.id === id);
+    if (!current) return;
 
-    // What is left is genuine: a zone shrunk below what it holds. Refuse and
-    // name what is in the way, rather than deleting somebody's layout to
-    // satisfy a slider drag.
-    const stranded = moved.filter((item) =>
-      footprintCells(item.kind, item.cell).some(
-        (c) => zoneAt(next, c) !== CATALOGUE[item.kind].zone,
-      ),
-    );
-    if (stranded.length > 0) {
-      const labels = [...new Set(stranded.map((i) => CATALOGUE[i.kind].label))];
+    const next: ZoneSpec = {
+      ...current,
+      ...patch,
+      id,
+      name: patch.name !== undefined ? patch.name.slice(0, 40) : current.name,
+    };
+    // Size first, capped so the zone still fits from where it stands; then
+    // position, so a resize never quietly drags the zone somewhere else.
+    next.w = clamp(next.w, ZONE_LIMITS.w.min, Math.min(ZONE_LIMITS.w.max, SITE.w - next.x));
+    next.d = clamp(next.d, ZONE_LIMITS.d.min, Math.min(ZONE_LIMITS.d.max, SITE.d - next.z));
+    next.x = clamp(next.x, 0, SITE.w - next.w);
+    next.z = clamp(next.z, 0, SITE.d - next.d);
+
+    const blocker = zones.find((zone) => zone.id !== id && zonesOverlap(zoneRect(zone), zoneRect(next)));
+    if (blocker) {
+      set({ notice: `Zones cannot overlap. ${next.name || current.name} would run into ${blocker.name}.` });
+      return;
+    }
+
+    // Equipment rides with its zone, so a move never tears a layout apart.
+    const dx = next.x - current.x;
+    const dz = next.z - current.z;
+    const moved = membersOf(items, current).map((item) => ({
+      ...item,
+      cell: { x: item.cell.x + dx, z: item.cell.z + dz },
+    }));
+
+    const unwelcome = moved.filter((item) => !zoneAccepts(next.kind, item.kind));
+    if (unwelcome.length > 0) {
       set({
-        notice: `Cannot resize: ${stranded.length} item${stranded.length > 1 ? "s" : ""} would not fit (${labels.join(", ")}). Move or delete them first.`,
+        notice: `Cannot make ${current.name} a ${ZONE_CATALOGUE[next.kind].label.toLowerCase()}: ${describeItems(unwelcome)} cannot go there. Move or delete them first.`,
       });
       return;
     }
 
-    set({ floor: next, items: moved, notice: null, viewResetNonce: get().viewResetNonce + 1 });
+    // A zone shrunk below what it holds. Refuse and name what is in the way,
+    // rather than deleting somebody's layout to satisfy a slider drag.
+    const stranded = moved.filter((item) => zoneOfFootprint([next], item.kind, item.cell) === null);
+    if (stranded.length > 0) {
+      set({ notice: `Cannot resize ${current.name}: ${describeItems(stranded)} would not fit. Move or delete them first.` });
+      return;
+    }
+
+    const movedById = new Map(moved.map((item) => [item.id, item]));
+    set({
+      zones: zones.map((zone) => (zone.id === id ? next : zone)),
+      items: items.map((item) => movedById.get(item.id) ?? item),
+      notice: null,
+      activePresetId: null,
+    });
+  },
+
+  removeZone: (id) => {
+    const { zones, items } = get();
+    const zone = zones.find((candidate) => candidate.id === id);
+    if (!zone) return;
+    const members = membersOf(items, zone);
+    if (members.length > 0) {
+      set({ notice: `${zone.name} still holds ${describeItems(members)}. Move or delete them before removing the zone.` });
+      return;
+    }
+    set({
+      zones: zones.filter((candidate) => candidate.id !== id),
+      selectedZoneId: null,
+      notice: null,
+      activePresetId: null,
+    });
   },
 
   // A refusal notice is transient: any further action clears it, so a stale
   // reason never sits under an unrelated interaction.
-  select: (id) => set({ selectedId: id, notice: null }),
+  select: (id) => set({ selectedId: id, selectedZoneId: null, notice: null }),
+  selectZone: (id) => set({ selectedZoneId: id, selectedId: null, notice: null }),
   setMode: (mode) => set({ mode, notice: null }),
   setControlMode: (controlMode) => set({ controlMode }),
   notify: (notice) => set({ notice }),
@@ -217,28 +347,15 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       // Clicking the active tool again puts the pointer back to selection.
       mode: s.mode.type === "placing" && s.mode.kind === kind ? { type: "idle" } : { type: "placing", kind },
       selectedId: null,
+      selectedZoneId: null,
       notice: null,
     })),
 
   place: (kind, cell) => {
-    const { items, floor } = get();
-    if (!canPlaceAt(items, kind, cell, floor)) {
-      const entry = CATALOGUE[kind];
-      const { w, d } = entry.footprint;
-      const cells = footprintCells(kind, cell);
-      const zones = cells.map((c) => zoneAt(floor, c));
-      const wrongZone = zones.some((z) => z !== null && z !== entry.zone);
-      const offSite = zones.some((z) => z === null);
-
-      set({
-        notice: wrongZone
-          ? entry.zone === "plant"
-            ? `A ${entry.label} belongs in the plant yard, not on the raised floor.`
-            : `A ${entry.label} belongs on the raised floor, not in the plant yard.`
-          : offSite
-            ? `A ${entry.label} needs ${w} by ${d} tiles and would hang off the ${entry.zone === "plant" ? "plant yard" : "raised floor"} here.`
-            : `That space is already occupied. A ${entry.label} needs ${w} by ${d} clear ${w * d === 1 ? "tile" : "tiles"}.`,
-      });
+    const { items, zones } = get();
+    const refusal = placementRefusal(items, zones, kind, cell);
+    if (refusal) {
+      set({ notice: refusal });
       return;
     }
     const item: SandboxItem = { id: nextId(kind), kind, cell, params: defaultParams(kind) };
@@ -269,11 +386,15 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
       mode: { type: "idle" },
       selectedId: mode.fromId,
       notice: null,
+      activePresetId: null,
     });
   },
 
   disconnect: (connectionId) =>
-    set((s) => ({ connections: s.connections.filter((c) => c.id !== connectionId) })),
+    set((s) => ({
+      connections: s.connections.filter((c) => c.id !== connectionId),
+      activePresetId: null,
+    })),
 
   remove: (id) =>
     set((s) => ({
@@ -298,18 +419,15 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
     })),
 
   loadLayout: (layout, presetId = null) => {
-    // The layout arrives with its own ids; anything placed afterwards numbers
+    // The layout arrives with its own ids; anything created afterwards numbers
     // from the highest it contains, so nothing can collide with it.
-    const highest = layout.items.reduce((max, item) => {
-      const n = Number(item.id.split("-").pop());
-      return Number.isFinite(n) ? Math.max(max, n) : max;
-    }, 0);
-    idCounter = highest;
+    idCounter = highestId(layout);
     set({
-      floor: { ...layout.floor },
-      items: layout.items.map((i) => ({ ...i, params: { ...i.params } })),
+      zones: layout.zones.map((zone) => ({ ...zone })),
+      items: layout.items.map((i) => ({ ...i, cell: { ...i.cell }, params: { ...i.params } })),
       connections: layout.connections.map((c) => ({ ...c })),
       selectedId: null,
+      selectedZoneId: null,
       mode: { type: "idle" },
       notice: null,
       activePresetId: presetId,
@@ -322,10 +440,11 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   reset: () => {
     rewindIds();
     set({
-      floor: DEFAULT_FLOOR,
+      zones: DEFAULT_ZONES.map((zone) => ({ ...zone })),
       items: [],
       connections: [],
       selectedId: null,
+      selectedZoneId: null,
       mode: { type: "idle" },
       controlMode: "baseline",
       notice: null,

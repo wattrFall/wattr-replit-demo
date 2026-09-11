@@ -10,16 +10,33 @@
 export type ComponentKind = "rack" | "crac" | "cdu" | "chiller" | "sensor";
 
 /**
- * The two areas of the site, which take different equipment.
- *
- * The hall is the raised floor: racks and the cooling that serves them
- * directly. The plant yard is outside it, where heat is rejected. Keeping them
- * apart is what makes the topology rules legible on the floor rather than only
- * in the connection refusals.
+ * What an area of the site is for. The kind gates what can be placed in it, so
+ * a layout stays legible: racks only ever sit in a compute hall and chillers
+ * only in a plant area, and a refusal names the right place. These mirror the
+ * Compute, Cooling and Plant zones of the Unity Forge editor.
  */
-export type Zone = "hall" | "plant";
+export type ZoneKind = "compute" | "cooling" | "plant";
 
-/** A cell on the floor plan. Integer coordinates spanning hall, gap and plant. */
+/**
+ * A named, positionable, resizable area of the site, in tiles.
+ *
+ * Zones are axis-aligned and never overlap. Equipment belongs to the zone it
+ * sits in and moves with it, and a zone cannot be shrunk, retyped or deleted in
+ * a way that would strand what it holds.
+ */
+export interface ZoneSpec {
+  id: string;
+  name: string;
+  kind: ZoneKind;
+  /** Top-left tile of the zone on the site grid. */
+  x: number;
+  z: number;
+  /** Size in tiles. */
+  w: number;
+  d: number;
+}
+
+/** A cell on the site grid. */
 export interface GridCell {
   x: number;
   z: number;
@@ -68,29 +85,16 @@ export type InteractionMode =
   | { type: "placing"; kind: ComponentKind }
   | { type: "connecting"; fromId: string };
 
-/**
- * Floor dimensions, in tiles.
- *
- * The plant yard sits to the +x side of the hall with a walkway between them,
- * so a single cell coordinate space covers both and the gap columns simply
- * take nothing.
- */
-export interface FloorSpec {
-  hallW: number;
-  hallD: number;
-  plantW: number;
-}
-
 /** The full authored layout — everything needed to reproduce a scene. */
 export interface SandboxLayout {
   items: SandboxItem[];
   connections: Connection[];
-  floor: FloorSpec;
+  zones: ZoneSpec[];
 }
 
 /**
- * What the thermal model reads: equipment and how it is wired. Floor and zone
- * geometry only place things on screen, so the kernel never depends on them.
+ * What the thermal model reads: equipment and how it is wired. Zone geometry
+ * only places things on screen, so the kernel never depends on it.
  */
 export type SimLayout = Pick<SandboxLayout, "items" | "connections">;
 

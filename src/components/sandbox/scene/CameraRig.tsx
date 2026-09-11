@@ -4,18 +4,19 @@ import { OrbitControls } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import * as THREE from "three";
 import { MOUSE, TOUCH } from "three";
-import { floorD, floorW } from "@/lib/sandbox/geometry";
+import { SITE, boundsToWorld, zoneBounds } from "@/lib/sandbox/geometry";
+import { CELL } from "@/lib/sandbox/tokens";
 import { useSandboxStore } from "@/lib/sandbox/store";
 
-/** The direction the camera looks from. Distance is irrelevant to an ortho camera. */
-const HOME_POSITION: [number, number, number] = [14, 12, 14];
+/** Where the camera sits relative to what it frames. Distance is irrelevant to an ortho camera. */
+const HOME_OFFSET: [number, number, number] = [14, 12, 14];
 
-/** Fraction of the shorter canvas axis the site is allowed to fill. */
+/** Fraction of the shorter canvas axis the framed zones are allowed to fill. */
 const FIT_MARGIN = 0.82;
 
 /**
- * How far past the floor edge the orbit target may be pushed. Enough to inspect
- * a corner of a large hall, not enough to lose the room off-screen.
+ * How far past the site edge the orbit target may be pushed. Enough to inspect
+ * a corner of the site, not enough to lose it off-screen.
  */
 const PAN_MARGIN = 3;
 
@@ -41,28 +42,35 @@ export function CameraRig({
   const camera = useThree((state) => state.camera);
   const size = useThree((state) => state.size);
   const viewResetNonce = useSandboxStore((s) => s.viewResetNonce);
-  const floor = useSandboxStore((s) => s.floor);
 
   /**
-   * Zoom that fits the whole site, rather than a constant tuned for one floor
-   * size. A fixed zoom meant that widening the hall pushed the plant yard off
-   * the canvas — the resize control could put equipment somewhere you could not
-   * see or click.
-   *
-   * r3f gives an orthographic camera a frustum in canvas pixels, so the visible
-   * world span is (canvas axis) / zoom. Fitting the site's diagonal covers it
-   * from any orbit angle, so the framing does not break when the camera turns.
+   * What to frame: every zone, read when a reframe is requested rather than on
+   * each edit. Dragging a zone's size slider should not swing the camera around
+   * under the pointer; Recentre, loading a layout and adding a zone reframe.
    */
-  const fitZoom = useMemo(() => {
-    const w = floorW(floor);
-    const d = floorD(floor);
-    const diagonal = Math.sqrt(w * w + d * d);
-    const shorterAxis = Math.min(size.width, size.height);
-    if (!shorterAxis || !diagonal) return 58;
-    return (shorterAxis * FIT_MARGIN) / diagonal;
-  }, [floor, size.width, size.height]);
+  const framing = useMemo(
+    () => boundsToWorld(zoneBounds(useSandboxStore.getState().zones)),
+    [viewResetNonce],
+  );
 
-  // Return to the opening framing whenever Recentre (or Reset) asks.
+  /**
+   * Zoom that fits the framed zones, rather than a constant tuned for one
+   * layout. r3f gives an orthographic camera a frustum in canvas pixels, so the
+   * visible world span is (canvas axis) / zoom. Fitting the diagonal covers the
+   * zones from any orbit angle, so the framing survives the camera turning.
+   */
+  const { fitZoom, siteZoom } = useMemo(() => {
+    const shorterAxis = Math.min(size.width, size.height);
+    const diagonal = Math.hypot(framing.w, framing.d);
+    const siteDiagonal = Math.hypot(SITE.w * CELL, SITE.d * CELL);
+    if (!shorterAxis || !diagonal) return { fitZoom: 58, siteZoom: 20 };
+    return {
+      fitZoom: (shorterAxis * FIT_MARGIN) / diagonal,
+      siteZoom: (shorterAxis * FIT_MARGIN) / siteDiagonal,
+    };
+  }, [framing, size.width, size.height]);
+
+  // Return to the framing whenever Recentre, Reset, a load or a new zone asks.
   useEffect(() => {
     const c = controls.current;
     if (!c) return;
@@ -79,12 +87,12 @@ export function CameraRig({
     // Recentre ended up landing near where it started.
     c.update();
 
-    camera.position.set(...HOME_POSITION);
+    camera.position.set(framing.x + HOME_OFFSET[0], HOME_OFFSET[1], framing.z + HOME_OFFSET[2]);
     if ("zoom" in camera) {
       (camera as THREE.OrthographicCamera).zoom = fitZoom;
       camera.updateProjectionMatrix();
     }
-    c.target.set(0, 0, 0);
+    c.target.set(framing.x, 0, framing.z);
     c.update();
 
     c.enableDamping = damped;
@@ -92,18 +100,18 @@ export function CameraRig({
     // renders, and picking reads matrixWorld — without this the next click
     // would still be aimed through the old pose.
     camera.updateMatrixWorld();
-  }, [viewResetNonce, camera, fitZoom]);
+  }, [viewResetNonce, camera, fitZoom, framing]);
 
   /**
-   * Keep the orbit target over the floor. OrbitControls moves the camera and
+   * Keep the orbit target over the site. OrbitControls moves the camera and
    * the target together while panning, so the correction has to be applied to
    * both or the camera lurches.
    */
   const clampTarget = () => {
     const c = controls.current;
     if (!c) return;
-    const limitX = floorW(floor) / 2 + PAN_MARGIN;
-    const limitZ = floorD(floor) / 2 + PAN_MARGIN;
+    const limitX = (SITE.w * CELL) / 2 + PAN_MARGIN;
+    const limitZ = (SITE.d * CELL) / 2 + PAN_MARGIN;
     const clampedX = THREE.MathUtils.clamp(c.target.x, -limitX, limitX);
     const clampedZ = THREE.MathUtils.clamp(c.target.z, -limitZ, limitZ);
     const clampedY = THREE.MathUtils.clamp(c.target.y, 0, 4);
@@ -124,7 +132,7 @@ export function CameraRig({
       onChange={clampTarget}
       // Pan stays available even with a tool armed: it is on a different button
       // from click-to-act, so it cannot be confused with placing, and reaching a
-      // far corner of a large floor mid-build is exactly when it is wanted.
+      // far corner of a large site mid-build is exactly when it is wanted.
       enablePan
       // Right-drag pans; two-finger drag does the same on a trackpad. Left stays
       // free for orbit so it never competes with click-to-act.
@@ -133,9 +141,9 @@ export function CameraRig({
       // Keep the camera above the floor plane and out of extreme angles.
       minPolarAngle={Math.PI / 6}
       maxPolarAngle={Math.PI / 2.35}
-      // Relative to the fitted framing, so the limits mean the same thing on a
-      // small site and a large one.
-      minZoom={fitZoom * 0.5}
+      // Zoom out far enough to see the whole site, so a zone can be moved to
+      // any part of it, and in relative to the framed zones.
+      minZoom={Math.min(fitZoom * 0.5, siteZoom * 0.9)}
       maxZoom={fitZoom * 2.4}
       // Orbit shares the left button with click-to-act, so an armed tool takes
       // it: rotating mid-gesture moves the scene under the cursor and the click

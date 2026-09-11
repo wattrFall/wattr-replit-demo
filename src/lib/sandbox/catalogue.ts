@@ -8,7 +8,7 @@
  * headroom to make things worse, and headroom for the controller to make them
  * better.
  */
-import type { ComponentKind, ParamSpec, Zone } from "./types";
+import type { ComponentKind, ParamSpec, ZoneKind } from "./types";
 
 export interface CatalogueEntry {
   kind: ComponentKind;
@@ -16,10 +16,11 @@ export interface CatalogueEntry {
   /** One line, shown in the palette and read out by screen readers. */
   blurb: string;
   /**
-   * Where this equipment belongs. Racks and the cooling that serves them
-   * directly live on the raised floor; heat rejection lives outside it.
+   * The kinds of zone this equipment may be placed in. Racks and sensors live
+   * on a compute hall's raised floor, the units that cool them can also sit in
+   * a separate cooling room, and heat rejection lives in a plant area.
    */
-  zone: Zone;
+  zones: readonly ZoneKind[];
   /** Footprint in grid cells. */
   footprint: { w: number; d: number };
   /** Height in world units, for the 3D box. */
@@ -34,7 +35,7 @@ export interface CatalogueEntry {
 export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
   rack: {
     kind: "rack",
-    zone: "hall",
+    zones: ["compute"],
     label: "GPU rack",
     blurb: "A cabinet of accelerators. The heat source.",
     footprint: { w: 1, d: 1 },
@@ -87,7 +88,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   crac: {
     kind: "crac",
-    zone: "hall",
+    zones: ["compute", "cooling"],
     label: "CRAC unit",
     blurb: "Computer-room air handler. Moves cold air to the racks.",
     footprint: { w: 1, d: 1 },
@@ -142,7 +143,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   cdu: {
     kind: "cdu",
-    zone: "hall",
+    zones: ["compute", "cooling"],
     label: "CDU",
     blurb: "Coolant distribution unit for direct-to-chip liquid loops.",
     footprint: { w: 1, d: 1 },
@@ -195,7 +196,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   chiller: {
     kind: "chiller",
-    zone: "plant",
+    zones: ["plant"],
     label: "Chiller",
     blurb: "Rejects the hall's heat to outside. The big electrical load.",
     footprint: { w: 2, d: 1 },
@@ -240,7 +241,7 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
   sensor: {
     kind: "sensor",
-    zone: "hall",
+    zones: ["compute"],
     label: "Sensor",
     blurb: "Reports inlet temperature from a point on the floor.",
     footprint: { w: 1, d: 1 },
@@ -284,6 +285,42 @@ export const CATALOGUE: Record<ComponentKind, CatalogueEntry> = {
 
 /** Palette order — also the order the number-key shortcuts follow. */
 export const PALETTE_ORDER: ComponentKind[] = ["rack", "crac", "cdu", "chiller", "sensor"];
+
+export interface ZoneCatalogueEntry {
+  label: string;
+  /** Short label for the add buttons. */
+  short: string;
+  /** What belongs here, shown in the zone editor. */
+  hint: string;
+  /** Kerb and label colour, so each kind reads at a glance. */
+  accent: string;
+  /** Size a new zone of this kind starts at, in tiles. */
+  defaultSize: { w: number; d: number };
+}
+
+export const ZONE_CATALOGUE: Record<ZoneKind, ZoneCatalogueEntry> = {
+  compute: {
+    label: "Compute hall",
+    short: "Hall",
+    hint: "Raised floor for racks and sensors, plus the CRAC units and CDUs that serve them.",
+    accent: "#70A0D0",
+    defaultSize: { w: 12, d: 8 },
+  },
+  cooling: {
+    label: "Cooling room",
+    short: "Cooling",
+    hint: "CRAC units and CDUs kept off the raised floor.",
+    accent: "#2DD4BF",
+    defaultSize: { w: 6, d: 8 },
+  },
+  plant: {
+    label: "Plant area",
+    short: "Plant",
+    hint: "Outside the hall, for heat rejection. Chillers go here.",
+    accent: "#F59E0B",
+    defaultSize: { w: 5, d: 8 },
+  },
+};
 
 /** Build a fresh param map from the catalogue defaults. */
 export function defaultParams(kind: ComponentKind): Record<string, number> {

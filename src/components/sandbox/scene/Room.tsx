@@ -1,115 +1,130 @@
 import { useEffect, useMemo } from "react";
 import { Text } from "@react-three/drei";
 import * as THREE from "three";
+import { ZONE_CATALOGUE } from "@/lib/sandbox/catalogue";
 import { CELL, SBX } from "@/lib/sandbox/tokens";
-import { GAP_COLS, floorD, floorW, gridD, gridW } from "@/lib/sandbox/geometry";
+import { SITE, boundsToWorld, zoneRect } from "@/lib/sandbox/geometry";
 import { useSandboxStore } from "@/lib/sandbox/store";
-import type { FloorSpec } from "@/lib/sandbox/types";
+import type { ZoneSpec } from "@/lib/sandbox/types";
 
-/** One zone slab, its tile grid, and its label. */
-function ZoneSlab({
-  x0,
-  cols,
-  rows,
-  colour,
-  label,
-  originX,
-  originZ,
-}: {
-  x0: number;
-  cols: number;
-  rows: number;
-  colour: string;
-  label: string;
-  originX: number;
-  originZ: number;
-}) {
-  const w = cols * CELL;
-  const d = rows * CELL;
-
-  /**
-   * Tile lines as a single LineSegments buffer rather than one mesh per tile:
-   * one draw call instead of hundreds, and it stays that way as the floor grows.
-   */
+/**
+ * Tile lines as a single LineSegments buffer rather than one mesh per tile:
+ * one draw call instead of hundreds, and it stays that way as zones grow.
+ * Drawn from the rectangle's top-left corner.
+ */
+function useTileGrid(cols: number, rows: number, every = 1) {
   const grid = useMemo(() => {
+    const w = cols * CELL;
+    const d = rows * CELL;
     const points: number[] = [];
-    for (let i = 0; i <= cols; i++) points.push(i * CELL, 0, 0, i * CELL, 0, d);
-    for (let j = 0; j <= rows; j++) points.push(0, 0, j * CELL, w, 0, j * CELL);
-    const g = new THREE.BufferGeometry();
-    g.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-    return g;
-  }, [cols, rows, w, d]);
-
+    for (let i = 0; i <= cols; i += every) points.push(i * CELL, 0, 0, i * CELL, 0, d);
+    for (let j = 0; j <= rows; j += every) points.push(0, 0, j * CELL, w, 0, j * CELL);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+    return geometry;
+  }, [cols, rows, every]);
   useEffect(() => () => grid.dispose(), [grid]);
+  return grid;
+}
+
+/**
+ * The open site around the zones: a darker ground with a coarse grid, so there
+ * is visibly somewhere to move a zone or add another.
+ */
+function SiteGround() {
+  const grid = useTileGrid(SITE.w, SITE.d, 4);
+  const w = SITE.w * CELL;
+  const d = SITE.d * CELL;
+  return (
+    <group>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.03, 0]}>
+        <planeGeometry args={[w, d]} />
+        <meshStandardMaterial color={SBX.surface0} roughness={1} metalness={0} />
+      </mesh>
+      <lineSegments geometry={grid} position={[-w / 2, -0.02, -d / 2]}>
+        <lineBasicMaterial color={SBX.gridLine} transparent opacity={0.2} />
+      </lineSegments>
+    </group>
+  );
+}
+
+/** One zone: its slab, tile grid, kerb in the zone kind's colour, and label. */
+function ZoneSlab({ zone, selected }: { zone: ZoneSpec; selected: boolean }) {
+  const { x, z, w, d } = boundsToWorld(zoneRect(zone));
+  const meta = ZONE_CATALOGUE[zone.kind];
+  const grid = useTileGrid(zone.w, zone.d);
+  const kerb = useMemo(() => new THREE.EdgesGeometry(new THREE.BoxGeometry(w, 0.001, d)), [w, d]);
+  useEffect(() => () => kerb.dispose(), [kerb]);
+  // A faint wash of the kind's colour, so a plant area never reads as a hall.
+  const slabColour = useMemo(
+    () => `#${new THREE.Color(SBX.surface1).lerp(new THREE.Color(meta.accent), 0.07).getHexString()}`,
+    [meta.accent],
+  );
 
   return (
-    <group position={[originX + x0 * CELL, 0, originZ]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[w / 2, -0.01, d / 2]}>
+    <group position={[x, 0, z]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
         <planeGeometry args={[w, d]} />
-        <meshStandardMaterial color={colour} roughness={0.95} metalness={0} />
+        <meshStandardMaterial color={slabColour} roughness={0.95} metalness={0} />
       </mesh>
 
-      <lineSegments geometry={grid} position={[0, 0.002, 0]}>
+      <lineSegments geometry={grid} position={[-w / 2, 0.002, -d / 2]}>
         <lineBasicMaterial color={SBX.gridLine} transparent opacity={0.55} />
       </lineSegments>
 
       {/* Kerb, brighter than the interior tiling, so each zone reads as its own slab. */}
-      <lineSegments position={[w / 2, 0.004, d / 2]}>
-        <edgesGeometry args={[new THREE.BoxGeometry(w, 0.001, d)]} />
-        <lineBasicMaterial color={SBX.gridLineMajor} transparent opacity={0.9} />
+      <lineSegments geometry={kerb} position={[0, 0.004, 0]}>
+        <lineBasicMaterial color={selected ? SBX.primaryBright : meta.accent} transparent opacity={selected ? 1 : 0.5} />
       </lineSegments>
 
+      {/* Corner marks on the zone being edited. */}
+      {selected &&
+        [
+          [-w / 2, -d / 2],
+          [w / 2, -d / 2],
+          [-w / 2, d / 2],
+          [w / 2, d / 2],
+        ].map(([cx, cz]) => (
+          <mesh key={`${cx}:${cz}`} rotation={[-Math.PI / 2, 0, 0]} position={[cx, 0.006, cz]}>
+            <planeGeometry args={[0.28, 0.28]} />
+            <meshBasicMaterial color={SBX.primaryBright} />
+          </mesh>
+        ))}
+
       <Text
-        position={[w / 2, 0.02, -0.45]}
+        position={[0, 0.02, -d / 2 - 0.45]}
         rotation={[-Math.PI / 2, 0, 0]}
         fontSize={0.34}
-        color={SBX.primary}
+        color={meta.accent}
         anchorX="center"
         anchorY="middle"
-        fillOpacity={0.55}
+        fillOpacity={selected ? 0.95 : 0.6}
         letterSpacing={0.18}
+        maxWidth={Math.max(2, w)}
       >
-        {label}
+        {zone.name.toUpperCase()}
       </Text>
     </group>
   );
 }
 
 /**
- * The site: a raised floor for racks and the cooling that serves them, and a
- * plant yard for heat rejection, with a walkway between.
+ * The site: its open ground, and every zone on it — compute halls, cooling
+ * rooms and plant areas.
  *
- * Drawing them as two separate slabs is what makes the placement rule visible
- * before it is enforced — you can see where a chiller is meant to go.
+ * Drawing each zone as its own tinted slab is what makes the placement rules
+ * visible before they are enforced: you can see where a chiller is meant to go.
  */
 export function Room() {
-  const floor = useSandboxStore((s) => s.floor) as FloorSpec;
-
-  // Both slabs are positioned from the site's top-left corner so the whole
-  // site, not the hall alone, is centred on the origin.
-  const originX = -floorW(floor) / 2;
-  const originZ = -floorD(floor) / 2;
+  const zones = useSandboxStore((s) => s.zones);
+  const selectedZoneId = useSandboxStore((s) => s.selectedZoneId);
 
   return (
     <group>
-      <ZoneSlab
-        x0={0}
-        cols={floor.hallW}
-        rows={gridD(floor)}
-        colour={SBX.surface1}
-        label="RAISED FLOOR"
-        originX={originX}
-        originZ={originZ}
-      />
-      <ZoneSlab
-        x0={floor.hallW + GAP_COLS}
-        cols={gridW(floor) - floor.hallW - GAP_COLS}
-        rows={gridD(floor)}
-        colour={SBX.surface2}
-        label="PLANT YARD"
-        originX={originX}
-        originZ={originZ}
-      />
+      <SiteGround />
+      {zones.map((zone) => (
+        <ZoneSlab key={zone.id} zone={zone} selected={zone.id === selectedZoneId} />
+      ))}
     </group>
   );
 }

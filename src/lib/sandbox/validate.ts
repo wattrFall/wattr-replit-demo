@@ -11,6 +11,7 @@
  *
  * Pure functions over the layout: no store, no rendering.
  */
+import { footprintsOverlap, zoneAccepts, zoneOfFootprint, zoneRect, zonesOverlap } from "./geometry";
 import { rackHeatKw } from "./model";
 import type { SandboxItem, SandboxLayout } from "./types";
 
@@ -32,7 +33,7 @@ const isCooling = (item: SandboxItem) => item.kind === "crac" || item.kind === "
 
 export function validateLayout(layout: SandboxLayout): ValidationResult {
   const findings: Finding[] = [];
-  const { items, connections } = layout;
+  const { items, connections, zones } = layout;
 
   const racks = items.filter((i) => i.kind === "rack");
   const coolers = items.filter(isCooling);
@@ -42,7 +43,45 @@ export function validateLayout(layout: SandboxLayout): ValidationResult {
   const feeds = (fromId: string, toId: string) =>
     connections.some((c) => c.fromId === fromId && c.toId === toId);
 
-  // --- errors -------------------------------------------------------------
+  // --- errors: the site itself --------------------------------------------
+  // The editor never lets these happen, but a layout can also arrive from a
+  // saved build, so the checks stand on their own.
+  for (let i = 0; i < zones.length; i++) {
+    for (let j = i + 1; j < zones.length; j++) {
+      if (zonesOverlap(zoneRect(zones[i]), zoneRect(zones[j]))) {
+        findings.push({
+          severity: "error",
+          message: `${zones[i].name} and ${zones[j].name} overlap. Zones cannot share tiles.`,
+          itemIds: [],
+        });
+      }
+    }
+  }
+
+  const homeless = items.filter((item) => {
+    const zone = zoneOfFootprint(zones, item.kind, item.cell);
+    return !zone || !zoneAccepts(zone.kind, item.kind);
+  });
+  if (homeless.length > 0) {
+    findings.push({
+      severity: "error",
+      message: `${homeless.length} item${homeless.length > 1 ? "s sit" : " sits"} outside a zone that can hold ${homeless.length > 1 ? "them" : "it"}. Racks and sensors go in a compute hall, CRAC units and CDUs in a compute hall or cooling room, and chillers in a plant area.`,
+      itemIds: homeless.map((i) => i.id),
+    });
+  }
+
+  const clashing = items.filter((item, index) =>
+    items.some((other, otherIndex) => otherIndex !== index && footprintsOverlap(item.kind, item.cell, other.kind, other.cell)),
+  );
+  if (clashing.length > 0) {
+    findings.push({
+      severity: "error",
+      message: `${clashing.length} items share tiles with other equipment.`,
+      itemIds: clashing.map((i) => i.id),
+    });
+  }
+
+  // --- errors: the cooling design -----------------------------------------
   if (racks.length === 0) {
     findings.push({
       severity: "error",

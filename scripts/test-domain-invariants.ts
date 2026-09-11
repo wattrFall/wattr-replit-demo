@@ -140,4 +140,76 @@ assert(selection.upstream.some((node) => node.id === "B02"));
 assert(selection.downstream.some((node) => node.id === "chiller-01"));
 assert.deepEqual(selection.impact.map((node) => node.id).sort(), ["A01", "A02", "B01", "B02"]);
 
-console.log("Domain invariants, topology, bounds, lag, offline equipment, reset, comparison, and graph checks passed.");
+// Zones: placement follows each zone's kind, and zone edits refuse rather than
+// overlap another zone or strand equipment.
+const { canPlaceAt, placementRefusal, useSandboxStore } = await import("../src/lib/sandbox/store");
+const { PRESETS } = await import("../src/lib/sandbox/presets");
+const { validateLayout } = await import("../src/lib/sandbox/validate");
+const { SITE, zoneOfFootprint, zoneRect, zonesOverlap } = await import("../src/lib/sandbox/geometry");
+
+for (const preset of PRESETS) {
+  const result = validateLayout(preset.layout);
+  assert(result.ok, `${preset.name} must pass design checks: ${result.errors.map((finding) => finding.message).join("; ")}`);
+  for (const item of preset.layout.items) {
+    assert(zoneOfFootprint(preset.layout.zones, item.kind, item.cell), `${preset.name}: ${item.id} must sit inside a zone`);
+  }
+}
+
+const sandbox = () => useSandboxStore.getState();
+sandbox().loadLayout(PRESETS[0].layout, PRESETS[0].id);
+const [hall, plant] = sandbox().zones;
+const firstRack = sandbox().items.find((item) => item.kind === "rack")!;
+const firstChiller = sandbox().items.find((item) => item.kind === "chiller")!;
+const openHallTile = { x: hall.x, z: hall.z };
+const openPlantTile = { x: plant.x, z: plant.z + plant.d - 1 };
+
+assert.equal(canPlaceAt(sandbox().items, sandbox().zones, "rack", openHallTile), true, "a rack fits an open compute hall tile");
+assert.equal(canPlaceAt(sandbox().items, sandbox().zones, "crac", openHallTile), true, "a CRAC unit fits a compute hall");
+assert.match(placementRefusal(sandbox().items, sandbox().zones, "rack", openPlantTile) ?? "", /compute hall, not a plant area/);
+assert.match(placementRefusal(sandbox().items, sandbox().zones, "chiller", openHallTile) ?? "", /plant area, not a compute hall/);
+assert.match(placementRefusal(sandbox().items, sandbox().zones, "rack", { x: 0, z: 0 }) ?? "", /inside a zone/);
+assert.match(placementRefusal(sandbox().items, sandbox().zones, "rack", firstRack.cell) ?? "", /already occupied/);
+assert.match(
+  placementRefusal(sandbox().items, sandbox().zones, "chiller", { x: plant.x + plant.w - 1, z: plant.z + plant.d - 1 }) ?? "",
+  /hang off/,
+  "a two-tile chiller at a plant area's edge must be refused",
+);
+
+sandbox().updateZone(hall.id, { z: hall.z - 2 });
+assert.equal(sandbox().zones[0].z, hall.z - 2, "a zone moves");
+assert.equal(sandbox().items.find((item) => item.id === firstRack.id)?.cell.z, firstRack.cell.z - 2, "equipment moves with its zone");
+assert.deepEqual(sandbox().items.find((item) => item.id === firstChiller.id)?.cell, firstChiller.cell, "other zones' equipment stays put");
+
+sandbox().updateZone(plant.id, { x: hall.x + 1 });
+assert.match(sandbox().notice ?? "", /cannot overlap/);
+assert.equal(sandbox().zones[1].x, plant.x, "an overlapping move is refused");
+
+sandbox().updateZone(hall.id, { w: 3 });
+assert.match(sandbox().notice ?? "", /Cannot resize Raised floor: .*GPU rack/);
+assert.equal(sandbox().zones[0].w, hall.w, "a resize that strands equipment is refused");
+
+sandbox().updateZone(hall.id, { kind: "plant" });
+assert.match(sandbox().notice ?? "", /Cannot make Raised floor a plant area/);
+assert.equal(sandbox().zones[0].kind, "compute", "a retype that strands equipment is refused");
+
+sandbox().removeZone(plant.id);
+assert.match(sandbox().notice ?? "", /Plant yard still holds 1 Chiller/);
+assert.equal(sandbox().zones.length, 2, "a zone holding equipment is not deleted");
+
+sandbox().addZone("cooling");
+const added = sandbox().zones[2];
+assert.equal(added.kind, "cooling");
+assert.equal(sandbox().selectedZoneId, added.id, "a new zone is selected for editing");
+assert(added.x >= 0 && added.z >= 0 && added.x + added.w <= SITE.w && added.z + added.d <= SITE.d, "a new zone fits the site");
+assert(sandbox().zones.slice(0, 2).every((zone) => !zonesOverlap(zoneRect(zone), zoneRect(added))), "a new zone overlaps nothing");
+sandbox().removeZone(added.id);
+assert.equal(sandbox().zones.length, 2, "an empty zone can be deleted");
+
+const idsBefore = new Set([...sandbox().items, ...sandbox().connections, ...sandbox().zones].map((entity) => entity.id));
+sandbox().place("sensor", { x: hall.x, z: hall.z - 2 });
+const placedSensor = sandbox().items[sandbox().items.length - 1];
+assert.equal(placedSensor.kind, "sensor", "a sensor can be placed in a moved hall");
+assert(!idsBefore.has(placedSensor.id), "new ids never collide with a loaded layout's ids");
+sandbox().reset();
+
+console.log("Domain invariants, topology, bounds, lag, offline equipment, reset, comparison, graph, and zone checks passed.");

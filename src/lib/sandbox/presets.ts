@@ -11,25 +11,40 @@
  * colliding with anything the user places afterwards.
  */
 import { defaultParams } from "./catalogue";
-import type { ComponentKind, Connection, Preset, SandboxItem } from "./types";
+import { SITE } from "./geometry";
+import type { ComponentKind, Connection, Preset, SandboxItem, ZoneSpec } from "./types";
 
 let seq = 0;
 const reset = () => {
   seq = 0;
 };
 
-function make(
-  kind: ComponentKind,
-  x: number,
-  z: number,
-  params: Record<string, number> = {},
-): SandboxItem {
-  return {
+/**
+ * A raised floor and a plant yard side by side, with a one-tile walkway,
+ * centred on the site. Equipment is then placed in tiles relative to the raised
+ * floor's top-left corner, so a preset reads the same as it did on a fixed floor.
+ */
+function site(hallW: number, hallD: number, plantW: number) {
+  const ox = Math.floor((SITE.w - (hallW + 1 + plantW)) / 2);
+  const oz = Math.floor((SITE.d - hallD) / 2);
+  const zones: ZoneSpec[] = [
+    { id: `zone-${++seq}`, name: "Raised floor", kind: "compute", x: ox, z: oz, w: hallW, d: hallD },
+    { id: `zone-${++seq}`, name: "Plant yard", kind: "plant", x: ox + hallW + 1, z: oz, w: plantW, d: hallD },
+  ];
+
+  const make = (
+    kind: ComponentKind,
+    x: number,
+    z: number,
+    params: Record<string, number> = {},
+  ): SandboxItem => ({
     id: `${kind}-${++seq}`,
     kind,
-    cell: { x, z },
+    cell: { x: ox + x, z: oz + z },
     params: { ...defaultParams(kind), ...params },
-  };
+  });
+
+  return { zones, make };
 }
 
 const link = (fromId: string, toId: string): Connection => ({
@@ -51,7 +66,7 @@ function wire(coolers: SandboxItem[], racks: SandboxItem[][], chiller: SandboxIt
 
 function containerHall(): Preset {
   reset();
-  const floor = { hallW: 10, hallD: 6, plantW: 3 };
+  const { zones, make } = site(10, 6, 3);
   const racks = [2, 3, 4, 5].map((x) => make("rack", x, 2));
   const crac = make("crac", 7, 2);
   const chiller = make("chiller", 11, 2, { capacityKw: 150 });
@@ -62,7 +77,7 @@ function containerHall(): Preset {
     name: "Container hall",
     description: "Four racks on one CRAC. The smallest thing worth cooling.",
     layout: {
-      floor,
+      zones,
       items: [...racks, crac, chiller, s1, s2],
       connections: wire([crac], [racks], chiller, [
         [s1, racks.slice(0, 2)],
@@ -74,7 +89,7 @@ function containerHall(): Preset {
 
 function airCooledRow(): Preset {
   reset();
-  const floor = { hallW: 14, hallD: 8, plantW: 4 };
+  const { zones, make } = site(14, 8, 4);
   const rowA = [2, 3, 4, 5].map((x) => make("rack", x, 2));
   const rowB = [2, 3, 4, 5].map((x) => make("rack", x, 5));
   const cracA = make("crac", 8, 2, { capacityKw: 75, airflowCmh: 12000 });
@@ -87,7 +102,7 @@ function airCooledRow(): Preset {
     name: "Air-cooled rows",
     description: "Two rows, a CRAC each, one chiller carrying both.",
     layout: {
-      floor,
+      zones,
       items: [...rowA, ...rowB, cracA, cracB, chiller, s1, s2],
       connections: wire([cracA, cracB], [rowA, rowB], chiller, [
         [s1, rowA],
@@ -99,7 +114,7 @@ function airCooledRow(): Preset {
 
 function liquidGpuHall(): Preset {
   reset();
-  const floor = { hallW: 12, hallD: 8, plantW: 4 };
+  const { zones, make } = site(12, 8, 4);
   const dense = { itLoadKw: 24, utilisationPct: 85, inletLimitC: 30 };
   const bankA = [2, 3, 4].map((x) => make("rack", x, 2, dense));
   const bankB = [2, 3, 4].map((x) => make("rack", x, 5, dense));
@@ -113,7 +128,7 @@ function liquidGpuHall(): Preset {
     name: "Liquid GPU hall",
     description: "Direct-to-chip CDUs on high-density banks, running warm.",
     layout: {
-      floor,
+      zones,
       items: [...bankA, ...bankB, cduA, cduB, chiller, s1, s2],
       connections: wire([cduA, cduB], [bankA, bankB], chiller, [
         [s1, bankA],

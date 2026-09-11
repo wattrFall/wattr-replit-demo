@@ -1,14 +1,13 @@
 import { Component, Suspense, lazy, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Crosshair, Play, RotateCcw } from "lucide-react";
-import { CATALOGUE, PALETTE_ORDER } from "@/lib/sandbox/catalogue";
-import { gridD } from "@/lib/sandbox/geometry";
+import { CATALOGUE, PALETTE_ORDER, ZONE_CATALOGUE } from "@/lib/sandbox/catalogue";
 import { useSandboxStore } from "@/lib/sandbox/store";
 import { demoScenario } from "@/lib/demoScenario";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { SButton } from "./primitives/SButton";
 import { SToggle } from "./primitives/SToggle";
 import { Palette } from "./panels/Palette";
-import { Floor } from "./panels/Floor";
+import { Zones } from "./panels/Zones";
 import { Inspector } from "./panels/Inspector";
 import { Telemetry } from "./panels/Telemetry";
 import { ResultsOverlay } from "./ResultsOverlay";
@@ -50,9 +49,11 @@ export function SandboxShell() {
   const telemetry = useSandboxStore((s) => s.telemetry);
   const items = useSandboxStore((s) => s.items);
   const connections = useSandboxStore((s) => s.connections);
-  const floor = useSandboxStore((s) => s.floor);
+  const zones = useSandboxStore((s) => s.zones);
   const selectedId = useSandboxStore((s) => s.selectedId);
+  const selectedZoneId = useSandboxStore((s) => s.selectedZoneId);
   const remove = useSandboxStore((s) => s.remove);
+  const removeZone = useSandboxStore((s) => s.removeZone);
   const mode = useSandboxStore((s) => s.mode);
   const notice = useSandboxStore((s) => s.notice);
   const controlMode = useSandboxStore((s) => s.controlMode);
@@ -78,11 +79,13 @@ export function SandboxShell() {
 
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
+  const selectedZoneIdRef = useRef<string | null>(null);
+  selectedZoneIdRef.current = selectedZoneId;
 
   /**
    * Global shortcuts: 1-5 arm a palette entry, Escape disarms, Delete removes
-   * the selection. Ignored while a
-   * text field or slider has focus so typing is never hijacked.
+   * the selected equipment or empty zone. Ignored while a text field or slider
+   * has focus so typing is never hijacked.
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -99,6 +102,9 @@ export function SandboxShell() {
         if (selectedIdRef.current) {
           event.preventDefault();
           remove(selectedIdRef.current);
+        } else if (selectedZoneIdRef.current) {
+          event.preventDefault();
+          removeZone(selectedZoneIdRef.current);
         }
         return;
       }
@@ -110,15 +116,21 @@ export function SandboxShell() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [beginPlacing, setMode, remove]);
+  }, [beginPlacing, setMode, remove, removeZone]);
 
   /**
    * Text equivalent of the canvas, announced politely. The 3D view is
    * aria-hidden, so this is the only description assistive tech receives.
    */
   const sceneSummary = useMemo(() => {
+    const site =
+      zones.length === 0
+        ? "no zones"
+        : `${zones.length} zone${zones.length > 1 ? "s" : ""}: ${zones
+            .map((zone) => `${zone.name}, a ${zone.w} by ${zone.d} tile ${ZONE_CATALOGUE[zone.kind].label.toLowerCase()}`)
+            .join("; ")}`;
     if (items.length === 0) {
-      return `Empty site: a ${floor.hallW} by ${gridD(floor)} tile raised floor and a ${floor.plantW} tile plant yard. No equipment placed yet.`;
+      return `Site with ${site}. No equipment placed yet.`;
     }
     const counts = new Map<string, number>();
     for (const item of items) {
@@ -136,10 +148,11 @@ export function SandboxShell() {
         ? ` PUE ${telemetry.pue.toFixed(3)}, peak inlet ${telemetry.maxInletC.toFixed(1)} degrees, ${telemetry.totalPowerKw.toFixed(0)} kilowatts total, under ${controlMode === "wattr" ? "Wattr control" : "baseline control"}.`
         : "";
 
-    return `Site with a ${floor.hallW} by ${gridD(floor)} tile raised floor and a ${floor.plantW} tile plant yard, containing ${parts.join(", ")}. ${linkPart}${readout}`;
-  }, [items, connections, telemetry, controlMode, floor]);
+    return `Site with ${site}. It contains ${parts.join(", ")}. ${linkPart}${readout}`;
+  }, [items, connections, telemetry, controlMode, zones]);
 
   const selectedItem = items.find((i) => i.id === selectedId) ?? null;
+  const selectedZone = zones.find((zone) => zone.id === selectedZoneId) ?? null;
 
   const connectSource = mode.type === "connecting" ? items.find((i) => i.id === mode.fromId) : null;
 
@@ -156,7 +169,9 @@ export function SandboxShell() {
         ? `Connecting from ${CATALOGUE[connectSource.kind].label} — click a highlighted target, or press Escape to cancel.`
         : selectedItem
           ? `${CATALOGUE[selectedItem.kind].label} selected at tile ${selectedItem.cell.x + 1}, ${selectedItem.cell.z + 1}. Press Delete to remove it.`
-          : null;
+          : selectedZone
+            ? `${selectedZone.name} selected. Edit it in the Zones panel, or press Delete to remove it once it is empty.`
+            : null;
 
   /**
    * What gets *announced*. Only the short, event-driven half: what the pointer
@@ -210,9 +225,9 @@ export function SandboxShell() {
         <Presets />
 
         <div className="flex flex-col gap-3 p-3 lg:flex-row">
-          <div className="flex flex-col gap-3 lg:w-[210px]">
+          <div className="flex flex-col gap-3 lg:w-[230px]">
             <Palette />
-            <Floor />
+            <Zones />
           </div>
 
           <div
