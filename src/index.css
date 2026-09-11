@@ -893,3 +893,21 @@ html[data-theme="light"] .chart-line { background: #087d88; }
   cursor: not-allowed;
   opacity: 0.4;
 }
+
+/* ==========================================================================
+   PUBLIC SCREENS — landing, sign-in, loading, error and signed-out states.
+   They sit inside .cockpit, so they follow the same light and dark tokens.
+   ========================================================================== */
+.state-card { width:min(460px, 100%); padding:1.75rem; }
+.state-icon { display:grid; place-items:center; width:2.6rem; height:2.6rem; margin-top:1.5rem; border-radius:8px; background:color-mix(in srgb, var(--cockpit-primary) 14%, transparent); color:var(--cockpit-primary); }
+.state-icon.error { background:color-mix(in srgb, #ef4444 14%, transparent); color:#f87171; }
+html[data-theme="light"] .state-icon.error { color:#a52d26; }
+@media (prefers-color-scheme: light) { html[data-theme="system"] .state-icon.error { color:#a52d26; } }
+.state-spinner { width:1.1rem; height:1.1rem; border:2px solid color-mix(in srgb, var(--cockpit-primary) 30%, transparent); border-top-color:var(--cockpit-primary); border-radius:999px; animation:state-spin .8s linear infinite; }
+@keyframes state-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .state-spinner { animation-duration:2.4s; } }
+.landing-preview { display:block; width:100%; height:auto; }
+.landing-node { fill:var(--cockpit-surface); stroke:var(--cockpit-border-soft); }
+.landing-node-kind { fill:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.14em; }
+.landing-node-label { fill:var(--cockpit-text); font-size:13px; font-weight:600; }
+.landing-node-value { fill:var(--cockpit-muted); font:11px var(--font-mono); }

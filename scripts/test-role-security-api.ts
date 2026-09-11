@@ -352,6 +352,12 @@ try {
     }
   }
 
+  // Unknown API routes answer in JSON, so a client never mistakes the app's HTML page for data.
+  const unknownRoute = await request(users.get("VIEWER")!, "/api/facilities/sfo-01/no-such-resource");
+  if (unknownRoute.status !== 404 || unknownRoute.body?.error !== "Not found") {
+    throw new Error(`An unknown API route did not return a JSON 404: ${unknownRoute.status} ${JSON.stringify(unknownRoute.body)}`);
+  }
+
   const deniedAdmin = await request(users.get("VIEWER")!, "/api/admin/memberships");
   if (deniedAdmin.status !== 403) throw new Error("Viewer reached organization administration");
   const createMember = await request(adminId, "/api/admin/memberships", {

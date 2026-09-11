@@ -215,4 +215,15 @@ for (const [name, graphUnderTest] of [["reference", heatGraph], ["air-cooled bui
 }
 assert.deepEqual(lineageLayout(heatGraph.nodes, heatGraph.edges).layers[0], ["gpu-b"], "heat flow starts at the workload");
 
+// A failed request reads as a sentence a person can act on, never a raw status line.
+const { ApiError, describeError } = await import("../src/components/cockpit/api");
+assert.equal(describeError(new ApiError("Request failed (401)", 401, {})), "Your session has ended. Sign in again to continue.");
+assert.match(describeError(new ApiError("Organization membership required", 403, {})), /does not have access/);
+assert.match(describeError(new ApiError("Request failed (503)", 503, {})), /problem on the server/);
+assert.equal(describeError(new ApiError("Recommendation not found", 404, {})), "Recommendation not found", "a specific server message is kept");
+assert.equal(describeError(new ApiError("Invalid advisory command", 400, {})), "Invalid advisory command");
+assert.match(describeError(new TypeError("Failed to fetch")), /could not reach the server/);
+assert.equal(describeError(new TypeError("Cannot read properties of undefined")), "Cannot read properties of undefined", "a code error is not reported as a network error");
+assert(!/^Error:/.test(describeError(new Error("Model not published"))), "messages never start with a raw error prefix");
+
 console.log("Operating workspace model, traversal, and comparison tests passed.");

@@ -9,7 +9,7 @@ import { advisoryTiming } from "@/lib/cockpit/advisoryTiming";
 import { recordLearningEvent } from "@/lib/cockpit/learning";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import type { FacilityModelConfig } from "@/lib/cockpit/simulation";
-import { ApiError, api, navigate, post } from "./api";
+import { ApiError, api, describeError, navigate, post } from "./api";
 import { useGuidance } from "./Guidance";
 import { ReplayBar, Shell } from "./Shell";
 import type { Audit, Facility, SafetyEvaluation, SessionData, WhatIfComparison } from "./types";
@@ -49,7 +49,6 @@ const STATUS_LABELS: Record<RecommendationStatus, { label: string; tone: "good" 
 
 const scenarioMinutes = (seconds: number) => `${Math.round(seconds / 60)} min`;
 const clockTime = (simulatedAt: number) => formatSimulatedAt(simulatedAt).slice(11);
-const messageOf = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 /** Decisions made on an earlier model or recommendation version are marked, so they are not read as in force. */
 const earlierLabel = (
   decision: RecommendationHistory["decisions"][number],
@@ -171,7 +170,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
         if (isHistory(result)) setHistory(result);
         else setHistoryError("The server did not return a decision history.");
       })
-      .catch((cause) => setHistoryError(messageOf(cause)));
+      .catch((cause) => setHistoryError(describeError(cause)));
   }, [facility.id]);
 
   useEffect(() => {
@@ -203,7 +202,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
         { simulatedAt: snapshot.simulatedAt, command },
       ));
       guidance.emit("what-if");
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   const evaluate = async () => {
     setError("");
@@ -213,7 +212,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
         { simulatedAt: snapshot.simulatedAt, command },
       ));
       guidance.emit("safety-run");
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   // A later disposition replaces the current one only after the operator
   // confirms it; the server rejects a replacement that has gone stale.
@@ -241,7 +240,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
         setPendingReplacement({ decision, current: cause.body.currentDecision ?? null });
         return;
       }
-      setError(String(cause));
+      setError(describeError(cause));
     }
   };
   const evaluationTone = evaluation?.outcome === "PASS" ? "text-teal-300" : evaluation?.outcome === "WARNING" ? "text-amber-300" : "text-red-300";

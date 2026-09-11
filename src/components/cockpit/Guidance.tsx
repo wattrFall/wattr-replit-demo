@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { describeError } from "./api";
 import { ArrowRight, BookOpen, RotateCcw, X } from "lucide-react";
 import type { Role } from "@/lib/security/rolePolicy";
 import { tutorialPageLabel, tutorialRouteFor } from "@/lib/cockpit/tutorial";
@@ -138,7 +139,7 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
       await save(next, complete);
       setError("");
       if (complete) { setOpen(false); setNotice("Tutorial complete. You can restart it from Help and tutorials."); recoverFocus(); }
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   }, [save, steps.length]);
 
   const emit = useCallback((action: string) => {

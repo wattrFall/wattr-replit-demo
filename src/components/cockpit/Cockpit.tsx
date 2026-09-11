@@ -20,12 +20,14 @@ import { GuidanceProvider, useGuidance } from "./Guidance";
 import { FacilityBuilder } from "@/components/builder/FacilityBuilder";
 import { facilityAssets } from "@/lib/cockpit/facilityAssets";
 import { facilityPlant } from "@/lib/cockpit/simulation";
-import { navigate, e2eTestUserId, FACILITIES_CHANGED, api, post, patch, remove } from "./api";
+import { ApiError, describeError, navigate, e2eTestUserId, FACILITIES_CHANGED, api, post, patch, remove } from "./api";
+import { CLERK_LIGHT_APPEARANCE, Landing, PublicFrame, StateScreen } from "./PublicScreens";
 import { Recommendation } from "./RecommendationPage";
 import { ThermalGraphPage } from "./ThermalGraphPage";
 import { ReplayBar, Shell } from "./Shell";
 import type { Me, Facility, Audit, Incident, ModelVersion, MemberFacility, Member, SessionData, LearningOutcomesData } from "./types";
 import { mono, ThemeProvider, ContextualHelp, DisclosureSection, ThemeControl, Brand, Status, Metric, PageHead } from "./ui";
+import { showsLightTheme } from "./ui";
 
 type PortfolioSort = "attention" | "risk" | "power" | "cooling" | "efficiency" | "recommendation";
 type PortfolioFilter = "all" | "attention" | "nominal" | "recommendation";
@@ -136,7 +138,7 @@ function OperatorTestSession({ facility, elapsedS }: { facility: Facility; elaps
       setStartedAt(Date.now());
       setMessage("Evaluation session active.");
     } catch (cause) {
-      setMessage(`Session could not start: ${String(cause)}`);
+      setMessage(`Session could not start. ${describeError(cause)}`);
     }
   };
   const recordFriction = async () => {
@@ -162,7 +164,7 @@ function OperatorTestSession({ facility, elapsedS }: { facility: Facility; elaps
       setSessionId("");
       setMessage(status === "COMPLETED" ? "Understanding outcome recorded." : "Abandonment recorded.");
     } catch (cause) {
-      setMessage(`Session outcome was not saved: ${String(cause)}`);
+      setMessage(`Session outcome was not saved. ${describeError(cause)}`);
     }
   };
   return <details className="disclosure mb-4">
@@ -248,13 +250,13 @@ function IncidentPage({ data, facility, incidentId }: { data: SessionData; facil
       setSelected(item);
       return api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`)
         .then((result) => { if (!cancelled) setReconstructed(result.snapshot); });
-    }).catch((e) => { if (!cancelled) setError(String(e)); });
+    }).catch((e) => { if (!cancelled) setError(describeError(e)); });
     return () => { cancelled = true; };
   }, [facility.id, incidentId]);
   // An unknown incident id shows a not-found state rather than another incident.
   const notFound = loaded && !selected && selectIncident(incidents, incidentId).notFound;
   const incident = selected;
-  const reconstruct = async (item: Incident) => { setSelected(item); try { const result = await api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`); setReconstructed(result.snapshot); guidance.emit("incident-review"); } catch (e) { setError(String(e)); } };
+  const reconstruct = async (item: Incident) => { setSelected(item); try { const result = await api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`); setReconstructed(result.snapshot); guidance.emit("incident-review"); } catch (e) { setError(describeError(e)); } };
   const current = reconstructed ?? snapshot;
   // Status follows the replay clock, matching Portfolio, Operations and Ask Wattr.
   const stateTone = (state: IncidentReplayState): "good" | "warn" | "bad" => state.status === "CLEAR" ? "good" : state.severity === "HIGH" ? "bad" : "warn";
@@ -299,7 +301,7 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
     if (decisionFilter) query.set("decision", decisionFilter);
     if (search.trim()) query.set("search", search.trim());
     setFiltersApplied(Boolean(decisionFilter || search.trim()));
-    api<Audit[]>(`/api/facilities/${facility.id}/audit?${query}`).then(setRecords).catch((cause) => setError(String(cause)));
+    api<Audit[]>(`/api/facilities/${facility.id}/audit?${query}`).then(setRecords).catch((cause) => setError(describeError(cause)));
   };
   useEffect(() => { load(); }, [facility.id, decisionFilter]);
   const select = async (record: Audit) => {
@@ -309,7 +311,7 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
     try {
       setDetail(await api(`/api/facilities/${facility.id}/audit/${record.id}`));
       guidance.emit("audit-reconstruct");
-    } catch (cause) { setDetail(null); setError(String(cause)); }
+    } catch (cause) { setDetail(null); setError(describeError(cause)); }
   };
   const snapshot = detail?.snapshot;
   const decision = detail?.decision ?? selected?.payload?.decision;
@@ -365,7 +367,7 @@ function FacilityBuilderPage({ data, facility }: { data: SessionData; facility: 
 function ModelStudio({ data, facility }: { data: SessionData; facility: Facility }) {
   const guidance = useGuidance();
   const [versions, setVersions] = useState<ModelVersion[]>([]), [config, setConfig] = useState('{"scenario":"gpu-training-ramp-v1","seed":4103,"thermalMass":0.82,"responseLag":12}'), [message, setMessage] = useState(""), [error, setError] = useState("");
-  const refresh = () => api<ModelVersion[]>(`/api/facilities/${facility.id}/model/versions`).then(setVersions).catch(e => setError(String(e)));
+  const refresh = () => api<ModelVersion[]>(`/api/facilities/${facility.id}/model/versions`).then(setVersions).catch(e => setError(describeError(e)));
   useEffect(() => { void refresh(); }, [facility.id]);
   useEffect(() => {
     document.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
@@ -380,8 +382,8 @@ function ModelStudio({ data, facility }: { data: SessionData; facility: Facility
       facilityId: facility.id,
     });
   }, [facility.id]);
-  const createDraft = async () => { try { const parsed = JSON.parse(config); const result = await post<ModelVersion>(`/api/facilities/${facility.id}/model/versions`, { config: parsed }); setVersions(v => [result, ...v]); setMessage(`${result.id} created as DRAFT`); setError(""); guidance.emit("model-draft"); } catch (e) { setError(String(e)); } };
-  const action = async (path: string, success: string, body: unknown = {}, reloadModel = false) => { try { await post(path, body); await refresh(); if (reloadModel) dispatchEvent(new Event(FACILITIES_CHANGED)); setMessage(success); setError(""); guidance.emit(path.endsWith("/validate") ? "model-validate" : path.endsWith("/publish") ? "model-publish" : "model-rollback"); } catch (e) { setError(String(e)); } };
+  const createDraft = async () => { try { const parsed = JSON.parse(config); const result = await post<ModelVersion>(`/api/facilities/${facility.id}/model/versions`, { config: parsed }); setVersions(v => [result, ...v]); setMessage(`${result.id} created as DRAFT`); setError(""); guidance.emit("model-draft"); } catch (e) { setError(describeError(e)); } };
+  const action = async (path: string, success: string, body: unknown = {}, reloadModel = false) => { try { await post(path, body); await refresh(); if (reloadModel) dispatchEvent(new Event(FACILITIES_CHANGED)); setMessage(success); setError(""); guidance.emit(path.endsWith("/validate") ? "model-validate" : path.endsWith("/publish") ? "model-publish" : "model-rollback"); } catch (e) { setError(describeError(e)); } };
   const simulatedAt = useScenarioSession((state) => state.simulatedAt);
   const previewConfig = useMemo(() => {
     try {
@@ -429,7 +431,7 @@ function AccessAdministration({ data }: { data: SessionData }) {
       setMembers(membershipResult.items);
       setAudit(auditResult.items);
       setError("");
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   useEffect(() => { void refresh(); }, []);
   const saveMember = async (member: { userId: string; email?: string; displayName?: string; role: Role; isAdmin: boolean }) => {
@@ -437,7 +439,7 @@ function AccessAdministration({ data }: { data: SessionData }) {
       await post("/api/admin/memberships", member);
       setMessage(`${member.userId} access saved`);
       await refresh();
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   const saveGrant = async (member: Member, facility: MemberFacility, next: Partial<MemberFacility>) => {
     const grant = { ...facility, ...next };
@@ -449,14 +451,14 @@ function AccessAdministration({ data }: { data: SessionData }) {
       });
       setMessage(`${member.display_name ?? member.id} facility access updated`);
       await refresh();
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   const revoke = async (member: Member) => {
     try {
       await remove(`/api/admin/memberships/${encodeURIComponent(member.id)}`);
       setMessage(`${member.display_name ?? member.id} membership revoked`);
       await refresh();
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   return <Shell data={data}><PageHead eyebrow="ORGANIZATION / ACCESS ADMINISTRATION" title="People and facility permissions" detail="Organization roles and site grants take effect on the next authorized request. Every change is retained in administrative history."/>
     <section className="panel mb-4 p-5"><h2 className="font-semibold">Provision a member</h2><div className="mt-4 grid gap-3 md:grid-cols-5"><input className="input" placeholder="Clerk user ID" value={draft.userId} onChange={event=>setDraft({...draft,userId:event.target.value})}/><input className="input" placeholder="Display name" value={draft.displayName} onChange={event=>setDraft({...draft,displayName:event.target.value})}/><input className="input" placeholder="Email (optional)" value={draft.email} onChange={event=>setDraft({...draft,email:event.target.value})}/><select className="select" value={draft.role} onChange={event=>setDraft({...draft,role:event.target.value as Role})}>{ROLES.map(role=><option key={role}>{role}</option>)}</select><button className="button primary justify-center" disabled={!draft.userId} onClick={()=>saveMember(draft)}>Save membership</button></div>{data.me.is_owner&&<label className="mt-3 flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={draft.isAdmin} onChange={event=>setDraft({...draft,isAdmin:event.target.checked})}/>Grant organization administration</label>}{message&&<p role="status" className="mt-3 text-sm text-teal-300">{message}</p>}{error&&<p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}</section>
@@ -468,7 +470,7 @@ function LearningOutcomes({ data }: { data: SessionData }) {
   const [outcomes, setOutcomes] = useState<LearningOutcomesData | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<LearningOutcomesData>("/api/learning/outcomes").then(setOutcomes).catch((cause) => setError(String(cause)));
+    api<LearningOutcomesData>("/api/learning/outcomes").then(setOutcomes).catch((cause) => setError(describeError(cause)));
   }, []);
   const eventCount = (name: string) => outcomes?.journeyEvents.find((item) => item.event_name === name)?.count ?? 0;
   return <Shell data={data}>
@@ -509,7 +511,7 @@ function Help({ data }: { data: SessionData }) {
       return;
     }
     setStep(next); setDone(complete);
-    try { await patch("/api/me/tutorial", { step: next, complete, role: data.me.role }); } catch (e) { setError(String(e)); }
+    try { await patch("/api/me/tutorial", { step: next, complete, role: data.me.role }); } catch (e) { setError(describeError(e)); }
   };
   const current = steps[Math.min(step, steps.length - 1)];
   const openTutorialRoute = () => {
@@ -566,7 +568,7 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
       });
       setResponse(result);
     } catch (cause) {
-      setError(String(cause));
+      setError(describeError(cause));
       setResponse(null);
     } finally {
       setPending(false);
@@ -582,7 +584,7 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
       if (result.focus) useScenarioSession.getState().focusTwin(result.focus);
       navigate(result.path);
     } catch (cause) {
-      setError(String(cause));
+      setError(describeError(cause));
     }
   };
   return <Shell data={data} facility={facility}>
@@ -680,7 +682,7 @@ function TutorialOverlay({ data, onProgress }: { data: SessionData; onProgress: 
       if (complete) setOpen(false);
       setError("");
     } catch (cause) {
-      setError(String(cause));
+      setError(describeError(cause));
     }
   };
   const openWorkspace = () => {
@@ -709,8 +711,11 @@ function TutorialOverlay({ data, onProgress }: { data: SessionData; onProgress: 
   </div>;
 }
 
-function Landing(){return <div className="min-h-screen bg-[#0a1018] text-slate-200"><header className="flex justify-between border-b border-slate-800 p-5"><Brand/><button onClick={()=>navigate("/sign-in")} className="button secondary">Operator sign in</button></header><main className="mx-auto max-w-6xl px-6 py-24"><div className="eyebrow text-cyan-400">THERMAL OPERATIONS / COMMAND ENVIRONMENT</div><h1 className="mt-5 max-w-4xl text-5xl font-semibold tracking-[-.04em] md:text-7xl">Make the cooling decision before the constraint arrives.</h1><p className="mt-7 max-w-2xl text-lg leading-8 text-slate-400">Wattr turns workload intent into power, heat, forecast risk, a safety-checked advisory, and an auditable operator decision.</p><div className="mt-9"><button onClick={()=>navigate("/sign-in")} className="button primary">Enter cockpit <ArrowRight size={15}/></button></div></main></div>}
-function Auth({up=false}:{up?:boolean}){return <div className="grid min-h-screen place-items-center bg-[#0a1018] p-5"><div className="w-full max-w-[460px]"><Brand/><div className="mt-8">{up?<SignUp routing="path" path="/sign-up" signInUrl="/sign-in" fallbackRedirectUrl="/portfolio"/>:<SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/portfolio"/>}</div></div></div>}
+function Auth({up=false}:{up?:boolean}){
+  // Clerk's card follows the page: light variables here, dark ones from the provider otherwise.
+  const appearance = showsLightTheme() ? CLERK_LIGHT_APPEARANCE : undefined;
+  return <PublicFrame className="grid place-items-center p-5"><div className="w-full max-w-[460px]"><Brand/><div className="mt-8">{up?<SignUp appearance={appearance} routing="path" path="/sign-up" signInUrl="/sign-in" fallbackRedirectUrl="/portfolio"/>:<SignIn appearance={appearance} routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/portfolio"/>}</div></div></PublicFrame>;
+}
 
 function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   const defaultPath = data.me.default_path.replace("{facilityId}", data.facilities[0]?.id ?? "");
@@ -742,8 +747,8 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Choose an operating workspace from the facility navigation."/></Shell>;
 }
 function ProtectedApp({path}:{path:string}){
-  const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState("");
-  useEffect(()=>{Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch(e=>setError(String(e)));},[]);
+  const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState<unknown>(null),[attempt,setAttempt]=useState(0);
+  useEffect(()=>{setError(null);Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch((cause)=>setError(cause ?? new Error("The workspace could not be loaded")));},[attempt]);
   // A publish or restore changes the model Operations runs. Reload the
   // facilities so Operations, the twin and the replay session all use it. If
   // the reload fails, pages keep the facilities they already have.
@@ -757,8 +762,21 @@ function ProtectedApp({path}:{path:string}){
     addEventListener(FACILITIES_CHANGED, reload);
     return () => removeEventListener(FACILITIES_CHANGED, reload);
   }, []);
-  if(error)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-red-300">{error}</div>;
-  if(!data)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Loading authorized facility context…</div>;
+  if(error){
+    const status = error instanceof ApiError ? error.status : undefined;
+    return <StateScreen
+      kind="error"
+      title={status === 401 ? "Sign in again" : status === 403 ? "No access to this workspace" : "Wattr could not open your workspace"}
+      body={describeError(error)}
+      actions={<>
+        {status === 401
+          ? <button type="button" className="button primary" onClick={()=>navigate("/sign-in")}>Sign in</button>
+          : <button type="button" className="button primary" onClick={()=>setAttempt((value)=>value+1)}>Try again</button>}
+        <button type="button" className="button secondary" onClick={()=>navigate("/demo/sandbox")}>Open the cooling sandbox</button>
+      </>}
+    />;
+  }
+  if(!data)return <StateScreen kind="loading" title="Opening your workspace" body="Checking your access and loading the facility model Operations runs."/>;
   const roleProgressMatches = data.me.tutorial_role === data.me.role;
   return <ThemeProvider initialTheme={data.me.theme}><GuidanceProvider
     role={data.me.role}
@@ -773,12 +791,15 @@ function ProtectedApp({path}:{path:string}){
   ><ProtectedRoutes path={path} data={data}/></GuidanceProvider></ThemeProvider>;
 }
 export function CockpitApp(){
-  const [path,setPath]=useState(location.pathname),{isSignedIn}=useUser();
+  const [path,setPath]=useState(location.pathname),{isSignedIn,isLoaded}=useUser(),[signInSlow,setSignInSlow]=useState(false);
+  // If the sign-in service never answers, say so rather than leaving a blank page.
+  useEffect(()=>{if(isLoaded)return;const timer=setTimeout(()=>setSignInSlow(true),8000);return()=>clearTimeout(timer);},[isLoaded]);
   const testSignedIn = Boolean(e2eTestUserId());
   useScenarioClock();
   useEffect(()=>{const on=()=>setPath(location.pathname);addEventListener("popstate",on);return()=>removeEventListener("popstate",on)},[]);
   useEffect(()=>{if(path==="/"&&(isSignedIn||testSignedIn))navigate("/portfolio")},[path,isSignedIn,testSignedIn]);
   if(path==="/demo/sandbox")return <SandboxShell/>; if(path.startsWith("/sign-in"))return <Auth/>; if(path.startsWith("/sign-up"))return <Auth up/>; if(path==="/")return <Landing/>;
   if(testSignedIn)return <ProtectedApp path={path}/>;
-  return <><Show when="signed-in"><ProtectedApp path={path}/></Show><Show when="signed-out"><div className="grid min-h-screen place-items-center bg-[#0a1018]"><button onClick={()=>navigate("/sign-in")} className="button primary">Sign in for authorized access</button></div></Show></>;
+  if(!isLoaded)return <StateScreen kind="loading" title="Checking your sign-in" body={signInSlow ? "Sign-in is taking longer than usual. The public cooling sandbox is available without an account." : "Connecting to the sign-in service."} actions={signInSlow ? <button type="button" className="button secondary" onClick={()=>navigate("/demo/sandbox")}>Open the cooling sandbox</button> : undefined}/>;
+  return <><Show when="signed-in"><ProtectedApp path={path}/></Show><Show when="signed-out"><StateScreen kind="signed-out" title="Sign in to open the cockpit" body="The operator cockpit is for authorized facility teams. The public cooling sandbox needs no account." actions={<><button type="button" className="button primary" onClick={()=>navigate("/sign-in")}>Sign in</button><button type="button" className="button secondary" onClick={()=>navigate("/demo/sandbox")}>Open the cooling sandbox</button></>}/></Show></>;
 }

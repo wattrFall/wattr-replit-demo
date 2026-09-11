@@ -6,6 +6,34 @@ import type { ThemePreference } from "./types";
 
 export const mono = "font-[family-name:var(--font-mono)]";
 
+/** Where this browser remembers the appearance, so signed-out screens open in it too. */
+export const THEME_STORAGE_KEY = "wattr-theme";
+
+/** Apply an appearance to the page; "system" follows the device setting. */
+export function applyTheme(theme: ThemePreference) {
+  const root = document.documentElement;
+  root.dataset.theme = theme;
+  root.style.colorScheme = theme === "system" ? "light dark" : theme;
+}
+
+/** The appearance remembered in this browser, or "system". */
+export function storedTheme(): ThemePreference {
+  try {
+    const value = localStorage.getItem(THEME_STORAGE_KEY);
+    return value === "light" || value === "dark" ? value : "system";
+  } catch {
+    return "system";
+  }
+}
+
+/** Whether the page currently shows the light appearance. */
+export function showsLightTheme(): boolean {
+  const theme = document.documentElement.dataset.theme ?? storedTheme();
+  if (theme === "light") return true;
+  if (theme === "dark") return false;
+  return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: light)").matches;
+}
+
 const ThemeContext = createContext<{
   theme: ThemePreference;
   setTheme: (theme: ThemePreference) => void;
@@ -21,9 +49,12 @@ export function ThemeProvider({ initialTheme, children }: { initialTheme: string
   );
   const [notice, setNotice] = useState("");
   useEffect(() => {
-    const root = document.documentElement;
-    root.dataset.theme = theme;
-    root.style.colorScheme = theme;
+    applyTheme(theme);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Storage can be unavailable; the account preference still applies here.
+    }
   }, [theme]);
   const setTheme = (next: ThemePreference) => {
     setThemeState(next);

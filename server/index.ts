@@ -3455,6 +3455,11 @@ app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedReq
   });
 });
 
+// An API route that does not exist answers in JSON, never with the app's HTML page.
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
 if (process.env.NODE_ENV === "production" || process.env.RELEASE_GATE === "1") {
   app.use(express.static(resolve("dist"), { immutable: true, maxAge: "1y", index: false }));
   app.use((_req, res) => res.sendFile(resolve("dist/index.html")));
