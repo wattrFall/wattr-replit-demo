@@ -929,3 +929,11 @@ html[data-theme="light"] .state-icon.error { color:#a52d26; }
 .twin-toolbar { position:relative; }
 .twin-help { position:static; }
 .twin-help p { top:calc(100% + 4px); left:.75rem; width:min(300px, calc(100% - 1.5rem)); }
+
+/* Body copy and small labels were tuned for the dark ground; on light they need darker tokens to stay readable. */
+html[data-theme="light"] .cockpit .copy { color:var(--cockpit-muted); }
+html[data-theme="light"] .cockpit .eyebrow, html[data-theme="light"] .cockpit .label { color:var(--cockpit-faint); }
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] .cockpit .copy { color:var(--cockpit-muted); }
+  html[data-theme="system"] .cockpit .eyebrow, html[data-theme="system"] .cockpit .label { color:var(--cockpit-faint); }
+}
