@@ -31,6 +31,7 @@ import {
   type Capability,
   type Role,
 } from "../src/lib/security/rolePolicy";
+import { incidentStateAt } from "../src/lib/cockpit/incidents";
 import {
   ASSISTANT_TOOLS,
   type AssistantAction,
@@ -1849,11 +1850,17 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
     );
     const incident = result.rows[0];
     if (!incident) {
-      response = assistantAnswer(membership.role, tool, "incident context", "No incident record is available for this authorized facility at the requested time.", context, null, [], [...limitations, "Incident data is unavailable; no cause or affected asset is inferred."], assistantActions(facility, tool, membership.role));
+      const modeled = snapshot.incident.open
+        ? ` The replayed model already shows an open ${snapshot.incident.severity} condition against the ${snapshot.incident.limitC.toFixed(1)}°C limit.`
+        : "";
+      response = assistantAnswer(membership.role, tool, "incident context", `No incident record is available for this authorized facility at the requested time.${modeled}`, context, null, [], [...limitations, "Incident data is unavailable; no cause or affected asset is inferred."], assistantActions(facility, tool, membership.role));
     } else {
+      // Report the incident as it stands at the replay instant, like every other view.
+      const replayState = incidentStateAt(incident, snapshot);
       const citation = assistantRecordCitation(context, incident, incident.id, incident.title, "incident.record", {
         severity: incident.severity,
         status: incident.status,
+        statusAtReplay: replayState.status,
         affectedAssets: incident.affected_assets,
         rawSignalCount: incident.raw_signal_count,
         likelyCause: incident.likely_cause,
@@ -1866,7 +1873,7 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
         membership.role,
         tool,
         "incident, affected assets, likely cause, and thermal path",
-        `The ${incident.severity} ${incident.status.toLowerCase()} incident is ${incident.title}. Affected assets: ${assets}. Likely cause: ${incident.likely_cause}. The record contains ${incident.raw_signal_count} correlated raw signal(s) and a ${incident.forecast_minutes}-minute forecast window.`,
+        `At this replay time, incident ${incident.id} (${incident.title}) is ${replayState.status === "OPEN" ? `open with ${replayState.severity} severity` : "clear"}. Affected assets: ${assets}. Likely cause: ${incident.likely_cause}. The record contains ${incident.raw_signal_count} correlated raw signal(s) and a ${incident.forecast_minutes}-minute forecast window.`,
         context,
         snapshot.forecast.confidence,
         [citation],

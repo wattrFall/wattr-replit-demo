@@ -13,6 +13,7 @@ import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { replayCockpitSnapshot, SCENARIO_DURATION_S, snapshotForAudit, type CockpitSnapshot, type FacilityModelConfig } from "@/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph, type GraphView, type ControllerComparison } from "@/lib/cockpit/workspaces";
 import { canViewTopology, ROLES, type Role } from "@/lib/security/rolePolicy";
+import { incidentStateAt, selectIncident, type IncidentReplayState } from "@/lib/cockpit/incidents";
 import { assistantSuggestions, type AssistantResponse } from "@/lib/cockpit/assistant";
 import { learningSurfaceForPath, recordLearningEvent, reportLearningError } from "@/lib/cockpit/learning";
 import { GuidanceProvider, useGuidance } from "./Guidance";
@@ -587,23 +588,61 @@ function Recommendation({ data, facility }: { data: SessionData; facility: Facil
   </Shell>;
 }
 
-function IncidentPage({ data, facility, incidentId }: { data: SessionData; facility: Facility; incidentId: string }) {
+function IncidentPage({ data, facility, incidentId }: { data: SessionData; facility: Facility; incidentId?: string }) {
   const guidance = useGuidance();
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot), [incidents, setIncidents] = useState<Incident[]>([]), [selected, setSelected] = useState<Incident | null>(null), [reconstructed, setReconstructed] = useState<CockpitSnapshot | null>(null), [error, setError] = useState("");
+  const snapshot = useScenarioSession((s) => s.simulation.snapshot);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [selected, setSelected] = useState<Incident | null>(null);
+  const [reconstructed, setReconstructed] = useState<CockpitSnapshot | null>(null);
+  const [error, setError] = useState("");
   useEffect(() => {
+    let cancelled = false;
+    setSelected(null);
+    setReconstructed(null);
     api<Incident[]>(`/api/facilities/${facility.id}/incidents`).then((items) => {
+      if (cancelled) return;
       setIncidents(items);
-      const item = items.find(candidate => candidate.id === incidentId) ?? items[0];
+      setLoaded(true);
+      const { incident: item } = selectIncident(items, incidentId);
       if (!item) return;
       setSelected(item);
       return api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`)
-        .then(result => setReconstructed(result.snapshot));
-    }).catch(e => setError(String(e)));
+        .then((result) => { if (!cancelled) setReconstructed(result.snapshot); });
+    }).catch((e) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
   }, [facility.id, incidentId]);
-  const incident = selected ?? incidents[0];
+  // An unknown incident id shows a not-found state rather than another incident.
+  const notFound = loaded && !selected && selectIncident(incidents, incidentId).notFound;
+  const incident = selected;
   const reconstruct = async (item: Incident) => { setSelected(item); try { const result = await api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`); setReconstructed(result.snapshot); guidance.emit("incident-review"); } catch (e) { setError(String(e)); } };
   const current = reconstructed ?? snapshot;
-  return <Shell data={data} facility={facility}><PageHead eyebrow="INCIDENTS / CORRELATED EVENTS" title="Incident investigation" detail="Persisted incidents retain their scenario timestamp so operators can reconstruct what was known."/><div className="grid gap-4 xl:grid-cols-[300px_1fr]"><section className="panel overflow-hidden"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold">Open incidents</h2></div>{incidents.map(item => <button key={item.id} onClick={() => reconstruct(item)} className={`w-full border-b border-slate-800 p-4 text-left ${incident?.id === item.id ? "bg-slate-800/60" : ""}`}><div className="flex justify-between"><b>{item.id}</b><Status tone={item.severity === "HIGH" ? "bad" : "warn"}>{item.severity}</Status></div><p className="mt-2 text-xs text-slate-400">{item.title}</p><p className="mt-2 text-[10px] text-slate-500">{item.raw_signal_count} raw signals · {item.forecast_minutes}m forecast</p></button>)}{!incidents.length&&!error&&<p className="p-4 text-sm text-slate-500">No persisted incidents.</p>}{error&&<p role="alert" className="p-4 text-sm text-red-300">{error}</p>}</section><section className="space-y-4">{incident ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={incident.severity === "HIGH" ? "bad" : "warn"}>{incident.status}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Generated at {formatSimulatedAt(incident.simulated_at)} from the GPU Training Ramp.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="deduplicated into one incident"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 grid gap-3 md:grid-cols-2"><div className="subpanel"><span className="eyebrow">CORRELATED EVIDENCE</span>{(incident.correlated_signals ?? []).map(signal => <div key={signal.id} className="text-xs text-slate-300"><b>{signal.assetId}</b> · {signal.metric.replace(/_/g, " ")} · {signal.direction}</div>)}</div><div className="subpanel"><span className="eyebrow">THERMAL PATH</span><div className="flex flex-wrap items-center gap-2 text-xs">{(incident.thermal_path ?? []).map((asset, index) => <span key={asset} className="flex items-center gap-2"><b>{asset}</b>{index < incident.thermal_path.length - 1 && <ArrowRight size={12} className="text-cyan-300"/>}</span>)}</div><small>Dedup key: {incident.deduplication_key}</small></div></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=cdu-03`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">Choose an incident to inspect its correlated signals.</section>}</section></div></Shell>;
+  // Status follows the replay clock, matching Portfolio, Operations and Ask Wattr.
+  const stateTone = (state: IncidentReplayState): "good" | "warn" | "bad" => state.status === "CLEAR" ? "good" : state.severity === "HIGH" ? "bad" : "warn";
+  const stateLabel = (state: IncidentReplayState) => state.status === "CLEAR" ? "CLEAR" : `OPEN · ${state.severity}`;
+  const incidentState = incident ? incidentStateAt(incident, snapshot) : null;
+  const replayTime = formatSimulatedAt(snapshot.simulatedAt).slice(11);
+  return <Shell data={data} facility={facility}><PageHead eyebrow="INCIDENTS / CORRELATED EVENTS" title="Incident investigation" detail="Incident status follows the replay clock. Each record keeps the scenario time it was raised, so you can reconstruct what was known."/>
+    <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 p-4"><h2 className="font-semibold">Scenario incidents</h2><p className="mt-1 text-xs text-slate-500">Status at {replayTime}</p></div>
+        {incidents.map((item) => {
+          const state = incidentStateAt(item, snapshot);
+          return <button key={item.id} onClick={() => reconstruct(item)} className={`w-full border-b border-slate-800 p-4 text-left ${incident?.id === item.id ? "bg-slate-800/60" : ""}`}><div className="flex justify-between gap-2"><b>{item.id}</b><Status tone={stateTone(state)}>{stateLabel(state)}</Status></div><p className="mt-2 text-xs text-slate-400">{item.title}</p><p className="mt-2 text-[10px] text-slate-500">{item.raw_signal_count} raw signals · {item.forecast_minutes}m forecast</p></button>;
+        })}
+        {loaded && !incidents.length && !error && <p className="p-4 text-sm text-slate-500">No incidents have been recorded for this facility.</p>}
+        {error && <p role="alert" className="p-4 text-sm text-red-300">{error}</p>}
+      </section>
+      <section className="space-y-4">
+        {notFound ? <section className="panel p-6" aria-labelledby="incident-not-found">
+          <Status tone="warn">NOT FOUND</Status>
+          <h2 id="incident-not-found" className="mt-3 text-xl font-semibold">Incident {incidentId} was not found</h2>
+          <p className="copy">This facility has no incident with that ID, so nothing is shown in its place. The link may be out of date. Choose an incident from the list{incidents[0] ? ", or open the most recent one" : ""}.</p>
+          {incidents[0] && <button className="button primary mt-4" onClick={() => navigate(`/facilities/${facility.id}/incidents/${incidents[0].id}`)}>Open {incidents[0].id} <ArrowRight size={15}/></button>}
+        </section> : incident && incidentState ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={stateTone(incidentState)}>{stateLabel(incidentState)}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Raised at {formatSimulatedAt(incidentState.recordedAt)} in the GPU Training Ramp. Status shown for replay time {replayTime}.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="deduplicated into one incident"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 grid gap-3 md:grid-cols-2"><div className="subpanel"><span className="eyebrow">CORRELATED EVIDENCE</span>{(incident.correlated_signals ?? []).map(signal => <div key={signal.id} className="text-xs text-slate-300"><b>{signal.assetId}</b> · {signal.metric.replace(/_/g, " ")} · {signal.direction}</div>)}</div><div className="subpanel"><span className="eyebrow">THERMAL PATH</span><div className="flex flex-wrap items-center gap-2 text-xs">{(incident.thermal_path ?? []).map((asset, index) => <span key={asset} className="flex items-center gap-2"><b>{asset}</b>{index < incident.thermal_path.length - 1 && <ArrowRight size={12} className="text-cyan-300"/>}</span>)}</div><small>Dedup key: {incident.deduplication_key}</small></div></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=cdu-03`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">{loaded ? "Choose an incident to inspect its correlated signals." : "Loading incidents…"}</section>}
+      </section>
+    </div>
+  </Shell>;
 }
 
 function AuditPage({ data, facility }: { data: SessionData; facility: Facility }) {
@@ -1054,7 +1093,7 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   if(!facility)return <Shell data={data}><PageHead eyebrow="ACCESS" title="Facility unavailable" detail="This facility is not present in your authorized API response."/></Shell>;
   const section=parts[2];
   if(section==="operations")return <Operations data={data} facility={facility}/>;
-  if(section==="incidents")return <IncidentPage data={data} facility={facility} incidentId={parts[3] ?? "inc-204"}/>;
+  if(section==="incidents")return <IncidentPage data={data} facility={facility} incidentId={parts[3]}/>;
   if(section==="recommendations")return <Recommendation data={data} facility={facility}/>;
   if(section==="audit")return <AuditPage data={data} facility={facility}/>;
   if(section==="ask-wattr"&&!facility.can_assistant)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Ask Wattr unavailable" detail="Assistant access requires an authorized role and facility view grant."/></Shell>;

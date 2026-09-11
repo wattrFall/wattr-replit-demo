@@ -7,6 +7,7 @@ import {
 } from "../src/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph } from "../src/lib/cockpit/workspaces";
 import { useScenarioSession } from "../src/lib/cockpit/session";
+import { incidentStateAt, selectIncident } from "../src/lib/cockpit/incidents";
 
 const simulatedAt = SCENARIO_START_S + SCENARIO_DURATION_S;
 const baseline = replayCockpitSnapshot(simulatedAt, DEFAULT_FACILITY_MODEL);
@@ -59,6 +60,30 @@ assert.equal(leads.get("baseline"), 0, "a reactive controller warns only at the 
 assert((leads.get("ann-rl") ?? 0) > 0, "a predictive policy must warn before the limit crossing");
 assert.equal(leads.get("ann-rl"), leads.get("snn-rl"), "policies share one uncontrolled trajectory");
 assert.deepEqual(ramping.results.map((row) => row.interventions), [0, 1, 1], "interventions must follow each controller's commands");
+
+// An unknown incident id is reported, never replaced by another incident.
+const incidentRecords = [
+  { id: "inc-204", status: "OPEN", severity: "HIGH", simulated_at: String(SCENARIO_START_S + 660) },
+  { id: "inc-100", status: "RESOLVED", severity: "WATCH", simulated_at: String(SCENARIO_START_S) },
+];
+assert.deepEqual(selectIncident(incidentRecords, "inc-999"), { incident: undefined, notFound: true });
+assert.equal(selectIncident(incidentRecords, "inc-100").incident?.id, "inc-100");
+assert.equal(selectIncident(incidentRecords).incident?.id, "inc-204");
+assert.equal(selectIncident([], "inc-204").notFound, true);
+
+// Incident status follows the replay instant, as Portfolio's open-incident count does.
+for (const elapsedS of [0, 300, 660, 900, SCENARIO_DURATION_S]) {
+  const snapshot = replayCockpitSnapshot(SCENARIO_START_S + elapsedS);
+  const state = incidentStateAt(incidentRecords[0], snapshot);
+  assert.equal(state.status === "OPEN", snapshot.incident.open, `incident page and portfolio disagree at ${elapsedS}s`);
+  assert.equal(state.severity, snapshot.incident.open ? snapshot.incident.severity : null);
+}
+assert.equal(
+  incidentStateAt(incidentRecords[0], replayCockpitSnapshot(SCENARIO_START_S)).status,
+  "CLEAR",
+  "the scenario incident must not read OPEN before the forecast reaches the limit",
+);
+assert.equal(incidentStateAt(incidentRecords[1], replayCockpitSnapshot(SCENARIO_START_S + 900)).status, "CLEAR", "other records keep their stored status");
 
 const session = useScenarioSession.getState();
 session.reset();
