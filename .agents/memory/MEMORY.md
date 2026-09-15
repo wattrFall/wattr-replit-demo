@@ -6,3 +6,4 @@
 - [Product learning boundaries](product-learning-boundaries.md) — learning signals stay structured, facility-scoped, best-effort, sparse, and independently expired.
 - [Causal variant branching](causal-variant-branching.md) — branch every comparison from one thermal state; apply command lag from branch time and disclose unsupported metrics.
 - [Ephemeral test ports](ephemeral-test-ports.md) — port discovery does not reserve a port; multi-server tests must reject duplicate allocations before binding.
+- [GitHub API sync](github-api-sync.md) — use authenticated tree/blob synchronization when local Git transport has no usable credential.

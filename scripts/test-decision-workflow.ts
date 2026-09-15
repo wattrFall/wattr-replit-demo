@@ -212,19 +212,74 @@ try {
   });
   assert.equal(replayAttack.status, 409);
 
+  // A later disposition replaces the current one only once the caller confirms
+  // which disposition it replaces. Every decision stays in the history.
   let alternativeAuditId: number | undefined;
+  let currentDecisionId = approval.body.payload.decision.id as string;
+  let currentDecision: string = "APPROVE";
+  const statusFor = { REJECT: "REJECTED", DEFER: "DEFERRED", REQUEST_ALTERNATIVE: "ALTERNATIVE_REQUESTED" } as const;
   for (const decision of ["REJECT", "DEFER", "REQUEST_ALTERNATIVE"] as const) {
+    const body = {
+      decision,
+      simulatedAt: SCENARIO_START_S + 300,
+      command: { assetId: "cdu-03", flowPercent: decision === "REQUEST_ALTERNATIVE" ? 64 : 78, durationMinutes: 1 },
+    };
+    const unconfirmed = await request("/api/facilities/sfo-01/recommendations/rec-17/decisions", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    assert.equal(unconfirmed.status, 409, `${decision} replaced a disposition without confirmation`);
+    assert.equal(unconfirmed.body.code, "DISPOSITION_REPLACEMENT_REQUIRED");
+    assert.equal(unconfirmed.body.currentDecision.id, currentDecisionId);
+    assert.equal(unconfirmed.body.currentDecision.decision, currentDecision);
+
     const result = await request("/api/facilities/sfo-01/recommendations/rec-17/decisions", {
       method: "POST",
-      body: JSON.stringify({
-        decision,
-        simulatedAt: SCENARIO_START_S + 300,
-        command: { assetId: "cdu-03", flowPercent: decision === "REQUEST_ALTERNATIVE" ? 64 : 78, durationMinutes: 1 },
-      }),
+      body: JSON.stringify({ ...body, replacesDecisionId: currentDecisionId }),
     });
     assert.equal(result.status, 201, `${decision} failed: ${JSON.stringify(result.body)}`);
+    assert.equal(result.body.payload.decision.replaces.decisionId, currentDecisionId);
+    const status = await pool.query("SELECT status FROM recommendations WHERE id = 'rec-17'");
+    assert.equal(status.rows[0].status, statusFor[decision], "status must show the latest disposition");
+    currentDecisionId = result.body.payload.decision.id;
+    currentDecision = decision;
     if (decision === "REQUEST_ALTERNATIVE") alternativeAuditId = result.body.id;
   }
+
+  const staleReplacement = await request("/api/facilities/sfo-01/recommendations/rec-17/decisions", {
+    method: "POST",
+    body: JSON.stringify({
+      decision: "REJECT",
+      simulatedAt: SCENARIO_START_S + 300,
+      command: { assetId: "cdu-03", flowPercent: 78, durationMinutes: 1 },
+      replacesDecisionId: approval.body.payload.decision.id,
+    }),
+  });
+  assert.equal(staleReplacement.status, 409, "a stale confirmation must not overwrite a newer disposition");
+  assert.equal(staleReplacement.body.currentDecision.id, currentDecisionId);
+
+  // The decision page reads the disposition in force and the decisions behind it.
+  const recommendationHistory = await request("/api/facilities/sfo-01/recommendations/rec-17/history");
+  assert.equal(recommendationHistory.status, 200, `history failed: ${JSON.stringify(recommendationHistory.body)}`);
+  assert.equal(recommendationHistory.body.current.id, currentDecisionId, "history must show the disposition in force");
+  assert.equal(recommendationHistory.body.current.recordedBy, "Decision workflow operator");
+  const storedStatus = await pool.query("SELECT status FROM recommendations WHERE id = 'rec-17'");
+  assert.equal(recommendationHistory.body.recommendation.status, storedStatus.rows[0].status);
+  const listedCurrent = recommendationHistory.body.decisions.find((item: { id: string }) => item.id === currentDecisionId);
+  assert(listedCurrent, "history must list the current decision");
+  assert.equal(listedCurrent.recommendationVersion, recommendationHistory.body.recommendation.version, "history must say which recommendation version a decision was made on");
+  const recordedAt = recommendationHistory.body.decisions.map((item: { recordedAt: string }) => Date.parse(item.recordedAt));
+  assert.deepEqual(recordedAt, [...recordedAt].sort((a, b) => b - a), "history must list the newest decision first");
+  assert.equal((await request("/api/facilities/sfo-01/recommendations/rec-999/history")).status, 404);
+  const history = await pool.query(
+    "SELECT decision FROM operator_decisions WHERE user_id = $1 AND recommendation_id = 'rec-17' ORDER BY created_at",
+    [userId],
+  );
+  assert.deepEqual(
+    history.rows.map((row) => row.decision),
+    ["APPROVE", "REJECT", "DEFER", "REQUEST_ALTERNATIVE"],
+    "replaced dispositions must remain in the history",
+  );
 
   const filtered = await request("/api/facilities/sfo-01/audit?decision=DEFER");
   assert.equal(filtered.status, 200);
@@ -237,6 +292,10 @@ try {
   assert.equal(detail.body.model.version, "sfo-rom-1.0.0");
   assert.equal(detail.body.safetyEvaluation.outcome, "PASS");
   assert.equal(detail.body.decision.note, "Approved as advisory only");
+  for (const invalidId of ["not-a-number", "1.5", "0", "-1", "99999999999999999999"]) {
+    const invalid = await request(`/api/facilities/sfo-01/audit/${invalidId}`);
+    assert.equal(invalid.status, 404, `audit id ${invalidId} returned ${invalid.status}, expected 404`);
+  }
 
   const legacyInsert = await pool.query(
     `INSERT INTO audit_records

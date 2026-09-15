@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import {
   DEFAULT_FACILITY_MODEL,
+  RISK_APPROACH_BAND_C,
   SCENARIO_START_S,
   advanceCockpitSimulation,
   counterfactualCockpitSnapshot,
   createCockpitSimulation,
+  forecastRiskFor,
   replayCockpitSnapshot,
   scenarioLayout,
   snapshotForAudit,
@@ -30,7 +32,8 @@ const golden = [
     headroomKw: 520,
     forecastPeakC: 31.8,
     advisoryPeakC: 30.8,
-    risk: "clear",
+    // 31.8 °C is within RISK_APPROACH_BAND_C of the 32 °C limit.
+    risk: "watch",
   },
   {
     elapsedS: 300,
@@ -160,5 +163,71 @@ for (const elapsedS of [0, 300, 900, 1_800]) {
   const sample = replayCockpitSnapshot(SCENARIO_START_S + elapsedS);
   assert(sample.peakInletC >= 20, "thermal state must remain physically bounded");
 }
+
+// WATCH starts RISK_APPROACH_BAND_C below the limit; CRITICAL starts 1 °C above it.
+assert.equal(forecastRiskFor(32 - RISK_APPROACH_BAND_C - 0.1, 32), "clear");
+assert.equal(forecastRiskFor(32 - RISK_APPROACH_BAND_C, 32), "watch");
+assert.equal(forecastRiskFor(32.9, 32), "watch");
+assert.equal(forecastRiskFor(33, 32), "critical");
+const approaching = replayCockpitSnapshot(SCENARIO_START_S);
+assert.equal(approaching.forecast.risk, "watch", "a forecast just below the limit must read WATCH");
+assert.equal(approaching.incident.open, false, "approaching the limit must not open an incident");
+
+// Operations runs the published build. With the SFO-01 template published as
+// an explicit layout, every replayed number matches the reference model.
+const { FACILITY_TEMPLATES, SFO_01_LAYOUT } = await import("../src/lib/facility/templates");
+const { facilityPlant } = await import("../src/lib/cockpit/simulation");
+const publishedReference = { ...DEFAULT_FACILITY_MODEL, layout: SFO_01_LAYOUT };
+for (const elapsedS of [0, 300, 900, 1_800]) {
+  const reference = replayCockpitSnapshot(SCENARIO_START_S + elapsedS);
+  const built = replayCockpitSnapshot(SCENARIO_START_S + elapsedS, publishedReference);
+  assert.deepEqual(
+    { ...built, modelConfig: reference.modelConfig },
+    reference,
+    `the published SFO-01 build must replay exactly like the reference model at ${elapsedS}s`,
+  );
+}
+assert.equal(facilityPlant().advisedUnit.id, "cdu-03", "SFO-01 advice targets CDU-03");
+// The recommendation copy is generated from the layout; for SFO-01 it must read
+// exactly as it did when it was written by hand.
+const referenceAdvice = replayCockpitSnapshot(SCENARIO_START_S + 900).recommendation;
+assert.equal(referenceAdvice.what, `Increase CDU-03 flow to ${referenceAdvice.flowPercent}% for ${referenceAdvice.durationMinutes} minutes.`);
+assert.equal(referenceAdvice.why, "Pre-empt the modeled CDU-03 response lag before the workload ramp reaches the thermal constraint.");
+assert.equal(referenceAdvice.where, "GPU Hall B · GPU Training Zone · CDU-03 serving racks A01–B02.");
+assert.equal(referenceAdvice.limitations[1], "Advisory is bounded to the CDU-03 command envelope and does not send an OT command.");
+assert.equal(referenceAdvice.command.assetId, "cdu-03");
+
+// A different build runs its own equipment, limits and capacity.
+const airRows = FACILITY_TEMPLATES.find((template) => template.id === "air-cooled-rows")!;
+const airModel = { ...DEFAULT_FACILITY_MODEL, layout: airRows.layout };
+const airSnapshot = replayCockpitSnapshot(SCENARIO_START_S + 900, airModel);
+assert.equal(airSnapshot.rackCount, 12, "the air-cooled build simulates its twelve racks");
+assert.equal(airSnapshot.coolingUnitCount, 2);
+assert.equal(airSnapshot.forecast.thresholdC, 27, "forecasts use the build's own rack inlet limit");
+assert.equal(airSnapshot.incident.limitC, 27);
+assert.equal(airSnapshot.plant.ratedCapacityKw, 500, "rated capacity is the build's chiller capacity");
+assert.match(airSnapshot.recommendation.command.assetId, /^crac-0[12]$/, "advice targets a CRAC unit in the build");
+assert.match(airSnapshot.recommendation.what, /^Increase CRAC-0[12] flow to /);
+assert.match(airSnapshot.recommendation.where, /^Data hall · /);
+assert(airSnapshot.racks.every((rack) => Number.isFinite(rack.inletC)), "every rack in the build has a temperature");
+const airAdvised = counterfactualCockpitSnapshot(SCENARIO_START_S + 900, { flowPercent: 85, durationMinutes: 20 }, airModel);
+assert(airAdvised.forecast.advisoryPeakC <= airSnapshot.forecast.baselinePeakC, "advice on the build's CRAC unit must not worsen its peak");
+
+// The benefit of acting depends on when: nothing is avoided at the start of the
+// ramp, the most around ten minutes in, and nothing once the limit is reached.
+const { advisoryTiming } = await import("../src/lib/cockpit/advisoryTiming");
+const timing = advisoryTiming(DEFAULT_FACILITY_MODEL);
+assert.deepEqual(timing.points.map((point) => point.elapsedS), [0, 300, 600, 900, 1_200, 1_500, 1_800]);
+for (const point of timing.points) {
+  assert.equal(
+    point.minutesAvoided,
+    replayCockpitSnapshot(SCENARIO_START_S + point.elapsedS).recommendation.constraintMinutesAvoided,
+    `advisory timing must read the replayed benefit at ${point.elapsedS}s`,
+  );
+}
+assert.equal(timing.points[0].minutesAvoided, 0, "acting at the start of the ramp avoids nothing yet");
+assert.deepEqual({ at: timing.best.elapsedS, avoided: timing.best.minutesAvoided }, { at: 600, avoided: 4.9 });
+assert.equal(timing.lastUsefulS, 1_200, "acting after the limit is reached avoids nothing");
+assert.equal(advisoryTiming(DEFAULT_FACILITY_MODEL), timing, "timing is computed once per model");
 
 console.log("Cockpit simulation golden and replay tests passed.");

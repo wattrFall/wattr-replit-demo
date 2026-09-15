@@ -10,6 +10,13 @@ export const ROLE_CAPABILITIES: Record<Role, Record<Capability, boolean>> = {
   VIEWER: { view: true, operate: false, engineer: false, model: false, assistant: true },
 };
 
+/** Roles that can open the thermal dependency graph. The organization owner always can. */
+export const TOPOLOGY_ROLES: readonly Role[] = ["OPERATOR", "ENGINEER", "MODEL_ADMIN"];
+
+export function canViewTopology(role: Role, isOwner = false) {
+  return isOwner || TOPOLOGY_ROLES.includes(role);
+}
+
 export function defaultLandingPath(role: Role) {
   if (role === "PORTFOLIO_MANAGER") return "/portfolio";
   if (role === "MODEL_ADMIN") return "/facilities/{facilityId}/model";

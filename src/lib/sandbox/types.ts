@@ -9,7 +9,34 @@
 /** The fixed catalogue of placeable equipment. */
 export type ComponentKind = "rack" | "crac" | "cdu" | "chiller" | "sensor";
 
-/** A cell on the floor plan. Integer coordinates; the grid is GRID_W x GRID_D. */
+/**
+ * What an area of the site is for. The kind gates what can be placed in it, so
+ * a layout stays legible: racks only ever sit in a compute hall and chillers
+ * only in a plant area, and a refusal names the right place. These mirror the
+ * Compute, Cooling and Plant zones of the Unity Forge editor.
+ */
+export type ZoneKind = "compute" | "cooling" | "plant";
+
+/**
+ * A named, positionable, resizable area of the site, in tiles.
+ *
+ * Zones are axis-aligned and never overlap. Equipment belongs to the zone it
+ * sits in and moves with it, and a zone cannot be shrunk, retyped or deleted in
+ * a way that would strand what it holds.
+ */
+export interface ZoneSpec {
+  id: string;
+  name: string;
+  kind: ZoneKind;
+  /** Top-left tile of the zone on the site grid. */
+  x: number;
+  z: number;
+  /** Size in tiles. */
+  w: number;
+  d: number;
+}
+
+/** A cell on the site grid. */
 export interface GridCell {
   x: number;
   z: number;
@@ -56,13 +83,22 @@ export type ControlMode = "baseline" | "wattr";
 export type InteractionMode =
   | { type: "idle" }
   | { type: "placing"; kind: ComponentKind }
-  | { type: "connecting"; fromId: string };
+  | { type: "connecting"; fromId: string }
+  /** Moving one end of an existing connection to a different unit. */
+  | { type: "rewiring"; connectionId: string; end: "from" | "to" };
 
 /** The full authored layout — everything needed to reproduce a scene. */
 export interface SandboxLayout {
   items: SandboxItem[];
   connections: Connection[];
+  zones: ZoneSpec[];
 }
+
+/**
+ * What the thermal model reads: equipment and how it is wired. Zone geometry
+ * only places things on screen, so the kernel never depends on it.
+ */
+export type SimLayout = Pick<SandboxLayout, "items" | "connections">;
 
 /** A named starting layout offered to first-time visitors. */
 export interface Preset {

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Show, SignIn, SignUp, useUser } from "@clerk/react";
 import {
-  Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ArrowDownUp, BookOpen, BrainCircuit, Check,
+  Activity, AlertTriangle, ArrowDown, ArrowRight, ArrowUp, ArrowDownUp, BookOpen, Boxes, BrainCircuit, Check,
   CircleHelp, Clock3, Cpu, Gauge, GitBranch, History, LayoutDashboard, Layers3, Menu, MousePointer2,
   Pause, Play, RotateCcw, Search, Save, ShieldCheck, SkipForward, SlidersHorizontal, Sun, Moon, Monitor, Thermometer, Trash2, UserCog, X,
 } from "lucide-react";
@@ -12,237 +12,22 @@ import type { TwinOverlay, TwinView } from "@/components/twin/types";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { replayCockpitSnapshot, SCENARIO_DURATION_S, snapshotForAudit, type CockpitSnapshot, type FacilityModelConfig } from "@/lib/cockpit/simulation";
 import { compareControllers, graphSelection, thermalGraph, type GraphView, type ControllerComparison } from "@/lib/cockpit/workspaces";
-import { ROLES, type Role } from "@/lib/security/rolePolicy";
+import { canViewTopology, ROLES, type Role } from "@/lib/security/rolePolicy";
+import { incidentStateAt, selectIncident, type IncidentReplayState } from "@/lib/cockpit/incidents";
 import { assistantSuggestions, type AssistantResponse } from "@/lib/cockpit/assistant";
 import { learningSurfaceForPath, recordLearningEvent, reportLearningError } from "@/lib/cockpit/learning";
 import { GuidanceProvider, useGuidance } from "./Guidance";
-
-type Capabilities = { view: boolean; operate: boolean; engineer: boolean; model: boolean; assistant: boolean };
-type Me = { id: string; display_name: string; organization_id: string; role: Role; is_admin: boolean; is_owner: boolean; capabilities: Capabilities; default_path: string; theme: string; tutorial_complete: boolean; tutorial_step: number; tutorial_role: Role | null };
-type Facility = { id: string; name: string; location: string; model_version: string; model_config: FacilityModelConfig; provenance: "SIMULATED"; recommendation_status: "PROPOSED" | "APPROVED" | "REJECTED" | "EXPIRED" | "NONE"; can_view: boolean; can_operate: boolean; can_edit_model: boolean; can_engineer: boolean; can_assistant: boolean };
-type Audit = { id: number; action: string; scenario_id: string; simulated_at: number; model_version: string; payload: Record<string, any>; created_at: string };
-type IncidentSignal = { id: string; assetId: string; metric: string; direction: string };
-type Incident = { id: string; title: string; severity: "WATCH" | "HIGH"; status: "OPEN" | "RESOLVED"; simulated_at: number; affected_assets: string[]; raw_signal_count: number; likely_cause: string; forecast_minutes: number; correlated_signals: IncidentSignal[]; thermal_path: string[]; deduplication_key: string; model_version: string };
-type SafetyEvaluation = {
-  id: string;
-  outcome: "PASS" | "WARNING" | "BLOCK";
-  checks: Array<{ id: string; status: "PASS" | "WARNING" | "BLOCK"; pass: boolean; detail: string; evidence: Record<string, unknown> }>;
-  command: { assetId: "cdu-03"; flowPercent: number; durationMinutes: number };
-  simulatedAt: number;
-  recommendationVersion: number;
-  modelVersionId: string;
-};
-type WhatIfComparison = {
-  simulatedAt: number;
-  modelVersionId: string;
-  recommendationVersion: number;
-  options: Array<{
-    id: "inaction" | "recommendation" | "alternative";
-    label: string;
-    command: { assetId: "cdu-03"; flowPercent: number; durationMinutes: number } | null;
-    peakC: number;
-    constraintMinutes: number;
-    series: Array<{ simulatedAt: number; peakC: number }>;
-  }>;
-};
-type ModelVersion = { id: string; facility_id: string; status: "DRAFT" | "VALIDATED" | "PUBLISHED" | "ARCHIVED"; config: Record<string, unknown>; published_at: string | null; created_by: string | null; created_at: string };
-type MemberFacility = { facility_id: string; facility_name: string; can_view: boolean; can_operate: boolean; can_edit_model: boolean };
-type Member = { id: string; email: string | null; display_name: string | null; role: Role; is_admin: boolean; is_owner: boolean; facilities: MemberFacility[] };
-type SessionData = { me: Me; facilities: Facility[] };
-type ThemePreference = "light" | "dark" | "system";
-type LearningOutcomesData = {
-  scope: string;
-  retention: { eventsAndFeedbackDays: number; errorsDays: number };
-  journeyEvents: Array<{ event_name: string; count: number; users: number }>;
-  operatorSessions: { total: number; completed: number; abandoned: number; avg_time_to_understanding_s: number | null; avg_error_count: number | null };
-  safetyOutcomes: Array<{ outcome: string; count: number }>;
-  decisionOutcomes: Array<{ outcome: string; count: number }>;
-  feedback: { count: number; positive: number; neutral: number; negative: number };
-  errors: Array<{ category: string; count: number }>;
-  commonAssistantTopics: Array<{ topic: string; count: number }>;
-};
-
-const mono = "font-[family-name:var(--font-mono)]";
-const navigate = (path: string) => {
-  history.pushState({}, "", path);
-  dispatchEvent(new PopStateEvent("popstate"));
-};
-const e2eTestUserId = () =>
-  (globalThis as typeof globalThis & { __WATTR_E2E_USER_ID__?: string }).__WATTR_E2E_USER_ID__;
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  const testUserId = e2eTestUserId();
-  if (testUserId) headers.set("x-test-user-id", testUserId);
-  const response = await fetch(path, { ...init, headers });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    if (!path.startsWith("/api/learning/")) {
-      const category = response.status === 401 || response.status === 403 || response.status === 404
-        ? "PERMISSION_FAILURE"
-        : response.status === 502 || response.status === 503 || response.status === 504
-          ? "EXTERNAL_SERVICE_UNAVAILABLE"
-          : "APPLICATION_FAULT";
-      reportLearningError(category, `HTTP_${response.status}`, { route: location.pathname });
-    }
-    throw new Error(body.error || `Request failed (${response.status})`);
-  }
-  return body as T;
-}
-const post = <T,>(path: string, body: unknown) => api<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-const patch = <T,>(path: string, body: unknown) => api<T>(path, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-const remove = (path: string) => api<void>(path, { method: "DELETE" });
-
-const ThemeContext = createContext<{
-  theme: ThemePreference;
-  setTheme: (theme: ThemePreference) => void;
-}>({ theme: "system", setTheme: () => {} });
-
-function useTheme() {
-  return useContext(ThemeContext);
-}
-
-function ThemeProvider({ initialTheme, children }: { initialTheme: string; children: ReactNode }) {
-  const [theme, setThemeState] = useState<ThemePreference>(
-    initialTheme === "light" || initialTheme === "dark" ? initialTheme : "system",
-  );
-  const [notice, setNotice] = useState("");
-  useEffect(() => {
-    const root = document.documentElement;
-    root.dataset.theme = theme;
-    root.style.colorScheme = theme;
-  }, [theme]);
-  const setTheme = (next: ThemePreference) => {
-    setThemeState(next);
-    setNotice(`Appearance set to ${next}.`);
-    patch("/api/me/preferences", { theme: next }).catch(() => {
-      setNotice("Appearance changed locally; it could not be saved.");
-    });
-  };
-  return <ThemeContext.Provider value={{ theme, setTheme }}>
-    {children}
-    <span className="sr-only" role="status" aria-live="polite">{notice}</span>
-  </ThemeContext.Provider>;
-}
-
-function ContextualHelp({ title, children }: { title: string; children: ReactNode }) {
-  const tooltipId = useId();
-  return <span className="context-help">
-    <button
-      type="button"
-      className="context-help-trigger"
-      aria-label={title}
-      aria-describedby={tooltipId}
-    >
-      <CircleHelp size={14} aria-hidden="true"/>
-    </button>
-    <span id={tooltipId} className="context-help-content" role="tooltip">
-      <strong>{title}</strong>
-      {children}
-    </span>
-  </span>;
-}
-
-function DisclosureSection({ label, children, engineering = false }: { label: string; children: ReactNode; engineering?: boolean }) {
-  return <details className={`disclosure ${engineering ? "engineering" : ""}`}>
-    <summary>{label}<ArrowRight size={13} aria-hidden="true"/></summary>
-    <div className="disclosure-content">{children}</div>
-  </details>;
-}
-
-function ThemeControl() {
-  const { theme, setTheme } = useTheme();
-  return <fieldset className="theme-control">
-    <legend>Appearance</legend>
-    {([
-      ["system", "System", Monitor],
-      ["light", "Light", Sun],
-      ["dark", "Dark", Moon],
-    ] as const).map(([value, label, Icon]) => <button
-      key={value}
-      type="button"
-      className={theme === value ? "selected" : ""}
-      aria-pressed={theme === value}
-      aria-label={`${label} appearance`}
-      onClick={() => setTheme(value)}
-    ><Icon size={13} aria-hidden="true"/><span>{label}</span></button>)}
-  </fieldset>;
-}
-
-function Brand() {
-  return <button onClick={() => navigate("/")} className="flex items-center gap-2.5 text-left"><span className="grid h-8 w-8 place-items-center rounded-md bg-cyan-400 text-slate-950"><Activity size={18}/></span><span><b className="block text-sm tracking-[.18em]">WATTR</b><small className="block text-[9px] tracking-[.2em] text-slate-500">OPERATOR COCKPIT</small></span></button>;
-}
-function Status({ children, tone = "good" }: { children: ReactNode; tone?: "good" | "warn" | "bad" }) { return <span className={`status ${tone}`}>{children}</span>; }
-function Metric({ label, value, unit, sub, warn, help }: { label: string; value: string; unit?: string; sub: string; warn?: boolean; help?: string }) {
-  return <article className="panel metric" aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. ${sub}`}><div className="metric-header">{help && <ContextualHelp title={`About ${label}`}><p>{help}</p></ContextualHelp>}<div className="text-[10px] uppercase tracking-[.16em] text-slate-500">{label}</div></div><div className={`mt-3 text-2xl font-semibold ${warn ? "text-amber-300" : "text-slate-100"}`}>{value}<small className="ml-1 text-xs font-normal text-slate-500">{unit}</small></div><div className="metric-sub mt-2 text-[11px] text-slate-500">{sub}</div></article>;
-}
-function PageHead({ eyebrow, title, detail, action }: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
-  return <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><div className={`${mono} mb-2 text-[10px] tracking-[.2em] text-cyan-400`}>{eyebrow}</div><h1 className="text-2xl font-semibold tracking-tight text-slate-100 md:text-3xl">{title}</h1><p className="mt-1 text-sm text-slate-500">{detail}</p></div>{action}</div>;
-}
-
-function ContextualFeedback({ facility }: { facility?: Facility }) {
-  const [sentiment, setSentiment] = useState<"POSITIVE" | "NEUTRAL" | "NEGATIVE">("NEUTRAL");
-  const [feedbackCode, setFeedbackCode] = useState("HELPFUL");
-  const [message, setMessage] = useState("");
-  const submit = async () => {
-    try {
-      await post("/api/learning/feedback", {
-        ...(facility ? { facilityId: facility.id } : {}),
-        surface: learningSurfaceForPath(location.pathname),
-        sentiment,
-        feedbackCode,
-      });
-      setMessage("Feedback saved with this product surface.");
-    } catch (cause) {
-      setMessage(`Feedback was not saved: ${String(cause)}`);
-    }
-  };
-  return <details className="disclosure mt-8">
-    <summary>Share feedback on this workspace<ArrowRight size={13} aria-hidden="true"/></summary>
-    <div className="disclosure-content">
-      <p className="text-xs text-slate-500">Optional and non-blocking. Structured categories prevent facility-sensitive details or operator notes from entering learning records.</p>
-      <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Feedback sentiment">
-        {(["POSITIVE", "NEUTRAL", "NEGATIVE"] as const).map((item) => <button type="button" key={item} className={`speed ${sentiment === item ? "selected" : ""}`} aria-pressed={sentiment === item} onClick={() => setSentiment(item)}>{item.toLowerCase()}</button>)}
-      </div>
-      <label className="field mt-3 block">What best describes this surface?<select className="select mt-2 w-full" value={feedbackCode} onChange={(event) => setFeedbackCode(event.target.value)}><option value="HELPFUL">Helpful</option><option value="UNCLEAR">Unclear</option><option value="MISSING_CONTEXT">Missing context</option><option value="TOO_SLOW">Too slow</option><option value="UNEXPECTED_RESULT">Unexpected result</option><option value="OTHER">Other product friction</option></select></label>
-      <div className="mt-3 flex items-center gap-3"><button type="button" className="button secondary" onClick={submit}>Send feedback</button>{message && <span className="text-xs text-slate-500" role="status">{message}</span>}</div>
-    </div>
-  </details>;
-}
-
-function Shell({ data, facility, children }: { data: SessionData; facility?: Facility; children: ReactNode }) {
-  const [mobile, setMobile] = useState(false);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const active = facility ?? data.facilities[0];
-  const nav: Array<[LucideIcon, string, string]> = [
-    ...(data.me.role === "PORTFOLIO_MANAGER" ? [[LayoutDashboard, "Portfolio", "/portfolio"] as [LucideIcon, string, string]] : []),
-    ...(data.me.role === "PORTFOLIO_MANAGER" ? [[BrainCircuit, "Ask Wattr", "/ask-wattr"] as [LucideIcon, string, string]] : []),
-    ...(active ? [
-      [Gauge, "Operations", `/facilities/${active.id}/operations`] as [LucideIcon, string, string],
-      [AlertTriangle, "Incident", `/facilities/${active.id}/incidents/inc-204`] as [LucideIcon, string, string],
-      [ShieldCheck, "Recommendation", `/facilities/${active.id}/recommendations/rec-17`] as [LucideIcon, string, string],
-      [History, "Audit history", `/facilities/${active.id}/audit`] as [LucideIcon, string, string],
-      ...(active.can_assistant && data.me.role !== "PORTFOLIO_MANAGER" ? [[BrainCircuit, "Ask Wattr", `/facilities/${active.id}/ask-wattr`] as [LucideIcon, string, string]] : []),
-      ...(["OPERATOR", "ENGINEER"].includes(data.me.role) ? [[GitBranch, "Thermal graph", `/facilities/${active.id}/topology`] as [LucideIcon, string, string]] : []),
-      ...(active.can_engineer ? [[BrainCircuit, "Model Lab", `/facilities/${active.id}/model-lab`] as [LucideIcon, string, string]] : []),
-      ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
-    ] : []),
-    ...(data.me.is_admin ? [[UserCog, "Access administration", "/admin"] as [LucideIcon, string, string]] : []),
-    ...((data.me.role === "PORTFOLIO_MANAGER" || data.me.is_admin) ? [[Activity, "Learning outcomes", "/learning"] as [LucideIcon, string, string]] : []),
-  ];
-  return <div className="cockpit min-h-[100dvh] bg-[#0a1018] text-slate-200">
-    <a className="skip-link" href="#main-content">Skip to main content</a>
-    <header className="fixed inset-x-0 top-0 z-30 flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4">
-      <div className="flex items-center gap-4">
-        <button ref={menuButtonRef} type="button" className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"} aria-expanded={mobile} aria-controls="cockpit-navigation"><Menu size={20} aria-hidden="true"/></button><Brand/>
-      </div>
-      <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><Status>{data.me.role.replace(/_/g, " ")}</Status><ThemeControl/></div>
-    </header>
-    {mobile && <button type="button" className="mobile-scrim md:hidden" aria-label="Close navigation" onClick={() => { setMobile(false); menuButtonRef.current?.focus(); }}/>}
-    <aside id="cockpit-navigation" aria-label="Primary navigation" className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><nav className="space-y-1">{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/>{label}</button>)}</nav><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className="cockpit-nav"><CircleHelp size={16} aria-hidden="true"/>Help & tutorials</button></div></aside>
-    <main id="main-content" tabIndex={-1} className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}<ContextualFeedback facility={facility}/></div></main>
-  </div>;
-}
+import { FacilityBuilder } from "@/components/builder/FacilityBuilder";
+import { facilityAssets } from "@/lib/cockpit/facilityAssets";
+import { facilityPlant } from "@/lib/cockpit/simulation";
+import { ApiError, describeError, navigate, e2eTestUserId, FACILITIES_CHANGED, api, post, patch, remove } from "./api";
+import { CLERK_LIGHT_APPEARANCE, Landing, PublicFrame, StateScreen } from "./PublicScreens";
+import { Recommendation } from "./RecommendationPage";
+import { ThermalGraphPage } from "./ThermalGraphPage";
+import { ReplayBar, Shell } from "./Shell";
+import type { Me, Facility, Audit, Incident, ModelVersion, MemberFacility, Member, SessionData, LearningOutcomesData } from "./types";
+import { mono, ThemeProvider, ContextualHelp, DisclosureSection, ThemeControl, Brand, Status, Metric, PageHead } from "./ui";
+import { showsLightTheme } from "./ui";
 
 type PortfolioSort = "attention" | "risk" | "power" | "cooling" | "efficiency" | "recommendation";
 type PortfolioFilter = "all" | "attention" | "nominal" | "recommendation";
@@ -314,19 +99,9 @@ function useScenarioClock() {
   const playing = useScenarioSession((s) => s.playing), speed = useScenarioSession((s) => s.speed);
   useEffect(() => { if (!playing) return; const timer = window.setInterval(() => { const state = useScenarioSession.getState(); state.advance(state.speed); }, 1000); return () => clearInterval(timer); }, [playing, speed]);
 }
-function ReplayBar({ onReset = () => {} }: { onReset?: () => void }) {
-  const s = useScenarioSession();
-  const elapsed = s.simulation.snapshot.elapsedS;
-  if (!location.pathname.endsWith("/operations")) return null;
-  return <section className="replay-bar mb-4" data-guide="replay" aria-label="Canonical replay controls">
-    <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300" aria-hidden="true"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><div className="ml-auto flex items-center gap-1" role="group" aria-label="Replay speed"><span className="mr-1 text-[10px] uppercase tracking-[.12em] text-slate-500">Speed</span>{([1,5,10,30,60] as const).map(v => <button type="button" aria-label={`Replay speed ${v} times`} aria-pressed={s.speed === v} key={v} onClick={() => s.setSpeed(v)} className={`speed ${s.speed === v ? "selected" : ""}`}>{v}×</button>)}</div><button type="button" className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15} aria-hidden="true"/> : <Play size={15} aria-hidden="true"/>} {s.playing ? "Pause" : "Play"}</button></div>
-    <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" className="button secondary" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={14} aria-hidden="true"/>Step 30s</button><button type="button" className="button secondary" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}>−5m</button><button type="button" className="button secondary" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}>+5m</button><button type="button" className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button><input aria-label="Replay position" aria-valuetext={`${Math.round(elapsed / 60)} minutes into the 30 minute scenario`} className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/><span className={`${mono} text-[10px] text-slate-500`}>{Math.round(elapsed / 60)}m</span><button type="button" className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15} aria-hidden="true"/>Reset</button><Status tone={s.mode === "Advisory" ? "warn" : "good"}>{s.mode} · human-in-loop</Status></div>
-    <p className="sr-only" role="status" aria-live="polite">Replay at {Math.round(elapsed / 60)} minutes. {s.playing ? `Playing at ${s.speed} times speed.` : "Paused."}</p>
-  </section>;
-}
 function LegacyOperations({ data, facility }: { data: SessionData; facility: Facility }) {
   const s = useScenarioSession(), snapshot = s.simulation.snapshot;
-  return <Shell data={data} facility={facility}><PageHead eyebrow={`FACILITY / ${facility.id.toUpperCase()} / OPERATIONS`} title={facility.name} detail={`${facility.location} · deterministic GPU Training Ramp · ${facility.provenance}`}/><ReplayBar/><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}%`}/><Metric label="Total facility" value={snapshot.totalPowerKw.toLocaleString()} unit="kW" sub="physical power balance"/><Metric label="Peak inlet" value={snapshot.peakInletC.toFixed(1)} unit="°C" sub={`limit ${snapshot.incident.limitC.toFixed(1)}°C`} warn={snapshot.peakInletC >= snapshot.incident.limitC}/><Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="physical simulation"/><Metric label="Headroom" value={snapshot.headroomKw.toLocaleString()} unit="kW" sub="rated capacity"/></div><div className="mt-4 grid gap-4 xl:grid-cols-[1.5fr_.8fr]"><section className="panel min-h-[430px] overflow-hidden"><div className="border-b border-slate-800 p-5"><h2 className="font-semibold">Synchronized facility twin</h2><p className="text-xs text-slate-500">Workload → power → heat → CDU-03 response · {snapshot.coolingUnitCount} cooling unit</p></div><div className="twin-canvas"><div className="twin-grid"/><div className="twin-core"><Cpu size={28}/><b>GPU HALL</b><small>CLUSTER B · {snapshot.itPowerKw.toLocaleString()} kW</small></div>{snapshot.racks.map((rack,i)=><button key={rack.id} aria-label={`Inspect rack ${rack.id}`} onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)} className={`rack rack-${i} ${rack.atRisk?"hot":""}`}><span>{rack.id}</span><i style={{height:`${Math.min(100, Math.max(20, ((rack.inletC - 20) / (rack.limitC - 20)) * 100))}%`}}/></button>)}</div></section><aside className="space-y-4"><section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><h2 className={`mt-2 text-xl font-semibold ${snapshot.forecast.risk === "clear" ? "text-teal-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : `${snapshot.incident.severity} condition`}</h2><p className="mt-4 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section><section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={e=>s.setMode(e.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">Human approval is always required. No OT commands are issued.</p></section></aside></div></Shell>;
+  return <Shell data={data} facility={facility}><PageHead eyebrow={`FACILITY / ${facility.id.toUpperCase()} / OPERATIONS`} title={facility.name} detail={`${facility.location} · deterministic GPU Training Ramp · ${facility.provenance}`}/><ReplayBar/><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Metric label="IT power" value={snapshot.itPowerKw.toLocaleString()} unit="kW" sub={`GPU ramp at ${snapshot.workloadPercent}%`}/><Metric label="Total facility" value={snapshot.totalPowerKw.toLocaleString()} unit="kW" sub="physical power balance"/><Metric label="Peak inlet" value={snapshot.peakInletC.toFixed(1)} unit="°C" sub={`limit ${snapshot.incident.limitC.toFixed(1)}°C`} warn={snapshot.peakInletC >= snapshot.incident.limitC}/><Metric label="PUE" value={snapshot.pue.toFixed(3)} sub="physical simulation"/><Metric label="Headroom" value={snapshot.headroomKw.toLocaleString()} unit="kW" sub="rated capacity"/></div><div className="mt-4 grid gap-4 xl:grid-cols-[1.5fr_.8fr]"><section className="panel min-h-[430px] overflow-hidden"><div className="border-b border-slate-800 p-5"><h2 className="font-semibold">Synchronized facility twin</h2><p className="text-xs text-slate-500">Workload → power → heat → CDU-03 response · {snapshot.coolingUnitCount} cooling unit</p></div><div className="twin-canvas"><div className="twin-grid"/><div className="twin-core"><Cpu size={28}/><b>GPU HALL</b><small>CLUSTER B · {snapshot.itPowerKw.toLocaleString()} kW</small></div>{snapshot.racks.map((rack,i)=><button key={rack.id} aria-label={`Inspect rack ${rack.id}`} onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)} className={`rack rack-${i} ${rack.atRisk?"hot":""}`}><span>{rack.id}</span><i style={{height:`${Math.min(100, Math.max(20, ((rack.inletC - 20) / (rack.limitC - 20)) * 100))}%`}}/></button>)}</div></section><aside className="space-y-4"><section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><h2 className={`mt-2 text-xl font-semibold ${snapshot.forecast.risk === "clear" ? "text-teal-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : snapshot.incident.open ? `${snapshot.incident.severity} condition` : "Approaching limit"}</h2><p className="mt-4 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section><section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={e=>s.setMode(e.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">Human approval is always required. No OT commands are issued.</p></section></aside></div></Shell>;
 }
 
 function Transparency({ facility, snapshot }: { facility: Facility; snapshot: CockpitSnapshot }) {
@@ -363,7 +138,7 @@ function OperatorTestSession({ facility, elapsedS }: { facility: Facility; elaps
       setStartedAt(Date.now());
       setMessage("Evaluation session active.");
     } catch (cause) {
-      setMessage(`Session could not start: ${String(cause)}`);
+      setMessage(`Session could not start. ${describeError(cause)}`);
     }
   };
   const recordFriction = async () => {
@@ -389,7 +164,7 @@ function OperatorTestSession({ facility, elapsedS }: { facility: Facility; elaps
       setSessionId("");
       setMessage(status === "COMPLETED" ? "Understanding outcome recorded." : "Abandonment recorded.");
     } catch (cause) {
-      setMessage(`Session outcome was not saved: ${String(cause)}`);
+      setMessage(`Session outcome was not saved. ${describeError(cause)}`);
     }
   };
   return <details className="disclosure mb-4">
@@ -419,9 +194,11 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
   const [overlays, setOverlays] = useState<TwinOverlay[]>(["heat", "flow", "sensors", "labels", "incidents", "forecast"]);
   useEffect(() => { useScenarioSession.getState().setModelConfig(facility.model_config); }, [facility.id, facility.model_version]);
   const selectedRack = snapshot.racks.find((rack) => rack.id === selectedAsset);
-  const selectedLabel = selectedRack ? `Rack ${selectedRack.id}` : selectedAsset === "cdu-03" ? "CDU-03" : selectedAsset === "chiller-01" ? "Chiller-01" : selectedAsset === "pdu-01" ? "PDU-01" : selectedAsset === "pdu-02" ? "PDU-02" : selectedAsset.startsWith("sensor-") ? `Sensor ${selectedAsset.slice(-2)}` : selectedAsset.startsWith("rack-f2-") ? `Floor 2 rack ${selectedAsset.slice(-1).toUpperCase()}` : "GPU Cluster B";
+  const assets = facilityAssets(facility.model_config);
+  const selectedEquipment = assets.byId.get(selectedAsset);
+  const selectedLabel = selectedRack ? `Rack ${selectedRack.id}` : selectedEquipment && selectedEquipment.kind !== "workload" ? selectedEquipment.label : selectedAsset.startsWith("pdu-") ? selectedAsset.toUpperCase() : selectedAsset.startsWith("rack-f2-") ? `Floor 2 rack ${selectedAsset.slice(-1).toUpperCase()}` : assets.workload.label;
   const toggleOverlay = (overlay: TwinOverlay) => setOverlays((items) => items.includes(overlay) ? items.filter((item) => item !== overlay) : [...items, overlay]);
-  const riskTone = snapshot.forecast.risk === "critical" ? "bad" : snapshot.incident.open ? "warn" : "good";
+  const riskTone = snapshot.forecast.risk === "critical" ? "bad" : snapshot.forecast.risk === "watch" || snapshot.incident.open ? "warn" : "good";
   return <Shell data={data} facility={facility}>
     <PageHead eyebrow={`FACILITY / ${facility.id.toUpperCase()} / OPERATIONS`} title={facility.name} detail={`${facility.location} · deterministic GPU Training Ramp · ${facility.provenance}`} action={<Status tone="warn">REPLAY-CONTROLLED</Status>}/>
     <ReplayBar/>
@@ -443,8 +220,8 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
       </section>
       <aside className="min-w-0 space-y-4">
         {(s.focusedIncidentId || s.focusedRecommendationId) && <section className="panel border-purple-400/40 p-4" aria-label="Assistant twin focus"><div className="eyebrow text-purple-300">ASK WATTR FOCUS</div><div className="mt-2 flex flex-wrap items-center gap-2"><Status tone={s.focusedIncidentId ? "warn" : "good"}>{s.focusedIncidentId ? `Incident ${s.focusedIncidentId}` : `Recommendation ${s.focusedRecommendationId}`}</Status><span className="text-xs text-slate-400">{s.highlightedPath.length ? s.highlightedPath.join(" → ") : `${selectedLabel} at the cited scenario time`}</span></div></section>}
-        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedAsset === "cdu-03" ? `Cooling distribution is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit online.` : selectedAsset === "chiller-01" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : selectedAsset.startsWith("pdu-") ? "Power distribution asset in the authorized facility topology. Facility power context remains synchronized to the replay clock." : selectedAsset.startsWith("sensor-") ? `Environmental sensor marker. Facility mean inlet is ${snapshot.meanInletC.toFixed(1)}°C at this replay instant.` : selectedAsset.startsWith("rack-f2-") ? "Floor 2 modeled compute asset. This floor has no rack-level telemetry in the canonical training scenario." : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}<ContextualHelp title="Why select an asset?"><p>Selection adds local state and dependencies without replacing the facility-wide summary. Use it when a site-level signal needs asset context.</p></ContextualHelp></section>
-        <section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><div className="mt-2 flex items-center justify-between gap-3"><h2 className={`text-xl font-semibold ${riskTone === "good" ? "text-teal-300" : riskTone === "bad" ? "text-red-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : `${snapshot.incident.severity} condition`}</h2><Status tone={riskTone}>{snapshot.forecast.risk}</Status></div><p className="mt-3 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><ContextualHelp title="How to read this forecast"><p>The forecast extends the current replay state through the disclosed horizon. Risk describes whether modeled temperature approaches or crosses the limit; it is not a live alarm or certainty statement.</p></ContextualHelp><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section>
+        <section className="panel p-5"><div className="eyebrow">CONTEXTUAL HUD</div><h2 className="mt-2 text-xl font-semibold">{selectedLabel}</h2>{selectedRack ? <><p className="mt-2 text-sm text-slate-400">Current rack state at this replay instant.</p><div className="mt-5 grid grid-cols-2 gap-3"><Metric label="Inlet" value={selectedRack.inletC.toFixed(1)} unit="°C" sub={`limit ${selectedRack.limitC.toFixed(1)}°C`} warn={selectedRack.atRisk}/><Metric label="Heat" value={selectedRack.heatKw.toLocaleString()} unit="kW" sub="estimated IT heat"/></div>{selectedRack.atRisk && <button className="button primary mt-4 w-full justify-center" onClick={() => navigate(`/facilities/${facility.id}/incidents/inc-204`)}>Inspect incident <ArrowRight size={14}/></button>}</> : <p className="mt-2 text-sm leading-6 text-slate-400">{selectedEquipment?.kind === "cooling" ? `${selectedEquipment.item?.kind === "crac" ? "Cooling air" : "Cooling distribution"} is at ${snapshot.fanPercent.toFixed(0)}% command with ${snapshot.coolingUnitCount} unit${snapshot.coolingUnitCount === 1 ? "" : "s"} online.` : selectedEquipment?.kind === "chiller" ? `Chilled water supply is ${snapshot.chilledWaterC.toFixed(1)}°C.` : selectedAsset.startsWith("pdu-") ? "Power distribution asset in the authorized facility topology. Facility power context remains synchronized to the replay clock." : selectedAsset.startsWith("sensor-") ? `Environmental sensor marker. Facility mean inlet is ${snapshot.meanInletC.toFixed(1)}°C at this replay instant.` : selectedAsset.startsWith("rack-f2-") ? "Floor 2 modeled compute asset. This floor has no rack-level telemetry in the canonical training scenario." : `Cluster workload is ${snapshot.workloadPercent}% with ${snapshot.rackCount} racks online.`}</p>}<ContextualHelp title="Why select an asset?"><p>Selection adds local state and dependencies without replacing the facility-wide summary. Use it when a site-level signal needs asset context.</p></ContextualHelp></section>
+        <section className="panel p-5"><div className="eyebrow">FORECAST RISK</div><div className="mt-2 flex items-center justify-between gap-3"><h2 className={`text-xl font-semibold ${riskTone === "good" ? "text-teal-300" : riskTone === "bad" ? "text-red-300" : "text-amber-300"}`}>{snapshot.forecast.risk === "clear" ? "Clear condition" : snapshot.incident.open ? `${snapshot.incident.severity} condition` : "Approaching limit"}</h2><Status tone={riskTone}>{snapshot.forecast.risk}</Status></div><p className="mt-3 text-sm leading-6 text-slate-400">{snapshot.incident.rackId} forecast peak {snapshot.forecast.baselinePeakC.toFixed(1)}°C in the next {Math.round(snapshot.forecast.horizonS / 60)} minutes against a {snapshot.incident.limitC.toFixed(1)}°C limit.</p><ContextualHelp title="How to read this forecast"><p>The forecast extends the current replay state through the disclosed horizon. Risk describes whether modeled temperature approaches or crosses the limit; it is not a live alarm or certainty statement.</p></ContextualHelp><button onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)} className="button primary mt-4 w-full justify-center">Review advisory <ArrowRight size={15}/></button></section>
         <section className="panel p-5"><div className="eyebrow">OPERATING MODE</div><select aria-label="Operating mode" value={s.mode} onChange={(event) => s.setMode(event.target.value as typeof s.mode)} className="select mt-4 w-full"><option>Observe</option><option>Shadow</option><option>Advisory</option></select><p className="mt-3 text-xs leading-5 text-slate-500">{s.mode === "Observe" ? "Read-only view. No advisory is proposed." : s.mode === "Shadow" ? "Recommendations are simulated for comparison; no action is sent." : "Advisories may be reviewed, but human approval is required. No OT commands are issued."}</p><ContextualHelp title="What changes by mode?"><p><b>Observe</b> shows state only. <b>Shadow</b> computes recommendations for comparison. <b>Advisory</b> lets authorized operators review and record a disposition. None of these modes sends an OT command.</p></ContextualHelp></section>
         <Transparency facility={facility} snapshot={snapshot}/>
       </aside>
@@ -452,157 +229,61 @@ function Operations({ data, facility }: { data: SessionData; facility: Facility 
   </Shell>;
 }
 
-function Recommendation({ data, facility }: { data: SessionData; facility: Facility }) {
+function IncidentPage({ data, facility, incidentId }: { data: SessionData; facility: Facility; incidentId?: string }) {
   const guidance = useGuidance();
-  const snapshot = useScenarioSession((state) => state.simulation.snapshot);
-  const [flowPercent, setFlowPercent] = useState(snapshot.recommendation.flowPercent);
-  const [durationMinutes, setDurationMinutes] = useState(snapshot.recommendation.durationMinutes);
-  const [comparison, setComparison] = useState<WhatIfComparison | null>(null);
-  const [evaluation, setEvaluation] = useState<SafetyEvaluation | null>(null);
-  const [note, setNote] = useState("");
-  const [message, setMessage] = useState("");
+  const snapshot = useScenarioSession((s) => s.simulation.snapshot);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [selected, setSelected] = useState<Incident | null>(null);
+  const [reconstructed, setReconstructed] = useState<CockpitSnapshot | null>(null);
   const [error, setError] = useState("");
-  const command = { assetId: "cdu-03" as const, flowPercent, durationMinutes };
-
   useEffect(() => {
-    void recordLearningEvent("RECOMMENDATION_INSPECTED", {
-      facilityId: facility.id,
-      simulatedAt: snapshot.simulatedAt,
-    });
-  }, [facility.id]);
-
-  useEffect(() => {
-    setComparison(null);
-    setEvaluation(null);
-    setMessage("");
-  }, [snapshot.simulatedAt, flowPercent, durationMinutes]);
-
-  const compare = async () => {
-    setError("");
-    try {
-      setComparison(await post<WhatIfComparison>(
-        `/api/facilities/${facility.id}/recommendations/rec-17/what-if`,
-        { simulatedAt: snapshot.simulatedAt, command },
-      ));
-      guidance.emit("what-if");
-    } catch (cause) { setError(String(cause)); }
-  };
-  const evaluate = async () => {
-    setError("");
-    try {
-      setEvaluation(await post<SafetyEvaluation>(
-        `/api/facilities/${facility.id}/recommendations/rec-17/evaluate`,
-        { simulatedAt: snapshot.simulatedAt, command },
-      ));
-      guidance.emit("safety-run");
-    } catch (cause) { setError(String(cause)); }
-  };
-  const decide = async (decision: "APPROVE" | "REJECT" | "DEFER" | "REQUEST_ALTERNATIVE" | "ACKNOWLEDGE") => {
-    setError("");
-    try {
-      const record = await post<Audit>(
-        `/api/facilities/${facility.id}/recommendations/rec-17/decisions`,
-        {
-          decision,
-          simulatedAt: snapshot.simulatedAt,
-          safetyEvaluationId: evaluation?.id,
-          command,
-          note,
-        },
-      );
-      setMessage(`${decision.replace(/_/g, " ")} recorded as immutable decision #${record.id}.`);
-      guidance.emit("decision-record");
-      setEvaluation(null);
-    } catch (cause) { setError(String(cause)); }
-  };
-  const evaluationTone = evaluation?.outcome === "PASS" ? "text-teal-300" : evaluation?.outcome === "WARNING" ? "text-amber-300" : "text-red-300";
-
-  return <Shell data={data} facility={facility}>
-    <PageHead eyebrow="RECOMMENDATION / REC-17 / VERSION 1" title="Pre-emptive CDU-03 flow adjustment" detail={`Bound to ${formatSimulatedAt(snapshot.simulatedAt)}, GPU Training Ramp, and ${facility.model_version}.`}/>
-    <ReplayBar/>
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(330px,.75fr)]">
-      <div className="space-y-4">
-        <section className="panel p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone="warn">ADVISORY · SYNTHETIC</Status><h2 className="mt-3 text-xl font-semibold">{snapshot.recommendation.what}</h2></div><ShieldCheck className="text-cyan-300"/></div>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            {[
-              ["WHY", snapshot.recommendation.why],
-              ["WHERE", snapshot.recommendation.where],
-              ["EXPECTED EFFECT", snapshot.recommendation.expectedEffect],
-              ["CONFIDENCE", `${Math.round(snapshot.recommendation.confidence * 100)}% at the ${snapshot.forecast.horizonS / 60}-minute horizon; quality GOOD inside the disclosed domain.`],
-            ].map(([label, value]) => <div key={label} className="subpanel"><span className="eyebrow">{label}</span><p className="text-sm leading-6 text-slate-300">{value}</p></div>)}
-          </div>
-          <div className="mt-5 grid gap-3 sm:grid-cols-3">
-            <Metric label="Inaction peak" value={snapshot.recommendation.baselinePeakC.toFixed(1)} unit="°C" sub="same initial state" warn/>
-            <Metric label="Recommended peak" value={snapshot.recommendation.advisoryPeakC.toFixed(1)} unit="°C" sub={`${snapshot.recommendation.reductionC.toFixed(1)}°C modeled reduction`}/>
-            <Metric label="Constraint avoided" value={String(snapshot.recommendation.constraintMinutesAvoided)} unit="min" sub="same events and model"/>
-          </div>
-          <div className="mt-5 grid gap-2">
-            <DisclosureSection label="Advanced: confidence and limitations"><p>Confidence is scoped to this replay state, horizon, and model domain; it is not a probability that an operator decision is correct.</p><ul className="mt-2 list-disc space-y-1 pl-5">{snapshot.recommendation.limitations.map((item) => <li key={item}>{item}</li>)}</ul></DisclosureSection>
-            <DisclosureSection label="Engineering: provenance and model binding" engineering><p>{snapshot.recommendation.provenance} · deterministic reduced-order model · {facility.model_version}. The recommendation, Safety Shield result, and recorded decision remain bound to this exact model version and replay instant.</p></DisclosureSection>
-          </div>
-        </section>
-
-        <DisclosureSection label="Advanced: compare a permitted alternative">
-        <section className="p-5" data-guide="what-if">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">WHAT-IF COMPARISON</div><h2 className="mt-2 text-lg font-semibold">Adjust a permitted advisory</h2><p className="copy">Only the advisory parameters change. Initial state, event stream, replay instant, and model version stay fixed.</p></div><SlidersHorizontal className="text-cyan-300"/></div>
-          <div className="mt-5 grid gap-4 sm:grid-cols-2">
-            <label className="field">CDU-03 flow: <b>{flowPercent}%</b><input aria-label="Alternative CDU flow percent" type="range" min="60" max="85" step="1" value={flowPercent} onChange={(event) => setFlowPercent(Number(event.target.value))}/></label>
-            <label className="field">Duration: <b>{durationMinutes} minutes</b><input aria-label="Alternative duration minutes" type="range" min="1" max="30" step="1" value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}/></label>
-          </div>
-          <button className="button secondary mt-5" onClick={compare}><Layers3 size={15}/>Compare identical-input outcomes</button>
-          {comparison && <div className="mt-5 grid gap-3 md:grid-cols-3">{comparison.options.map((option) => <article key={option.id} className={`subpanel ${option.id === "alternative" ? "border-cyan-500/60" : ""}`}><div className="flex items-center justify-between gap-2"><b>{option.label}</b>{option.id === "alternative" && <Status>EDITED</Status>}</div><span className="text-2xl font-semibold">{option.peakC.toFixed(1)}<small className="ml-1 text-xs text-slate-500">°C peak</small></span><small>{option.constraintMinutes.toFixed(1)} modeled constraint minutes</small><small>{option.command ? `${option.command.flowPercent}% · ${option.command.durationMinutes} min` : "No advisory action"}</small></article>)}</div>}
-        </section>
-        </DisclosureSection>
-      </div>
-
-      <aside className="space-y-4">
-        <section className="panel p-6" data-guide="safety">
-          <div className="eyebrow">SAFETY SHIELD · SERVER VERIFIED</div>
-          {evaluation ? <>
-            <div className="mt-2 flex items-center justify-between"><h2 className={`text-2xl font-semibold ${evaluationTone}`}>{evaluation.outcome}</h2><Status tone={evaluation.outcome === "PASS" ? "good" : evaluation.outcome === "WARNING" ? "warn" : "bad"}>{evaluation.modelVersionId}</Status></div>
-            <p className="mt-2 text-xs text-slate-500">Bound to recommendation v{evaluation.recommendationVersion}, this command, user, model, and replay instant.</p>
-            <ul className="mt-5 space-y-3">{evaluation.checks.map((check) => <li key={check.id} className="flex gap-3 text-sm"><span className={check.status === "PASS" ? "text-teal-300" : check.status === "WARNING" ? "text-amber-300" : "text-red-300"}>{check.status === "PASS" ? <Check size={16}/> : <X size={16}/>}</span><span><span className="flex items-center gap-2"><b>{check.id.replace(/_/g, " ")}</b><Status tone={check.status === "PASS" ? "good" : check.status === "WARNING" ? "warn" : "bad"}>{check.status}</Status></span><small className="mt-1 block leading-5 text-slate-500">{check.detail}</small></span></li>)}</ul>
-          </> : <p className="copy">Run the server-side evaluation after choosing the command. A changed parameter, replay instant, model, or reused result invalidates approval.</p>}
-          <ContextualHelp title="Who has decision authority?"><p>The Safety Shield verifies constraints but does not approve the advisory. Only an authorized operator can record a disposition, and approval never sends an equipment command.</p></ContextualHelp>
-          {facility.can_assistant && <button className="button primary mt-5 w-full justify-center" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button>}
-        </section>
-        {facility.can_operate ? <section className="panel p-6" data-guide="disposition">
-          <div className="eyebrow">OPERATOR DISPOSITION</div>
-          <label className="field">Decision note (optional)<textarea className="textarea mt-2 min-h-[76px] w-full" maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record operational context"/></label>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <button className="button primary justify-center" disabled={evaluation?.outcome !== "PASS"} onClick={() => decide("APPROVE")}><Check size={14}/>Approve</button>
-            <button className="button secondary justify-center" onClick={() => decide("REJECT")}><X size={14}/>Reject</button>
-            <button className="button secondary justify-center" onClick={() => decide("DEFER")}><Clock3 size={14}/>Defer</button>
-            <button className="button secondary justify-center" onClick={() => decide("REQUEST_ALTERNATIVE")}><RotateCcw size={14}/>Request alternative</button>
-          </div>
-          {evaluation?.outcome === "WARNING" && <button className="button secondary mt-2 w-full justify-center" onClick={() => decide("ACKNOWLEDGE")}>Acknowledge warning without approval</button>}
-          <p className="mt-3 text-[11px] leading-5 text-slate-500">Approval is available only for an unused, unexpired PASS. This records an advisory disposition; it never sends an equipment command.</p>
-        </section> : <section className="panel p-6 text-sm text-slate-500">Read-only access: operator dispositions are unavailable for this role.</section>}
-        {error && <p role="alert" className="panel p-4 text-sm text-red-300">{error}</p>}
-        {message && <p role="status" className="panel p-4 text-sm text-teal-300">{message}</p>}
-      </aside>
-    </div>
-  </Shell>;
-}
-
-function IncidentPage({ data, facility, incidentId }: { data: SessionData; facility: Facility; incidentId: string }) {
-  const guidance = useGuidance();
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot), [incidents, setIncidents] = useState<Incident[]>([]), [selected, setSelected] = useState<Incident | null>(null), [reconstructed, setReconstructed] = useState<CockpitSnapshot | null>(null), [error, setError] = useState("");
-  useEffect(() => {
+    let cancelled = false;
+    setSelected(null);
+    setReconstructed(null);
     api<Incident[]>(`/api/facilities/${facility.id}/incidents`).then((items) => {
+      if (cancelled) return;
       setIncidents(items);
-      const item = items.find(candidate => candidate.id === incidentId) ?? items[0];
+      setLoaded(true);
+      const { incident: item } = selectIncident(items, incidentId);
       if (!item) return;
       setSelected(item);
       return api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`)
-        .then(result => setReconstructed(result.snapshot));
-    }).catch(e => setError(String(e)));
+        .then((result) => { if (!cancelled) setReconstructed(result.snapshot); });
+    }).catch((e) => { if (!cancelled) setError(describeError(e)); });
+    return () => { cancelled = true; };
   }, [facility.id, incidentId]);
-  const incident = selected ?? incidents[0];
-  const reconstruct = async (item: Incident) => { setSelected(item); try { const result = await api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`); setReconstructed(result.snapshot); guidance.emit("incident-review"); } catch (e) { setError(String(e)); } };
+  // An unknown incident id shows a not-found state rather than another incident.
+  const notFound = loaded && !selected && selectIncident(incidents, incidentId).notFound;
+  const incident = selected;
+  const reconstruct = async (item: Incident) => { setSelected(item); try { const result = await api<{ incident: Incident; snapshot: CockpitSnapshot }>(`/api/facilities/${facility.id}/incidents/${item.id}`); setReconstructed(result.snapshot); guidance.emit("incident-review"); } catch (e) { setError(describeError(e)); } };
   const current = reconstructed ?? snapshot;
-  return <Shell data={data} facility={facility}><PageHead eyebrow="INCIDENTS / CORRELATED EVENTS" title="Incident investigation" detail="Persisted incidents retain their scenario timestamp so operators can reconstruct what was known."/><div className="grid gap-4 xl:grid-cols-[300px_1fr]"><section className="panel overflow-hidden"><div className="border-b border-slate-800 p-4"><h2 className="font-semibold">Open incidents</h2></div>{incidents.map(item => <button key={item.id} onClick={() => reconstruct(item)} className={`w-full border-b border-slate-800 p-4 text-left ${incident?.id === item.id ? "bg-slate-800/60" : ""}`}><div className="flex justify-between"><b>{item.id}</b><Status tone={item.severity === "HIGH" ? "bad" : "warn"}>{item.severity}</Status></div><p className="mt-2 text-xs text-slate-400">{item.title}</p><p className="mt-2 text-[10px] text-slate-500">{item.raw_signal_count} raw signals · {item.forecast_minutes}m forecast</p></button>)}{!incidents.length&&!error&&<p className="p-4 text-sm text-slate-500">No persisted incidents.</p>}{error&&<p role="alert" className="p-4 text-sm text-red-300">{error}</p>}</section><section className="space-y-4">{incident ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={incident.severity === "HIGH" ? "bad" : "warn"}>{incident.status}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Generated at {formatSimulatedAt(incident.simulated_at)} from the GPU Training Ramp.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="deduplicated into one incident"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 grid gap-3 md:grid-cols-2"><div className="subpanel"><span className="eyebrow">CORRELATED EVIDENCE</span>{(incident.correlated_signals ?? []).map(signal => <div key={signal.id} className="text-xs text-slate-300"><b>{signal.assetId}</b> · {signal.metric.replace(/_/g, " ")} · {signal.direction}</div>)}</div><div className="subpanel"><span className="eyebrow">THERMAL PATH</span><div className="flex flex-wrap items-center gap-2 text-xs">{(incident.thermal_path ?? []).map((asset, index) => <span key={asset} className="flex items-center gap-2"><b>{asset}</b>{index < incident.thermal_path.length - 1 && <ArrowRight size={12} className="text-cyan-300"/>}</span>)}</div><small>Dedup key: {incident.deduplication_key}</small></div></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=cdu-03`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">Choose an incident to inspect its correlated signals.</section>}</section></div></Shell>;
+  // Status follows the replay clock, matching Portfolio, Operations and Ask Wattr.
+  const stateTone = (state: IncidentReplayState): "good" | "warn" | "bad" => state.status === "CLEAR" ? "good" : state.severity === "HIGH" ? "bad" : "warn";
+  const stateLabel = (state: IncidentReplayState) => state.status === "CLEAR" ? "CLEAR" : `OPEN · ${state.severity}`;
+  const incidentState = incident ? incidentStateAt(incident, snapshot) : null;
+  const replayTime = formatSimulatedAt(snapshot.simulatedAt).slice(11);
+  return <Shell data={data} facility={facility}><PageHead eyebrow="INCIDENTS / CORRELATED EVENTS" title="Incident investigation" detail="Incident status follows the replay clock. Each record keeps the scenario time it was raised, so you can reconstruct what was known."/>
+    <div className="grid gap-4 xl:grid-cols-[300px_1fr]">
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 p-4"><h2 className="font-semibold">Scenario incidents</h2><p className="mt-1 text-xs text-slate-500">Status at {replayTime}</p></div>
+        {incidents.map((item) => {
+          const state = incidentStateAt(item, snapshot);
+          return <button key={item.id} onClick={() => reconstruct(item)} className={`w-full border-b border-slate-800 p-4 text-left ${incident?.id === item.id ? "bg-slate-800/60" : ""}`}><div className="flex justify-between gap-2"><b>{item.id}</b><Status tone={stateTone(state)}>{stateLabel(state)}</Status></div><p className="mt-2 text-xs text-slate-400">{item.title}</p><p className="mt-2 text-[10px] text-slate-500">{item.raw_signal_count} raw signals · {item.forecast_minutes}m forecast</p></button>;
+        })}
+        {loaded && !incidents.length && !error && <p className="p-4 text-sm text-slate-500">No incidents have been recorded for this facility.</p>}
+        {error && <p role="alert" className="p-4 text-sm text-red-300">{error}</p>}
+      </section>
+      <section className="space-y-4">
+        {notFound ? <section className="panel p-6" aria-labelledby="incident-not-found">
+          <Status tone="warn">NOT FOUND</Status>
+          <h2 id="incident-not-found" className="mt-3 text-xl font-semibold">Incident {incidentId} was not found</h2>
+          <p className="copy">This facility has no incident with that ID, so nothing is shown in its place. The link may be out of date. Choose an incident from the list{incidents[0] ? ", or open the most recent one" : ""}.</p>
+          {incidents[0] && <button className="button primary mt-4" onClick={() => navigate(`/facilities/${facility.id}/incidents/${incidents[0].id}`)}>Open {incidents[0].id} <ArrowRight size={15}/></button>}
+        </section> : incident && incidentState ? <><section className="panel p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone={stateTone(incidentState)}>{stateLabel(incidentState)}</Status><h2 className="mt-3 text-xl font-semibold">{incident.id} · {incident.title}</h2><p className="mt-2 text-sm text-slate-400">Raised at {formatSimulatedAt(incidentState.recordedAt)} in the GPU Training Ramp. Status shown for replay time {replayTime}.</p></div><AlertTriangle className="text-amber-300"/></div><div className="mt-6 grid gap-3 sm:grid-cols-3"><Metric label="Affected" value={incident.affected_assets[0]} sub={incident.affected_assets.slice(1).join(" · ")}/><Metric label="Forecast impact" value={String(incident.forecast_minutes)} unit="min" sub="to thermal margin breach" warn/><Metric label="Correlated signals" value={String(incident.raw_signal_count)} sub="deduplicated into one incident"/></div><p className="copy">Likely cause: {incident.likely_cause}. The server replay below is reconstructed at the incident timestamp, not the current clock.</p><div className="mt-5 grid gap-3 md:grid-cols-2"><div className="subpanel"><span className="eyebrow">CORRELATED EVIDENCE</span>{(incident.correlated_signals ?? []).map(signal => <div key={signal.id} className="text-xs text-slate-300"><b>{signal.assetId}</b> · {signal.metric.replace(/_/g, " ")} · {signal.direction}</div>)}</div><div className="subpanel"><span className="eyebrow">THERMAL PATH</span><div className="flex flex-wrap items-center gap-2 text-xs">{(incident.thermal_path ?? []).map((asset, index) => <span key={asset} className="flex items-center gap-2"><b>{asset}</b>{index < incident.thermal_path.length - 1 && <ArrowRight size={12} className="text-cyan-300"/>}</span>)}</div><small>Dedup key: {incident.deduplication_key}</small></div></div><div className="mt-5 flex flex-wrap gap-2"><button className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/topology?focus=${facilityPlant(facility.model_config).advisedUnit.id}`)}>View thermal path <GitBranch size={15}/></button><button className="button primary" onClick={() => navigate(`/facilities/${facility.id}/recommendations/rec-17`)}>View recommendation <ArrowRight size={15}/></button></div></section><section className="panel p-6"><div className="flex items-center justify-between"><div><div className="eyebrow">RECONSTRUCTED SCENARIO CONTEXT</div><h2 className="mt-2 font-semibold">{reconstructed ? "Historical state loaded" : "Select incident to reconstruct"}</h2></div><History className="text-cyan-300"/></div><div className="mt-5 grid gap-3 sm:grid-cols-4"><Metric label="Simulated time" value={formatSimulatedAt(current.simulatedAt).slice(11)} sub={`${Math.round(current.elapsedS / 60)}m into ramp`}/><Metric label="IT power" value={current.itPowerKw.toLocaleString()} unit="kW" sub={`workload ${current.workloadPercent}%`}/><Metric label="Peak inlet" value={current.peakInletC.toFixed(1)} unit="°C" sub={`limit ${current.incident.limitC.toFixed(1)}°C`} warn/><Metric label="Model" value={incident.model_version} sub="version used by replay"/></div></section></> : <section className="panel p-6 text-sm text-slate-500">{loaded ? "Choose an incident to inspect its correlated signals." : "Loading incidents…"}</section>}
+      </section>
+    </div>
+  </Shell>;
 }
 
 function AuditPage({ data, facility }: { data: SessionData; facility: Facility }) {
@@ -614,11 +295,13 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
   const [decisionFilter, setDecisionFilter] = useState("");
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
+  const [filtersApplied, setFiltersApplied] = useState(false);
   const load = () => {
     const query = new URLSearchParams();
     if (decisionFilter) query.set("decision", decisionFilter);
     if (search.trim()) query.set("search", search.trim());
-    api<Audit[]>(`/api/facilities/${facility.id}/audit?${query}`).then(setRecords).catch((cause) => setError(String(cause)));
+    setFiltersApplied(Boolean(decisionFilter || search.trim()));
+    api<Audit[]>(`/api/facilities/${facility.id}/audit?${query}`).then(setRecords).catch((cause) => setError(describeError(cause)));
   };
   useEffect(() => { load(); }, [facility.id, decisionFilter]);
   const select = async (record: Audit) => {
@@ -628,7 +311,7 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
     try {
       setDetail(await api(`/api/facilities/${facility.id}/audit/${record.id}`));
       guidance.emit("audit-reconstruct");
-    } catch (cause) { setDetail(null); setError(String(cause)); }
+    } catch (cause) { setDetail(null); setError(describeError(cause)); }
   };
   const snapshot = detail?.snapshot;
   const decision = detail?.decision ?? selected?.payload?.decision;
@@ -650,7 +333,7 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
           const recordDecision = record.payload?.decision;
           return <button key={record.id} onClick={() => select(record)} className={`facility-row w-full text-left ${selected?.id === record.id ? "bg-slate-800/60" : ""}`}><div><Status tone={recordDecision?.decision === "APPROVE" ? "good" : recordDecision?.decision === "REJECT" ? "bad" : "warn"}>{record.action.replace("DECISION_", "").replace(/_/g, " ")}</Status><h2 className="mt-2 font-semibold">Recommendation {record.payload?.recommendation?.id ?? record.payload?.recommendationId}</h2><p className="mt-1 text-xs text-slate-500">{new Date(record.created_at).toLocaleString()} · {record.model_version}</p></div><div className="text-right"><b>{recordDecision?.outcome ?? record.payload?.outcome}</b><p className={`${mono} mt-1 text-[10px] text-slate-500`}>{formatSimulatedAt(record.simulated_at)}</p></div></button>;
         })}
-        {!records.length && !error && <p className="p-6 text-sm text-slate-500">No decisions match these filters.</p>}
+        {!records.length && !error && <p className="p-6 text-sm text-slate-500">{filtersApplied ? "No decisions match these filters." : "No decisions have been recorded for this facility yet."}</p>}
         {error && <p role="alert" className="p-6 text-red-300">{error}</p>}
       </section>
       <section className="panel p-6">
@@ -670,29 +353,21 @@ function AuditPage({ data, facility }: { data: SessionData; facility: Facility }
   </Shell>;
 }
 
-function GraphPage({ data, facility }: { data: SessionData; facility: Facility }) {
-  const guidance = useGuidance();
-  const snapshot = useScenarioSession((s) => s.simulation.snapshot), selectedId = useScenarioSession((s) => s.selectedAssetId), highlightedPath = useScenarioSession((s) => s.highlightedPath), setSelectedId = useScenarioSession((s) => s.selectAsset), [view, setView] = useState<GraphView>("topology"), graph = useMemo(() => thermalGraph(snapshot, view), [snapshot, view]);
-  const selected = graph.nodes.find(node => node.id === selectedId) ?? graph.nodes[0], related = graphSelection(graph, selected.id);
-  const nodeTone = (node: typeof graph.nodes[number]) =>
-    highlightedPath.includes(node.id) ? "border-purple-400 bg-purple-400/10"
-      : related.upstream.some((item) => item.id === node.id) ? "border-sky-400 bg-sky-400/10"
-      : related.downstream.some((item) => item.id === node.id) ? "border-teal-400 bg-teal-400/10"
-        : view === "forecast" && node.risk ? "border-amber-400 bg-amber-400/10"
-          : "border-slate-700 bg-slate-900";
-  useEffect(() => {
-    void recordLearningEvent("ENGINEERING_TOOL_USED", {
-      facilityId: facility.id,
-      simulatedAt: snapshot.simulatedAt,
-    });
-  }, [facility.id, view]);
-  return <Shell data={data} facility={facility}><PageHead eyebrow="THERMAL DEPENDENCY GRAPH" title="Heat-flow topology" detail="Select an asset to trace what affects it, where heat goes, and what would be impacted by degradation."/><ReplayBar/><div className="mb-4 flex flex-wrap gap-2">{(["topology","current","forecast"] as GraphView[]).map(item => <button key={item} onClick={() => setView(item)} className={`button ${view === item ? "primary" : "secondary"}`}>{item === "topology" ? "Topology" : item === "current" ? "Current state" : "Forecast state"}</button>)}</div><div className="grid gap-4 xl:grid-cols-[1fr_340px]"><section className="panel p-5"><div className="mb-5 flex items-center justify-between"><div><h2 className="font-semibold">{view === "topology" ? "THERMAL DEPENDENCY GRAPH" : view.toUpperCase()}</h2><p className="mt-1 text-xs text-slate-500">GPU Training Ramp · {formatSimulatedAt(snapshot.simulatedAt)}</p></div><GitBranch className="text-cyan-300"/></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{graph.nodes.map(node => <button key={node.id} onClick={() => setSelectedId(node.id)} className={`rounded-md border p-4 text-left transition-colors ${nodeTone(node)} ${selected.id === node.id ? "ring-2 ring-cyan-300" : ""}`}><div className="flex justify-between gap-2"><span className="text-[10px] uppercase tracking-[.14em] text-slate-500">{node.kind}</span>{node.risk&&<span className="text-[10px] text-amber-300">RISK</span>}</div><b className="mt-2 block">{node.label}</b><span className="mt-1 block text-xs text-slate-500">{node.detail}</span><span className={`${mono} mt-3 block text-xs text-cyan-300`}>{node.value}</span></button>)}</div><div className="mt-5 border-t border-slate-800 pt-4"><div className="eyebrow">RELATIONSHIPS</div><div className="mt-3 grid gap-2 sm:grid-cols-2">{graph.edges.filter(edge => edge.from === selected.id || edge.to === selected.id).map(edge => <div key={`${edge.from}-${edge.to}`} className="flex items-center gap-2 text-xs"><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.from)?.label}</span><ArrowRight size={13} className="text-cyan-300"/><span className="text-slate-300">{graph.nodes.find(n => n.id === edge.to)?.label}</span><small className="text-slate-500">· {edge.label}</small></div>)}</div></div></section><aside className="panel p-5"><div className="eyebrow">SELECTED ASSET</div><h2 className="mt-2 text-xl font-semibold">{selected.label}</h2><p className="mt-2 text-sm text-slate-400">{selected.detail} · {selected.value}</p><div className="mt-6 space-y-5"><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowUp size={13}/>Upstream / what affects it</div><ul className="mt-2 space-y-1 text-sm">{related.upstream.length ? related.upstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Source node</li>}</ul></div><div><div className="flex items-center gap-2 text-[10px] uppercase tracking-[.14em] text-slate-500"><ArrowDown size={13}/>Downstream / carries heat away</div><ul className="mt-2 space-y-1 text-sm">{related.downstream.length ? related.downstream.map(node => <li key={node.id}>{node.label}</li>) : <li className="text-slate-500">Terminal node</li>}</ul></div><div className="border-t border-slate-800 pt-4"><div className="text-[10px] uppercase tracking-[.14em] text-amber-300">Impact if degraded</div><p className="mt-2 text-sm leading-6 text-slate-400">{related.impact.length ? `${related.impact.map(node => node.label).join(", ")} would require review.` : "No downstream impact is modeled."}</p></div></div></aside></div></Shell>;
+function FacilityBuilderPage({ data, facility }: { data: SessionData; facility: Facility }) {
+  // After a publish or restore, every page and the replay session must pick up the newly published model.
+  const reloadPublishedModel = async () => {
+    dispatchEvent(new Event(FACILITIES_CHANGED));
+  };
+  return <Shell data={data} facility={facility}>
+    <PageHead eyebrow="FACILITY BUILDER / LAYOUT" title="Facility builder" detail="Construct the data centre Operations runs: zones, equipment and connections, saved as versions that are checked and then published."/>
+    <FacilityBuilder facilityId={facility.id} request={api} onPublished={reloadPublishedModel}/>
+  </Shell>;
 }
 
 function ModelStudio({ data, facility }: { data: SessionData; facility: Facility }) {
   const guidance = useGuidance();
   const [versions, setVersions] = useState<ModelVersion[]>([]), [config, setConfig] = useState('{"scenario":"gpu-training-ramp-v1","seed":4103,"thermalMass":0.82,"responseLag":12}'), [message, setMessage] = useState(""), [error, setError] = useState("");
-  const refresh = () => api<ModelVersion[]>(`/api/facilities/${facility.id}/model/versions`).then(setVersions).catch(e => setError(String(e)));
+  const refresh = () => api<ModelVersion[]>(`/api/facilities/${facility.id}/model/versions`).then(setVersions).catch(e => setError(describeError(e)));
   useEffect(() => { void refresh(); }, [facility.id]);
   useEffect(() => {
     document.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
@@ -707,14 +382,16 @@ function ModelStudio({ data, facility }: { data: SessionData; facility: Facility
       facilityId: facility.id,
     });
   }, [facility.id]);
-  const createDraft = async () => { try { const parsed = JSON.parse(config); const result = await post<ModelVersion>(`/api/facilities/${facility.id}/model/versions`, { config: parsed }); setVersions(v => [result, ...v]); setMessage(`${result.id} created as DRAFT`); setError(""); guidance.emit("model-draft"); } catch (e) { setError(String(e)); } };
-  const action = async (path: string, success: string, body: unknown = {}, reloadModel = false) => { try { await post(path, body); await refresh(); if (reloadModel) { const active = (await api<Facility[]>("/api/facilities")).find(item => item.id === facility.id); if (active) useScenarioSession.getState().setModelConfig(active.model_config); } setMessage(success); setError(""); guidance.emit(path.endsWith("/validate") ? "model-validate" : path.endsWith("/publish") ? "model-publish" : "model-rollback"); } catch (e) { setError(String(e)); } };
+  const createDraft = async () => { try { const parsed = JSON.parse(config); const result = await post<ModelVersion>(`/api/facilities/${facility.id}/model/versions`, { config: parsed }); setVersions(v => [result, ...v]); setMessage(`${result.id} created as DRAFT`); setError(""); guidance.emit("model-draft"); } catch (e) { setError(describeError(e)); } };
+  const action = async (path: string, success: string, body: unknown = {}, reloadModel = false) => { try { await post(path, body); await refresh(); if (reloadModel) dispatchEvent(new Event(FACILITIES_CHANGED)); setMessage(success); setError(""); guidance.emit(path.endsWith("/validate") ? "model-validate" : path.endsWith("/publish") ? "model-publish" : "model-rollback"); } catch (e) { setError(describeError(e)); } };
   const simulatedAt = useScenarioSession((state) => state.simulatedAt);
   const previewConfig = useMemo(() => {
     try {
       const parsed = JSON.parse(config) as FacilityModelConfig;
+      // A draft inherits the published build's layout, so it previews on that build.
+      const withLayout = parsed.layout || !facility.model_config.layout ? parsed : { ...parsed, layout: facility.model_config.layout };
       return parsed.scenario === "gpu-training-ramp-v1" && Number.isFinite(parsed.seed) && parsed.thermalMass > 0 && parsed.responseLag >= 0
-        ? parsed
+        ? withLayout
         : facility.model_config;
     } catch {
       return facility.model_config;
@@ -737,7 +414,7 @@ function ModelLab({ data, facility }: { data: SessionData; facility: Facility })
       simulatedAt: snapshot.simulatedAt,
     });
   };
-  return <Shell data={data} facility={facility}><PageHead eyebrow="MODEL LAB / PHYSICAL AI" title="Controller comparison" detail="Every controller receives the same initial state and event stream. This is a comparison harness, not a superiority claim." action={<Status tone="warn">SYNTHETIC</Status>}/><ReplayBar/><section className="panel p-6"><div className="grid gap-4 md:grid-cols-3"><div><div className="eyebrow">INITIAL STATE</div><p className="mt-2 text-sm">{comparison?.initialState ?? `${snapshot.workloadPercent}% workload · ${snapshot.itPowerKw.toLocaleString()} kW IT · ${snapshot.rackCount} racks`}</p></div><div><div className="eyebrow">SHARED EVENTS</div><p className="mt-2 text-sm">{comparison?.events.join(" → ") ?? "Training ramp → power rise → CDU response lag"}</p></div><div className="flex items-end md:justify-end"><button className="button primary" onClick={run}><Play size={15}/>Run same-input comparison</button></div></div></section>{comparison&&<section className="panel mt-4 overflow-x-auto"><table className="data-table min-w-[900px]"><caption className="sr-only">Controller comparison results</caption><thead><tr><th>Controller</th><th>Peak temp</th><th>Degree-minutes</th><th>Warning lead</th><th>Cooling energy</th><th>Interventions</th><th>Inference events</th><th>Objective</th></tr></thead><tbody>{comparison.results.map(result => <tr key={result.id}><td><b>{result.name}</b><small className="mt-1 block text-slate-500">{result.architecturalMetric}: {result.architecturalValue}</small></td><td>{result.peakC.toFixed(1)}°C</td><td>{result.degreeMinutes.toFixed(1)}</td><td>{result.warningLeadMinutes === null ? "Unavailable" : `${result.warningLeadMinutes} min`}</td><td>{result.coolingEnergyKwh === null ? "Unavailable" : `${result.coolingEnergyKwh} kWh`}</td><td>{result.interventions}</td><td>{result.inferenceEvents === null ? "Unavailable" : result.inferenceEvents}</td><td>{result.objective}</td></tr>)}</tbody></table><p className="p-5 text-xs text-slate-500">SNN rows show only metrics supported by an implemented measurement. Compute energy, event sparsity, and unsupported physical-AI claims are marked unavailable.</p></section>}</Shell>;
+  return <Shell data={data} facility={facility}><PageHead eyebrow="MODEL LAB / PHYSICAL AI" title="Controller comparison" detail="Every controller receives the same initial state and event stream. This is a comparison harness, not a superiority claim." action={<Status tone="warn">SYNTHETIC</Status>}/><ReplayBar/><section className="panel p-6"><div className="grid gap-4 md:grid-cols-3"><div><div className="eyebrow">INITIAL STATE</div><p className="mt-2 text-sm">{comparison?.initialState ?? `${snapshot.workloadPercent}% workload · ${snapshot.itPowerKw.toLocaleString()} kW IT · ${snapshot.rackCount} racks`}</p></div><div><div className="eyebrow">SHARED EVENTS</div><p className="mt-2 text-sm">{comparison?.events.join(" → ") ?? "Training ramp → power rise → CDU response lag"}</p></div><div className="flex items-end md:justify-end"><button className="button primary" onClick={run}><Play size={15}/>Run same-input comparison</button></div></div></section>{comparison&&<section className="panel mt-4 overflow-x-auto"><table className="data-table min-w-[900px]"><caption className="sr-only">Controller comparison results</caption><thead><tr><th>Controller</th><th>Peak temp</th><th>Degree-minutes</th><th>Warning lead</th><th>Cooling energy</th><th>Commands issued</th><th>Inference events</th><th>Peak margin</th></tr></thead><tbody>{comparison.results.map(result => <tr key={result.id}><td><b>{result.name}</b><small className="mt-1 block text-slate-500">{result.architecturalMetric}: {result.architecturalValue}</small></td><td>{result.peakC.toFixed(1)}°C</td><td>{result.degreeMinutes.toFixed(1)}</td><td>{result.warningLeadMinutes === null ? "No crossing in horizon" : `${result.warningLeadMinutes} min`}</td><td>{result.coolingEnergyKwh === null ? "Unavailable" : `${result.coolingEnergyKwh} kWh`}</td><td>{result.interventions}</td><td>{result.inferenceEvents === null ? "Not measured" : result.inferenceEvents}</td><td>{result.peakMarginC >= 0 ? `${result.peakMarginC.toFixed(1)}°C below limit` : `${Math.abs(result.peakMarginC).toFixed(1)}°C over limit`}</td></tr>)}</tbody></table><div className="space-y-2 p-5 text-xs leading-5 text-slate-500"><p><b>Warning lead</b> is the time from a controller's warning to the first modeled limit crossing without intervention. A predictive policy warns as soon as its forecast shows the crossing; a reactive controller warns only at the limit.</p><p><b>Commands issued</b> counts advisory commands in the horizon. <b>Peak margin</b> is the rack inlet limit minus the run's peak temperature.</p><p>SNN rows show only metrics supported by an implemented measurement. Compute energy and inference events are not measured, and unsupported physical-AI claims are marked unavailable.</p></div></section>}</Shell>;
 }
 
 function AccessAdministration({ data }: { data: SessionData }) {
@@ -754,7 +431,7 @@ function AccessAdministration({ data }: { data: SessionData }) {
       setMembers(membershipResult.items);
       setAudit(auditResult.items);
       setError("");
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   useEffect(() => { void refresh(); }, []);
   const saveMember = async (member: { userId: string; email?: string; displayName?: string; role: Role; isAdmin: boolean }) => {
@@ -762,7 +439,7 @@ function AccessAdministration({ data }: { data: SessionData }) {
       await post("/api/admin/memberships", member);
       setMessage(`${member.userId} access saved`);
       await refresh();
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   const saveGrant = async (member: Member, facility: MemberFacility, next: Partial<MemberFacility>) => {
     const grant = { ...facility, ...next };
@@ -774,14 +451,14 @@ function AccessAdministration({ data }: { data: SessionData }) {
       });
       setMessage(`${member.display_name ?? member.id} facility access updated`);
       await refresh();
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   const revoke = async (member: Member) => {
     try {
       await remove(`/api/admin/memberships/${encodeURIComponent(member.id)}`);
       setMessage(`${member.display_name ?? member.id} membership revoked`);
       await refresh();
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) { setError(describeError(cause)); }
   };
   return <Shell data={data}><PageHead eyebrow="ORGANIZATION / ACCESS ADMINISTRATION" title="People and facility permissions" detail="Organization roles and site grants take effect on the next authorized request. Every change is retained in administrative history."/>
     <section className="panel mb-4 p-5"><h2 className="font-semibold">Provision a member</h2><div className="mt-4 grid gap-3 md:grid-cols-5"><input className="input" placeholder="Clerk user ID" value={draft.userId} onChange={event=>setDraft({...draft,userId:event.target.value})}/><input className="input" placeholder="Display name" value={draft.displayName} onChange={event=>setDraft({...draft,displayName:event.target.value})}/><input className="input" placeholder="Email (optional)" value={draft.email} onChange={event=>setDraft({...draft,email:event.target.value})}/><select className="select" value={draft.role} onChange={event=>setDraft({...draft,role:event.target.value as Role})}>{ROLES.map(role=><option key={role}>{role}</option>)}</select><button className="button primary justify-center" disabled={!draft.userId} onClick={()=>saveMember(draft)}>Save membership</button></div>{data.me.is_owner&&<label className="mt-3 flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={draft.isAdmin} onChange={event=>setDraft({...draft,isAdmin:event.target.checked})}/>Grant organization administration</label>}{message&&<p role="status" className="mt-3 text-sm text-teal-300">{message}</p>}{error&&<p role="alert" className="mt-3 text-sm text-red-300">{error}</p>}</section>
@@ -793,7 +470,7 @@ function LearningOutcomes({ data }: { data: SessionData }) {
   const [outcomes, setOutcomes] = useState<LearningOutcomesData | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    api<LearningOutcomesData>("/api/learning/outcomes").then(setOutcomes).catch((cause) => setError(String(cause)));
+    api<LearningOutcomesData>("/api/learning/outcomes").then(setOutcomes).catch((cause) => setError(describeError(cause)));
   }, []);
   const eventCount = (name: string) => outcomes?.journeyEvents.find((item) => item.event_name === name)?.count ?? 0;
   return <Shell data={data}>
@@ -834,7 +511,7 @@ function Help({ data }: { data: SessionData }) {
       return;
     }
     setStep(next); setDone(complete);
-    try { await patch("/api/me/tutorial", { step: next, complete, role: data.me.role }); } catch (e) { setError(String(e)); }
+    try { await patch("/api/me/tutorial", { step: next, complete, role: data.me.role }); } catch (e) { setError(describeError(e)); }
   };
   const current = steps[Math.min(step, steps.length - 1)];
   const openTutorialRoute = () => {
@@ -850,16 +527,16 @@ function GuidedHelp({ data }: { data: SessionData }) {
     <PageHead eyebrow={`HELP / ${data.me.role.replace(/_/g, " ")}`} title="Guided twin assistance" detail="Learn in the live workspace by performing the required operating actions."/>
     <div className="grid gap-4 lg:grid-cols-[1fr_.8fr]">
       <section className="panel p-6">
-        <div className="flex items-center gap-3"><BookOpen className="text-cyan-300"/><div><h2 className="font-semibold">Action-aware tutorial</h2><p className="text-xs text-slate-500">Progress is saved for your current role.</p></div></div>
-        <p className="copy">The guide opens the authorized workspace, spotlights the real control, and advances only after you perform its required action. The spotlight never intercepts clicks or hides operating state.</p>
+        <div className="flex items-center gap-3"><BookOpen className="text-cyan-300"/><div><h2 className="font-semibold">Action-aware tutorial</h2><p className="text-xs text-slate-500">Starts automatically the first time you sign in with a role, and saves progress for that role.</p></div></div>
+        <p className="copy">The guide spotlights the real control on each page and advances when you perform its action. It never changes pages on its own: when a step is on another page, it offers a button to open that page. The spotlight never intercepts clicks or hides operating state.</p>
         <div className="mt-5 flex flex-wrap gap-2"><button className="button primary" onClick={restart}><RotateCcw size={15}/>Restart guided tutorial</button></div>
       </section>
       <section className="panel p-6">
         <div className="eyebrow">AVAILABLE AT ANY TIME</div>
         <ul className="mt-4 space-y-3 text-sm text-slate-300">
           <li><b>Back</b> revisits the prior instruction.</li>
-          <li><b>Skip</b> bypasses an unavailable or familiar control.</li>
-          <li><b>Continue later</b> closes guidance without losing progress.</li>
+          <li><b>Next</b> moves on without performing the action.</li>
+          <li><b>Skip tutorial</b> closes guidance. It won't open by itself again; restart it here whenever you like.</li>
           <li><b>Escape</b> remains available for walkthrough pointer capture and emergency navigation.</li>
         </ul>
       </section>
@@ -891,7 +568,7 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
       });
       setResponse(result);
     } catch (cause) {
-      setError(String(cause));
+      setError(describeError(cause));
       setResponse(null);
     } finally {
       setPending(false);
@@ -907,7 +584,7 @@ function AssistantPage({ data, facility }: { data: SessionData; facility?: Facil
       if (result.focus) useScenarioSession.getState().focusTwin(result.focus);
       navigate(result.path);
     } catch (cause) {
-      setError(String(cause));
+      setError(describeError(cause));
     }
   };
   return <Shell data={data} facility={facility}>
@@ -1005,7 +682,7 @@ function TutorialOverlay({ data, onProgress }: { data: SessionData; onProgress: 
       if (complete) setOpen(false);
       setError("");
     } catch (cause) {
-      setError(String(cause));
+      setError(describeError(cause));
     }
   };
   const openWorkspace = () => {
@@ -1034,8 +711,11 @@ function TutorialOverlay({ data, onProgress }: { data: SessionData; onProgress: 
   </div>;
 }
 
-function Landing(){return <div className="min-h-screen bg-[#0a1018] text-slate-200"><header className="flex justify-between border-b border-slate-800 p-5"><Brand/><button onClick={()=>navigate("/sign-in")} className="button secondary">Operator sign in</button></header><main className="mx-auto max-w-6xl px-6 py-24"><div className="eyebrow text-cyan-400">THERMAL OPERATIONS / COMMAND ENVIRONMENT</div><h1 className="mt-5 max-w-4xl text-5xl font-semibold tracking-[-.04em] md:text-7xl">Make the cooling decision before the constraint arrives.</h1><p className="mt-7 max-w-2xl text-lg leading-8 text-slate-400">Wattr turns workload intent into power, heat, forecast risk, a safety-checked advisory, and an auditable operator decision.</p><div className="mt-9"><button onClick={()=>navigate("/sign-in")} className="button primary">Enter cockpit <ArrowRight size={15}/></button></div></main></div>}
-function Auth({up=false}:{up?:boolean}){return <div className="grid min-h-screen place-items-center bg-[#0a1018] p-5"><div className="w-full max-w-[460px]"><Brand/><div className="mt-8">{up?<SignUp routing="path" path="/sign-up" signInUrl="/sign-in" fallbackRedirectUrl="/portfolio"/>:<SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/portfolio"/>}</div></div></div>}
+function Auth({up=false}:{up?:boolean}){
+  // Clerk's card follows the page: light variables here, dark ones from the provider otherwise.
+  const appearance = showsLightTheme() ? CLERK_LIGHT_APPEARANCE : undefined;
+  return <PublicFrame className="grid place-items-center p-5"><div className="w-full max-w-[460px]"><Brand/><div className="mt-8">{up?<SignUp appearance={appearance} routing="path" path="/sign-up" signInUrl="/sign-in" fallbackRedirectUrl="/portfolio"/>:<SignIn appearance={appearance} routing="path" path="/sign-in" signUpUrl="/sign-up" fallbackRedirectUrl="/portfolio"/>}</div></div></PublicFrame>;
+}
 
 function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   const defaultPath = data.me.default_path.replace("{facilityId}", data.facilities[0]?.id ?? "");
@@ -1052,13 +732,14 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   if(!facility)return <Shell data={data}><PageHead eyebrow="ACCESS" title="Facility unavailable" detail="This facility is not present in your authorized API response."/></Shell>;
   const section=parts[2];
   if(section==="operations")return <Operations data={data} facility={facility}/>;
-  if(section==="incidents")return <IncidentPage data={data} facility={facility} incidentId={parts[3] ?? "inc-204"}/>;
+  if(section==="incidents")return <IncidentPage data={data} facility={facility} incidentId={parts[3]}/>;
   if(section==="recommendations")return <Recommendation data={data} facility={facility}/>;
   if(section==="audit")return <AuditPage data={data} facility={facility}/>;
   if(section==="ask-wattr"&&!facility.can_assistant)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Ask Wattr unavailable" detail="Assistant access requires an authorized role and facility view grant."/></Shell>;
   if(section==="ask-wattr")return <AssistantPage data={data} facility={facility}/>;
-  if(section==="topology"&&!["OPERATOR","ENGINEER"].includes(data.me.role))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
-  if(section==="topology")return <GraphPage data={data} facility={facility}/>;
+  if(section==="topology"&&!canViewTopology(data.me.role, data.me.is_owner))return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="This analysis workspace is not present in your authorized navigation."/></Shell>;
+  if(section==="topology")return <ThermalGraphPage data={data} facility={facility}/>;
+  if(section==="builder")return <FacilityBuilderPage data={data} facility={facility}/>;
   if(section==="model-lab"&&!facility.can_engineer)return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Engineering analysis access is required."/></Shell>;
   if(section==="model-lab")return <ModelLab data={data} facility={facility}/>;
   if(section==="model"&&!facility.can_edit_model)return <Shell data={data} facility={facility}><PageHead eyebrow="FORBIDDEN" title="Model Studio access required" detail="Your role cannot edit or publish facility models."/></Shell>;
@@ -1066,10 +747,36 @@ function ProtectedRoutes({path, data}:{path:string; data: SessionData}){
   return <Shell data={data} facility={facility}><PageHead eyebrow="ACCESS" title="Workspace unavailable" detail="Choose an operating workspace from the facility navigation."/></Shell>;
 }
 function ProtectedApp({path}:{path:string}){
-  const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState("");
-  useEffect(()=>{Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch(e=>setError(String(e)));},[]);
-  if(error)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-red-300">{error}</div>;
-  if(!data)return <div className="grid min-h-screen place-items-center bg-[#0a1018] text-cyan-300">Loading authorized facility context…</div>;
+  const [data,setData]=useState<SessionData|null>(null),[error,setError]=useState<unknown>(null),[attempt,setAttempt]=useState(0);
+  useEffect(()=>{setError(null);Promise.all([api<Me>("/api/me"),api<Facility[]>("/api/facilities")]).then(([me,facilities])=>{if(facilities[0]?.model_config)useScenarioSession.getState().setModelConfig(facilities[0].model_config);setData({me,facilities});}).catch((cause)=>setError(cause ?? new Error("The workspace could not be loaded")));},[attempt]);
+  // A publish or restore changes the model Operations runs. Reload the
+  // facilities so Operations, the twin and the replay session all use it. If
+  // the reload fails, pages keep the facilities they already have.
+  useEffect(() => {
+    const reload = () => {
+      api<Facility[]>("/api/facilities").then((facilities) => {
+        if (facilities[0]?.model_config) useScenarioSession.getState().setModelConfig(facilities[0].model_config);
+        setData((current) => current ? { ...current, facilities } : current);
+      }).catch(() => {});
+    };
+    addEventListener(FACILITIES_CHANGED, reload);
+    return () => removeEventListener(FACILITIES_CHANGED, reload);
+  }, []);
+  if(error){
+    const status = error instanceof ApiError ? error.status : undefined;
+    return <StateScreen
+      kind="error"
+      title={status === 401 ? "Sign in again" : status === 403 ? "No access to this workspace" : "Wattr could not open your workspace"}
+      body={describeError(error)}
+      actions={<>
+        {status === 401
+          ? <button type="button" className="button primary" onClick={()=>navigate("/sign-in")}>Sign in</button>
+          : <button type="button" className="button primary" onClick={()=>setAttempt((value)=>value+1)}>Try again</button>}
+        <button type="button" className="button secondary" onClick={()=>navigate("/demo/sandbox")}>Open the cooling sandbox</button>
+      </>}
+    />;
+  }
+  if(!data)return <StateScreen kind="loading" title="Opening your workspace" body="Checking your access and loading the facility model Operations runs."/>;
   const roleProgressMatches = data.me.tutorial_role === data.me.role;
   return <ThemeProvider initialTheme={data.me.theme}><GuidanceProvider
     role={data.me.role}
@@ -1084,12 +791,15 @@ function ProtectedApp({path}:{path:string}){
   ><ProtectedRoutes path={path} data={data}/></GuidanceProvider></ThemeProvider>;
 }
 export function CockpitApp(){
-  const [path,setPath]=useState(location.pathname),{isSignedIn}=useUser();
+  const [path,setPath]=useState(location.pathname),{isSignedIn,isLoaded}=useUser(),[signInSlow,setSignInSlow]=useState(false);
+  // If the sign-in service never answers, say so rather than leaving a blank page.
+  useEffect(()=>{if(isLoaded)return;const timer=setTimeout(()=>setSignInSlow(true),8000);return()=>clearTimeout(timer);},[isLoaded]);
   const testSignedIn = Boolean(e2eTestUserId());
   useScenarioClock();
   useEffect(()=>{const on=()=>setPath(location.pathname);addEventListener("popstate",on);return()=>removeEventListener("popstate",on)},[]);
   useEffect(()=>{if(path==="/"&&(isSignedIn||testSignedIn))navigate("/portfolio")},[path,isSignedIn,testSignedIn]);
   if(path==="/demo/sandbox")return <SandboxShell/>; if(path.startsWith("/sign-in"))return <Auth/>; if(path.startsWith("/sign-up"))return <Auth up/>; if(path==="/")return <Landing/>;
   if(testSignedIn)return <ProtectedApp path={path}/>;
-  return <><Show when="signed-in"><ProtectedApp path={path}/></Show><Show when="signed-out"><div className="grid min-h-screen place-items-center bg-[#0a1018]"><button onClick={()=>navigate("/sign-in")} className="button primary">Sign in for authorized access</button></div></Show></>;
+  if(!isLoaded)return <StateScreen kind="loading" title="Checking your sign-in" body={signInSlow ? "Sign-in is taking longer than usual. The public cooling sandbox is available without an account." : "Connecting to the sign-in service."} actions={signInSlow ? <button type="button" className="button secondary" onClick={()=>navigate("/demo/sandbox")}>Open the cooling sandbox</button> : undefined}/>;
+  return <><Show when="signed-in"><ProtectedApp path={path}/></Show><Show when="signed-out"><StateScreen kind="signed-out" title="Sign in to open the cockpit" body="The operator cockpit is for authorized facility teams. The public cooling sandbox needs no account." actions={<><button type="button" className="button primary" onClick={()=>navigate("/sign-in")}>Sign in</button><button type="button" className="button secondary" onClick={()=>navigate("/demo/sandbox")}>Open the cooling sandbox</button></>}/></Show></>;
 }

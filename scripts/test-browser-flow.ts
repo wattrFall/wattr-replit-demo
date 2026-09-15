@@ -371,19 +371,27 @@ try {
     await restartGuide.focus();
     await restartGuide.click();
     await page.getByText("Orient in orbit view", { exact: true }).waitFor();
+    assert.equal(new URL(page.url()).pathname, "/help", "tutorial changed pages by itself");
+    await page.getByRole("button", { name: "Open Operations" }).click();
     await page.locator(".guide-spotlight").waitFor({ state: "visible", timeout: 10_000 });
     assert(await page.getByRole("button", { name: "Next" }).isVisible(), "guidance did not provide consistent next navigation");
     assert.equal(await page.getByRole("button", { name: "Focus control" }).count(), 0, "obsolete focus control is still rendered");
     await page.locator("[data-guide='camera-orbit']").click();
     await page.getByText("Enter aisle-level walkthrough", { exact: true }).waitFor();
+    const skipSaved = page.waitForResponse((response) =>
+      response.url().endsWith("/api/me/tutorial") && response.request().method() === "PATCH");
     await page.getByRole("button", { name: "Skip tutorial", exact: true }).click();
     assert.equal(
       await page.evaluate(() => document.activeElement?.id),
       "main-content",
       "tutorial did not recover focus after its launcher left the current route",
     );
+    await skipSaved;
     const savedTutorial = await request("/api/me");
     assert.equal(savedTutorial.body.tutorial_step, 1, "tutorial action completion was not persisted");
+    assert.equal(savedTutorial.body.tutorial_complete, true, "skipping the tutorial was not remembered");
+    await page.reload({ waitUntil: "networkidle" });
+    assert.equal(await page.locator(".guide-card").count(), 0, "a skipped tutorial reopened on reload");
     await request("/api/me/tutorial", {
       method: "PATCH",
       body: JSON.stringify({ role: "OPERATOR", step: 10, complete: true }),
@@ -434,9 +442,11 @@ try {
     await browser.close();
   }
 
-  const [appSource, sandboxSource, cssSource, builtHtml] = await Promise.all([
+  const [appSource, sandboxSource, stageSource, cssSource, builtHtml] = await Promise.all([
     readFile(new URL("../src/components/cockpit/Cockpit.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/components/sandbox/SandboxShell.tsx", import.meta.url), "utf8"),
+    // The 3D stage and its WebGL fallback are shared by the sandbox and the facility Builder.
+    readFile(new URL("../src/components/sandbox/SandboxStage.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/index.css", import.meta.url), "utf8"),
     readFile(new URL("../dist/index.html", import.meta.url), "utf8"),
   ]);
@@ -444,7 +454,7 @@ try {
   for (const text of ["portfolio", "incidents", "recommendations", "audit"]) {
     assert(appSource.toLowerCase().includes(text), `browser flow missing ${text} surface`);
   }
-  assert(sandboxSource.includes("This preview does not provide WebGL"), "WebGL fallback is missing");
+  assert(stageSource.includes("This preview does not provide WebGL"), "WebGL fallback is missing");
   assert(sandboxSource.includes("aria-live=\"polite\""), "fallback status is not announced");
   assert(cssSource.includes("@media (max-width:767px)"), "primary responsive breakpoint is missing");
   assert(cssSource.includes("overflow-x"), "horizontal overflow handling is missing");

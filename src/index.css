@@ -316,16 +316,17 @@ html[data-theme="light"] { color-scheme: light; }
 .twin-toolgroup button { display:flex; align-items:center; gap:5px; border:0; border-radius:999px; padding:.35rem .65rem; color:#91a7b8; font-size:10px; font-weight:700; }
 .twin-toolgroup button.active { background:#dceaf1; color:#10212c; }
 .twin-model { margin-left:auto; display:flex; align-items:center; gap:5px; color:#7893a5; font:9px var(--font-mono); letter-spacing:.1em; }
-.twin-stage { position:relative; height:clamp(480px,60vh,720px); background:#0b141e; }
+.twin-stage { position:relative; isolation:isolate; height:clamp(480px,60vh,720px); background:#05090e; }
 .twin-stage canvas { display:block; width:100%; height:100%; }
 .twin-instructions { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); white-space:nowrap; border:1px solid #2b4052; border-radius:999px; background:rgba(6,14,21,.82); padding:.4rem .75rem; color:#adc1ce; font:9px var(--font-mono); }
 .twin-legend { position:absolute; right:12px; bottom:12px; display:flex; align-items:center; gap:6px; border:1px solid #2b4052; border-radius:5px; background:rgba(6,14,21,.82); padding:7px; font:9px var(--font-mono); }
-.twin-legend i { width:100px; height:7px; border-radius:10px; background:linear-gradient(90deg,#22d3ee,#facc15,#ef4444); }
+.twin-legend i { width:100px; height:7px; border-radius:10px; background:linear-gradient(90deg,#70a0d0 0%,#2dd4bf 50%,#f59e0b 71%,#ff6a3d 100%); }
 .twin-fallback { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.7rem; padding:2rem; text-align:center; color:#88a4b5; }
 .twin-fallback p { max-width:520px; font-size:12px; line-height:1.6; }
 .twin-asset-strip { display:flex; gap:5px; overflow-x:auto; border-top:1px solid #263746; padding:.55rem .7rem; }
 .twin-asset-strip button { flex:none; border:1px solid #2b4052; border-radius:4px; padding:.35rem .55rem; color:#93a9b8; font-size:10px; }
 .twin-asset-strip button.selected { border-color:#52d5dd; background:rgba(57,199,209,.12); color:#75e7ed; }
+.twin-strip-note { align-self:center; padding:.35rem .2rem; color:#647e90; font:9px var(--font-mono); text-transform:uppercase; letter-spacing:.08em; }
 .twin-layer-summary { border-top:1px solid #1d2c38; padding:.45rem .75rem; color:#647e90; font:9px var(--font-mono); text-transform:uppercase; letter-spacing:.08em; }
 .scene-label { border:1px solid #527386; border-radius:3px; background:rgba(7,16,24,.9); padding:3px 5px; color:#d9e8ef; font:9px monospace; white-space:nowrap; }
 .scene-forecast { border:1px solid #9c6c24; border-radius:4px; background:rgba(21,15,7,.9); padding:6px 8px; color:#eab45d; font:8px monospace; white-space:nowrap; }
@@ -697,6 +698,78 @@ html[data-theme="light"] .chart-line { background: #087d88; }
 }
 
 /* ==========================================================================
+   THERMAL GRAPH — lineage view
+   Nodes are tinted by --node-heat, set inline from the heat scale in
+   lib/cockpit/graphLayout.ts; everything else reads the cockpit theme, so the
+   graph follows light and dark appearance.
+   ========================================================================== */
+.lineage { padding:1rem; }
+.lineage-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem 1rem; }
+.lineage-legend { display:flex; align-items:center; gap:.45rem; color:var(--cockpit-faint); font:10px var(--font-mono); letter-spacing:.06em; text-transform:uppercase; }
+.lineage-legend i { display:block; width:128px; height:8px; border-radius:999px; background:var(--heat-gradient); }
+.lineage-note { color:var(--cockpit-faint); font:10px var(--font-mono); letter-spacing:.06em; }
+.lineage-time { margin-left:auto; }
+.lineage-hotspots { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem .5rem; margin-top:.85rem; }
+.lineage-hotspot { display:inline-flex; align-items:center; gap:.4rem; border:1px solid color-mix(in srgb, var(--node-heat) 50%, var(--cockpit-border-soft)); border-radius:999px; background:color-mix(in srgb, var(--node-heat) 12%, var(--cockpit-surface)); padding:.28rem .6rem; color:var(--cockpit-text); font-size:.72rem; }
+.lineage-hotspot i { width:.55rem; height:.55rem; border-radius:999px; background:var(--node-heat); }
+.lineage-hotspot b { font-family:var(--font-mono); font-weight:600; }
+.lineage-scroll { margin-top:.85rem; overflow-x:auto; overflow-y:hidden; border:1px solid var(--cockpit-border-soft); border-radius:7px; background:radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--cockpit-faint) 24%, transparent) 1px, transparent 0) 0 0 / 18px 18px, var(--cockpit-bg); }
+.lineage-frame { position:relative; margin:0 auto; }
+.lineage-canvas { position:absolute; left:0; top:0; transform-origin:0 0; }
+.lineage-edges { position:absolute; inset:0; overflow:visible; pointer-events:none; }
+.lineage-edge { fill:none; stroke:color-mix(in srgb, var(--cockpit-faint) 70%, transparent); stroke-width:1.6; opacity:.5; transition:opacity .2s ease, stroke-width .2s ease; }
+.lineage-edge.on-path { stroke-width:2.6; opacity:1; }
+.lineage-edge.flowing { stroke-dasharray:7 7; animation:lineage-flow 1.2s linear infinite; }
+@keyframes lineage-flow { to { stroke-dashoffset:-14; } }
+.lineage-node { --node-heat:color-mix(in srgb, var(--cockpit-faint) 80%, transparent); position:absolute; display:flex; flex-direction:column; justify-content:center; gap:1px; overflow:hidden; border:1px solid color-mix(in srgb, var(--node-heat) 45%, var(--cockpit-border-soft)); border-left:4px solid var(--node-heat); border-radius:6px; background:linear-gradient(100deg, color-mix(in srgb, var(--node-heat) 24%, var(--cockpit-surface)) 0%, var(--cockpit-surface) 72%); padding:.35rem .6rem .5rem .65rem; color:var(--cockpit-text); text-align:left; transition:transform .18s ease, box-shadow .18s ease, opacity .2s ease; }
+.lineage-node:hover { transform:translateY(-1px); box-shadow:0 8px 20px rgba(0,0,0,.25); }
+.lineage-node.selected { box-shadow:0 0 0 2px var(--cockpit-primary), 0 8px 22px rgba(0,0,0,.25); }
+.lineage-node.upstream { box-shadow:0 0 0 1px #38bdf8; }
+.lineage-node.downstream { box-shadow:0 0 0 1px #2dd4bf; }
+.lineage-node.focused { box-shadow:0 0 0 1px #a855f7; }
+.lineage.focus-mode .lineage-node.unrelated { opacity:.38; }
+.lineage.focus-mode .lineage-edge:not(.on-path) { opacity:.12; }
+.lineage-node-kind { color:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.14em; text-transform:uppercase; white-space:nowrap; }
+.lineage-node-label { overflow:hidden; font-size:.8rem; text-overflow:ellipsis; white-space:nowrap; }
+.lineage-node-value { overflow:hidden; color:var(--cockpit-muted); font:10.5px var(--font-mono); text-overflow:ellipsis; white-space:nowrap; }
+.lineage-node-meter { position:absolute; left:0; bottom:0; height:3px; background:var(--node-heat); transition:width .4s ease; }
+.lineage-detail { position:absolute; z-index:4; border:1px solid color-mix(in srgb, var(--node-heat, var(--cockpit-primary)) 55%, var(--cockpit-border)); border-top:4px solid var(--node-heat, var(--cockpit-primary)); border-radius:8px; background:var(--cockpit-surface); padding:.85rem .95rem 1rem; color:var(--cockpit-text); box-shadow:0 22px 48px rgba(0,0,0,.35); animation:lineage-expand .24s cubic-bezier(.2,.8,.2,1); }
+.lineage-detail.from-left { transform-origin:left top; }
+.lineage-detail.from-right { transform-origin:right top; }
+.lineage-detail:focus { outline:none; }
+@keyframes lineage-expand { from { opacity:0; transform:scale(.9); } to { opacity:1; transform:scale(1); } }
+.lineage-detail-head { display:flex; justify-content:space-between; gap:.5rem; }
+.lineage-detail-head h2 { margin-top:.1rem; font-size:1rem; font-weight:600; }
+.lineage-detail-head p { color:var(--cockpit-faint); font-size:.72rem; }
+.lineage-detail-close { display:grid; flex:none; place-items:center; width:1.8rem; height:1.8rem; border-radius:5px; color:var(--cockpit-faint); }
+.lineage-detail-close:hover { background:var(--cockpit-raised); color:var(--cockpit-text); }
+.lineage-detail-heat { margin-top:.7rem; }
+.lineage-detail-heat b { font-family:var(--font-mono); font-size:1.1rem; }
+.lineage-detail-heat small { color:var(--cockpit-faint); font-size:.68rem; }
+.lineage-detail-meter { overflow:hidden; height:6px; margin:.4rem 0 .25rem; border-radius:999px; background:var(--cockpit-raised); }
+.lineage-detail-meter i { display:block; height:100%; border-radius:inherit; background:var(--node-heat); }
+.lineage-detail-copy { margin-top:.6rem; color:var(--cockpit-muted); font-size:.78rem; }
+.lineage-facts { display:grid; grid-template-columns:1fr 1fr; gap:.45rem .8rem; margin-top:.75rem; }
+.lineage-facts dt { color:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.1em; text-transform:uppercase; }
+.lineage-facts dd { font-family:var(--font-mono); font-size:.8rem; }
+.lineage-detail-links { display:grid; gap:.5rem; margin-top:.8rem; border-top:1px solid var(--cockpit-border-soft); padding-top:.7rem; }
+.lineage-detail-links span, .lineage-contingency span { display:flex; align-items:center; gap:.3rem; color:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.12em; text-transform:uppercase; }
+.lineage-detail-links p, .lineage-contingency p { margin-top:.15rem; color:var(--cockpit-muted); font-size:.76rem; line-height:1.45; }
+.lineage-contingency { margin-top:.7rem; border-radius:6px; background:color-mix(in srgb, #f59e0b 10%, var(--cockpit-surface)); padding:.55rem .65rem; }
+.lineage-contingency span { color:color-mix(in srgb, #f59e0b 75%, var(--cockpit-text)); }
+@media (prefers-reduced-motion: reduce) {
+  .lineage-edge.flowing { animation:none; stroke-dasharray:none; }
+  .lineage-detail { animation:none; }
+  .lineage-node, .lineage-node-meter { transition:none; }
+}
+/* In a narrow panel the expanded card opens beneath the graph instead of over it. */
+.lineage-detail.sheet { position:relative; margin-top:.85rem; animation-name:lineage-sheet; }
+@keyframes lineage-sheet { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:none; } }
+@media (max-width:767px) {
+  .lineage-time { margin-left:0; }
+}
+
+/* ==========================================================================
    SANDBOX TOKENS — the /demo product window
    --------------------------------------------------------------------------
    The sandbox reads as a darker surface inset into the marketing page. Every
@@ -724,7 +797,7 @@ html[data-theme="light"] .chart-line { background: #087d88; }
   /* Text */
   --sbx-text: #E8F0F8;
   --sbx-text-muted: #9EBFDF;
-  --sbx-text-faint: rgba(158, 191, 223, 0.55);
+  --sbx-text-faint: rgba(158, 191, 223, 0.70);
 
   /* Semantic accents, straight from the existing palette */
   --sbx-primary: #70A0D0;
@@ -819,4 +892,48 @@ html[data-theme="light"] .chart-line { background: #087d88; }
 .sbx-range:disabled {
   cursor: not-allowed;
   opacity: 0.4;
+}
+
+/* ==========================================================================
+   PUBLIC SCREENS — landing, sign-in, loading, error and signed-out states.
+   They sit inside .cockpit, so they follow the same light and dark tokens.
+   ========================================================================== */
+.state-card { width:min(460px, 100%); padding:1.75rem; }
+.state-icon { display:grid; place-items:center; width:2.6rem; height:2.6rem; margin-top:1.5rem; border-radius:8px; background:color-mix(in srgb, var(--cockpit-primary) 14%, transparent); color:var(--cockpit-primary); }
+.state-icon.error { background:color-mix(in srgb, #ef4444 14%, transparent); color:#f87171; }
+html[data-theme="light"] .state-icon.error { color:#a52d26; }
+@media (prefers-color-scheme: light) { html[data-theme="system"] .state-icon.error { color:#a52d26; } }
+.state-spinner { width:1.1rem; height:1.1rem; border:2px solid color-mix(in srgb, var(--cockpit-primary) 30%, transparent); border-top-color:var(--cockpit-primary); border-radius:999px; animation:state-spin .8s linear infinite; }
+@keyframes state-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .state-spinner { animation-duration:2.4s; } }
+.landing-preview { display:block; width:100%; height:auto; }
+.landing-node { fill:var(--cockpit-surface); stroke:var(--cockpit-border-soft); }
+.landing-node-kind { fill:var(--cockpit-faint); font:9px var(--font-mono); letter-spacing:.14em; }
+.landing-node-label { fill:var(--cockpit-text); font-size:13px; font-weight:600; }
+.landing-node-value { fill:var(--cockpit-muted); font:11px var(--font-mono); }
+
+/* ==========================================================================
+   FEEDBACK CONTROL AND TWIN HELP
+   ========================================================================== */
+/* Feedback opens from a small header control instead of a panel on every page. */
+.feedback-control { position:relative; }
+.feedback-trigger { display:inline-flex; align-items:center; gap:.3rem; min-height:2rem; border:1px solid var(--cockpit-border-soft); border-radius:4px; padding:.25rem .5rem; color:var(--cockpit-faint); font-size:.68rem; }
+.feedback-trigger:hover, .feedback-trigger[aria-expanded="true"] { border-color:var(--cockpit-border); background:var(--cockpit-raised); color:var(--cockpit-text); }
+.feedback-panel { position:absolute; right:0; top:calc(100% + 10px); z-index:40; width:min(320px, calc(100vw - 24px)); border:1px solid var(--cockpit-border); border-radius:8px; background:var(--cockpit-surface); padding:.9rem; color:var(--cockpit-text); box-shadow:0 18px 44px rgba(0,0,0,.35); }
+@media (max-width:640px) {
+  /* Icon only on a phone; the label stays for assistive technology. */
+  .feedback-trigger span { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+  .feedback-panel { position:fixed; top:70px; left:12px; right:12px; width:auto; }
+}
+/* Twin help is placed against the toolbar, so it never runs past the panel's edge. */
+.twin-toolbar { position:relative; }
+.twin-help { position:static; }
+.twin-help p { top:calc(100% + 4px); left:.75rem; width:min(300px, calc(100% - 1.5rem)); }
+
+/* Body copy and small labels were tuned for the dark ground; on light they need darker tokens to stay readable. */
+html[data-theme="light"] .cockpit .copy { color:var(--cockpit-muted); }
+html[data-theme="light"] .cockpit .eyebrow, html[data-theme="light"] .cockpit .label { color:var(--cockpit-faint); }
+@media (prefers-color-scheme: light) {
+  html[data-theme="system"] .cockpit .copy { color:var(--cockpit-muted); }
+  html[data-theme="system"] .cockpit .eyebrow, html[data-theme="system"] .cockpit .label { color:var(--cockpit-faint); }
 }

@@ -11,6 +11,7 @@ import {
   SCENARIO_DURATION_S,
   SCENARIO_START_S,
   counterfactualCockpitSnapshot,
+  facilityPlant,
   replayCockpitSnapshot,
   snapshotForAudit,
   type AdvisoryParameters,
@@ -24,12 +25,22 @@ import {
   syntheticProvenance,
 } from "../src/lib/cockpit/contracts";
 import {
+  assertFacilityLayout,
+  FacilityLayoutError,
+  normalizeFacilityLayout,
+  validateFacilityLayout,
+} from "../src/lib/facility/layout";
+import { SFO_01_LAYOUT } from "../src/lib/facility/templates";
+import { SCENARIO_INCIDENT_KEY_SUFFIX, scenarioRecords } from "../src/lib/cockpit/scenarioRecords";
+import {
+  canViewTopology,
   defaultLandingPath,
   ROLE_CAPABILITIES,
   ROLES,
   type Capability,
   type Role,
 } from "../src/lib/security/rolePolicy";
+import { incidentStateAt } from "../src/lib/cockpit/incidents";
 import {
   ASSISTANT_TOOLS,
   type AssistantAction,
@@ -53,7 +64,8 @@ function replaySnapshot(simulatedAt: number, config?: FacilityModelConfig) {
   return replayCockpitSnapshot(simulatedAt, config);
 }
 
-type AdvisoryCommand = AdvisoryParameters & { assetId: "cdu-03" };
+/** An advisory command. Its asset must be the unit the facility model advises; see advisedAssetId. */
+type AdvisoryCommand = AdvisoryParameters & { assetId: string };
 type SafetyCheckResult = {
   id: string;
   status: "PASS" | "WARNING" | "BLOCK";
@@ -66,14 +78,14 @@ function parseAdvisoryCommand(value: unknown): AdvisoryCommand | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const command = value as Record<string, unknown>;
   if (
-    command.assetId !== "cdu-03" ||
+    typeof command.assetId !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(command.assetId) ||
     typeof command.flowPercent !== "number" || !Number.isFinite(command.flowPercent) ||
     command.flowPercent < 0 || command.flowPercent > 100 ||
     !Number.isInteger(command.durationMinutes) ||
     Number(command.durationMinutes) < 1 || Number(command.durationMinutes) > 60
   ) return undefined;
   return {
-    assetId: "cdu-03",
+    assetId: command.assetId,
     flowPercent: command.flowPercent,
     durationMinutes: Number(command.durationMinutes),
   };
@@ -87,6 +99,11 @@ function advisoryCommandsEqual(left: unknown, right: AdvisoryCommand): boolean {
     parsed.flowPercent === right.flowPercent &&
     parsed.durationMinutes === right.durationMinutes,
   );
+}
+
+/** The cooling unit a facility model's advisories command: the one serving the most IT load. */
+function advisedAssetId(config: FacilityModelConfig): string {
+  return facilityPlant(config).advisedUnit.id;
 }
 
 function safetyChecksFor(snapshot: ReturnType<typeof counterfactualCockpitSnapshot>, command: AdvisoryCommand): SafetyCheckResult[] {
@@ -110,7 +127,7 @@ function safetyChecksFor(snapshot: ReturnType<typeof counterfactualCockpitSnapsh
       id: "COMMAND_ENVELOPE",
       status: inEnvelope ? "PASS" : "BLOCK",
       pass: inEnvelope,
-      detail: `${command.flowPercent}% ${inEnvelope ? "is within" : "is outside"} the ${COMMAND_ENVELOPE.minFlowPercent}–${COMMAND_ENVELOPE.maxFlowPercent}% CDU-03 advisory envelope.`,
+      detail: `${command.flowPercent}% ${inEnvelope ? "is within" : "is outside"} the ${COMMAND_ENVELOPE.minFlowPercent}–${COMMAND_ENVELOPE.maxFlowPercent}% ${command.assetId.toUpperCase()} advisory envelope.`,
       evidence: { requestedFlowPercent: command.flowPercent, envelope: COMMAND_ENVELOPE },
     },
     {
@@ -463,12 +480,29 @@ async function requireLearningViewer(userId: string, res: Response) {
   return membership;
 }
 
+// Health checks answer even when the identity provider is missing or down.
+app.get("/api/health", (_req, res) => res.json({ ok: true, service: "wattr-operator-cockpit" }));
+
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(clerkMiddleware((req) => ({
-  publishableKey: publishableKeyFromHost(getClerkProxyHost(req) ?? "", process.env.CLERK_PUBLISHABLE_KEY),
-})));
+
+// Public pages and static assets never depend on Clerk. Without a secret key,
+// or when Clerk fails for a request, the request continues signed out and
+// requireAuth fails closed with 401 rather than the whole site returning 500.
+const clerk = process.env.CLERK_SECRET_KEY
+  ? clerkMiddleware((req) => ({
+    publishableKey: publishableKeyFromHost(getClerkProxyHost(req) ?? "", process.env.CLERK_PUBLISHABLE_KEY),
+  }))
+  : undefined;
+if (!clerk) console.warn("CLERK_SECRET_KEY is not set; authenticated API routes will return 401.");
+app.use((req, res, next) => {
+  if (!clerk) return next();
+  clerk(req, res, (error?: unknown) => {
+    if (error) console.error("Clerk middleware failed; continuing signed out.", error);
+    next();
+  });
+});
 
 type AuthedRequest = Request & { userId?: string };
 
@@ -480,8 +514,13 @@ function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
       return next();
     }
   }
-  const auth = getAuth(req);
-  const userId = auth?.sessionClaims?.userId as string | undefined || auth?.userId;
+  let userId: string | undefined;
+  try {
+    const auth = getAuth(req);
+    userId = auth?.sessionClaims?.userId as string | undefined || auth?.userId || undefined;
+  } catch {
+    // No Clerk context on this request: Clerk is unconfigured or failed.
+  }
   if (!userId) return res.status(401).json({ error: "Unauthorized" });
   req.userId = userId;
   next();
@@ -557,8 +596,6 @@ async function ensureDemoAccess(userId: string) {
     client.release();
   }
 }
-
-app.get("/api/health", (_req, res) => res.json({ ok: true, service: "wattr-operator-cockpit" }));
 
 app.use("/api", requireAuth, async (req: AuthedRequest, res: Response, next: NextFunction) => {
   try {
@@ -1491,7 +1528,7 @@ function assistantActions(
       "Focus recommendation context",
       facility,
       records.recommendationId,
-      { assetId: "cdu-03", floor: 1, recommendationId: records.recommendationId, simulatedAt: records.simulatedAt },
+      { assetId: advisedAssetId(facility.model_config), floor: 1, recommendationId: records.recommendationId, simulatedAt: records.simulatedAt },
     ));
   }
   if (tool === "model_state" && role === "MODEL_ADMIN") {
@@ -1828,11 +1865,17 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
     );
     const incident = result.rows[0];
     if (!incident) {
-      response = assistantAnswer(membership.role, tool, "incident context", "No incident record is available for this authorized facility at the requested time.", context, null, [], [...limitations, "Incident data is unavailable; no cause or affected asset is inferred."], assistantActions(facility, tool, membership.role));
+      const modeled = snapshot.incident.open
+        ? ` The replayed model already shows an open ${snapshot.incident.severity} condition against the ${snapshot.incident.limitC.toFixed(1)}°C limit.`
+        : "";
+      response = assistantAnswer(membership.role, tool, "incident context", `No incident record is available for this authorized facility at the requested time.${modeled}`, context, null, [], [...limitations, "Incident data is unavailable; no cause or affected asset is inferred."], assistantActions(facility, tool, membership.role));
     } else {
+      // Report the incident as it stands at the replay instant, like every other view.
+      const replayState = incidentStateAt(incident, snapshot);
       const citation = assistantRecordCitation(context, incident, incident.id, incident.title, "incident.record", {
         severity: incident.severity,
         status: incident.status,
+        statusAtReplay: replayState.status,
         affectedAssets: incident.affected_assets,
         rawSignalCount: incident.raw_signal_count,
         likelyCause: incident.likely_cause,
@@ -1845,7 +1888,7 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
         membership.role,
         tool,
         "incident, affected assets, likely cause, and thermal path",
-        `The ${incident.severity} ${incident.status.toLowerCase()} incident is ${incident.title}. Affected assets: ${assets}. Likely cause: ${incident.likely_cause}. The record contains ${incident.raw_signal_count} correlated raw signal(s) and a ${incident.forecast_minutes}-minute forecast window.`,
+        `At this replay time, incident ${incident.id} (${incident.title}) is ${replayState.status === "OPEN" ? `open with ${replayState.severity} severity` : "clear"}. Affected assets: ${assets}. Likely cause: ${incident.likely_cause}. The record contains ${incident.raw_signal_count} correlated raw signal(s) and a ${incident.forecast_minutes}-minute forecast window.`,
         context,
         snapshot.forecast.confidence,
         [citation],
@@ -1892,7 +1935,7 @@ app.post("/api/assistant/query", requireAuth, async (req: AuthedRequest, res) =>
           membership.role,
           tool,
           "read-only recommendation counterfactual",
-          `If the recommendation (${command!.flowPercent}% CDU-03 flow for ${command!.durationMinutes} minutes) were modeled at this scenario time, the forecast peak is ${counterfactual.forecast.advisoryPeakC.toFixed(1)}°C versus ${inaction.forecast.baselinePeakC.toFixed(1)}°C with inaction, avoiding ${counterfactual.forecast.advisoryConstraintMinutes.toFixed(1)} of modeled constraint minutes versus ${inaction.forecast.baselineConstraintMinutes.toFixed(1)}.`,
+          `If the recommendation (${command!.flowPercent}% ${command!.assetId.toUpperCase()} flow for ${command!.durationMinutes} minutes) were modeled at this scenario time, the forecast peak is ${counterfactual.forecast.advisoryPeakC.toFixed(1)}°C versus ${inaction.forecast.baselinePeakC.toFixed(1)}°C with inaction, avoiding ${counterfactual.forecast.advisoryConstraintMinutes.toFixed(1)} of modeled constraint minutes versus ${inaction.forecast.baselineConstraintMinutes.toFixed(1)}.`,
           context,
           counterfactual.forecast.confidence,
           [citation, assistantCitation(context, `${recommendation.id}-what-if-${simulatedAt}`, "Read-only what-if outcome", "simulation.counterfactual", {
@@ -2116,7 +2159,7 @@ app.post("/api/assistant/action", requireAuth, async (req: AuthedRequest, res) =
             incidentId: row.id,
             simulatedAt: binding!.simulatedAt,
           }
-        : { assetId: parseAdvisoryCommand(row.command)?.assetId ?? "cdu-03", floor: 1, recommendationId: row.id, simulatedAt: binding!.simulatedAt };
+        : { assetId: parseAdvisoryCommand(row.command)?.assetId, floor: 1, recommendationId: row.id, simulatedAt: binding!.simulatedAt };
     }
   }
   res.json({
@@ -2268,6 +2311,49 @@ app.get("/api/facilities/:facilityId/decisions", requireAuth, async (req: Authed
   res.json({ contractVersion: CONTRACT_VERSION, items: result.rows.map((row) => canonical(row, facilityId)) });
 });
 
+// A recommendation's status and the decisions recorded on it, newest first, so
+// the decision page shows what is in force before anyone acts on it.
+app.get("/api/facilities/:facilityId/recommendations/:recommendationId/history", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res)) return;
+  const recommendation = await pool.query(
+    "SELECT id, status, version, model_version_id FROM recommendations WHERE id = $1 AND facility_id = $2",
+    [req.params.recommendationId, facilityId],
+  );
+  const row = recommendation.rows[0];
+  if (!row) return res.status(404).json({ error: "Recommendation not found" });
+  const client = await pool.connect();
+  try {
+    const current = await currentDisposition(client, facilityId, row);
+    const decisions = await client.query(
+      `SELECT d.id, d.decision, d.outcome, d.simulated_at, d.created_at, d.model_version_id, u.display_name,
+              CASE WHEN d.payload->>'recommendationVersion' ~ '^[0-9]+$'
+                   THEN (d.payload->>'recommendationVersion')::int END AS recommendation_version
+       FROM operator_decisions d JOIN users u ON u.id = d.user_id
+       WHERE d.facility_id = $1 AND d.recommendation_id = $2
+       ORDER BY d.created_at DESC, d.id DESC LIMIT 10`,
+      [facilityId, row.id],
+    );
+    res.json({
+      recommendation: { id: row.id, status: row.status, version: row.version, modelVersionId: row.model_version_id },
+      current: current ?? null,
+      decisions: decisions.rows.map((decision) => ({
+        id: String(decision.id),
+        decision: String(decision.decision),
+        outcome: String(decision.outcome),
+        simulatedAt: Number(decision.simulated_at),
+        recordedAt: decision.created_at,
+        recordedBy: String(decision.display_name),
+        modelVersionId: decision.model_version_id,
+        recommendationVersion: decision.recommendation_version === null ? null : Number(decision.recommendation_version),
+      })),
+    });
+  } finally {
+    client.release();
+  }
+});
+
 app.get("/api/facilities/:facilityId/replay/checkpoints", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const facilityId = String(req.params.facilityId);
@@ -2353,12 +2439,15 @@ app.get("/api/facilities/:facilityId/audit/:auditId", requireAuth, async (req: A
   await ensureDemoAccess(req.userId!);
   const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res);
   if (!permission) return;
+  // audit_records.id is a bigint, so anything else cannot name a record.
+  const auditId = String(req.params.auditId);
+  if (!/^[1-9]\d{0,17}$/.test(auditId)) return res.status(404).json({ error: "Audit record not found" });
   const result = await pool.query(
     `SELECT a.id, a.action, a.scenario_id, a.simulated_at, a.model_version, a.payload, a.created_at
      FROM audit_records a
      JOIN facility_permissions p ON p.facility_id = a.facility_id
      WHERE p.user_id = $1 AND p.can_view = true AND a.facility_id = $2 AND a.id = $3`,
-    [req.userId, req.params.facilityId, req.params.auditId],
+    [req.userId, req.params.facilityId, auditId],
   );
   if (!result.rows[0]) return res.status(404).json({ error: "Audit record not found" });
   const record = result.rows[0];
@@ -2460,7 +2549,7 @@ app.get("/api/facilities/:facilityId/topology", requireAuth, async (req: AuthedR
   await ensureDemoAccess(req.userId!);
   const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res);
   if (!permission) return;
-  if (!["OPERATOR", "ENGINEER"].includes(permission.role)) {
+  if (!canViewTopology(permission.role, permission.is_owner)) {
     return res.status(404).json({ error: "Facility workspace unavailable" });
   }
   const [model, persisted] = await Promise.all([
@@ -2555,12 +2644,27 @@ app.post("/api/facilities/:facilityId/model/versions", requireAuth, async (req: 
   ) {
     return res.status(400).json({ error: "A DEMO MODEL requires the approved scenario, integer seed, thermalMass 0.2–2.0, and responseLag 1–120s" });
   }
+  // Model Studio tunes the physics. A draft without a layout keeps the
+  // published build's layout, so adjusting parameters never discards a build.
+  let storedConfig = config;
+  if (config.layout === undefined) {
+    const published = await publishedModel(String(req.params.facilityId));
+    if (published?.config.layout) storedConfig = { ...config, layout: published.config.layout };
+  } else {
+    try {
+      assertFacilityLayout(config.layout);
+      storedConfig = { ...config, layout: normalizeFacilityLayout(config.layout) };
+    } catch (error) {
+      if (error instanceof FacilityLayoutError) return res.status(400).json({ error: error.message });
+      throw error;
+    }
+  }
   const id = `sfo-rom-${randomUUID().slice(0, 8)}`;
   const result = await pool.query(
     `INSERT INTO model_versions (id, facility_id, status, config, created_by)
      VALUES ($1, $2, 'DRAFT', $3::jsonb, $4)
      RETURNING id, facility_id, status, config, published_at, created_by, created_at`,
-    [id, req.params.facilityId, JSON.stringify(config), req.userId],
+    [id, req.params.facilityId, JSON.stringify(storedConfig), req.userId],
   );
   res.status(201).json(result.rows[0]);
 });
@@ -2602,9 +2706,7 @@ app.post("/api/facilities/:facilityId/model/versions/:versionId/publish", requir
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "Validate this model before publishing" });
     }
-    await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [req.params.facilityId]);
-    await client.query("UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1", [req.params.versionId]);
-    await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [req.params.versionId, req.params.facilityId]);
+    await activateModelVersion(client, String(req.params.facilityId), String(req.params.versionId));
     await client.query("COMMIT");
     res.json({ id: req.params.versionId, status: "PUBLISHED" });
   } catch (error) {
@@ -2632,9 +2734,298 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Rollback target not found" });
     }
-    await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [req.params.facilityId]);
-    await client.query("UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1", [versionId]);
-    await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [versionId, req.params.facilityId]);
+    await activateModelVersion(client, String(req.params.facilityId), versionId);
+    await client.query("COMMIT");
+    res.json({ id: versionId, status: "PUBLISHED" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * Make a version the one Operations runs, archiving whichever was published.
+ *
+ * The scenario, its incident and its recommendation follow the published
+ * model, so the incident page, Safety Shield and decisions work on the build
+ * that was just published. Decisions, safety evaluations, audit records and
+ * replay checkpoints keep the model they were made with.
+ */
+async function activateModelVersion(client: pg.PoolClient, facilityId: string, versionId: string) {
+  const facility = await client.query("SELECT model_version FROM facilities WHERE id = $1 FOR UPDATE", [facilityId]);
+  const previousVersionId: string | undefined = facility.rows[0]?.model_version;
+  await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [facilityId]);
+  const activated = await client.query(
+    "UPDATE model_versions SET status = 'PUBLISHED', published_at = now() WHERE id = $1 RETURNING config",
+    [versionId],
+  );
+  await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [versionId, facilityId]);
+  if (previousVersionId && previousVersionId !== versionId && activated.rows[0]) {
+    await rebindScenarioRecords(client, facilityId, previousVersionId, versionId, activated.rows[0].config);
+  }
+}
+
+/**
+ * Move a facility's published scenario, and the scenario incident and
+ * recommendation raised in it, from one model version to another, rewriting
+ * their content for the new model. A recommendation for a different model is a
+ * new version, open for review again; earlier decisions stay in the history.
+ */
+async function rebindScenarioRecords(
+  client: pg.PoolClient,
+  facilityId: string,
+  fromVersionId: string,
+  toVersionId: string,
+  config: unknown,
+) {
+  assertModelConfig(config);
+  const scenarios = await client.query(
+    `UPDATE scenarios s SET model_version_id = $3
+     WHERE s.facility_id = $1 AND s.model_version_id = $2 AND s.status = 'PUBLISHED'
+       AND NOT EXISTS (
+         SELECT 1 FROM scenarios t
+         WHERE t.facility_id = s.facility_id AND t.scenario_key = s.scenario_key AND t.model_version_id = $3
+       )
+     RETURNING s.id`,
+    [facilityId, fromVersionId, toVersionId],
+  );
+  if (!scenarios.rows.length) return;
+  const { incident, recommendation } = scenarioRecords(config);
+  const incidents = await client.query(
+    `UPDATE incidents
+     SET title = $4, affected_assets = $5::jsonb, likely_cause = $6, correlated_signals = $7::jsonb,
+         thermal_path = $8::jsonb, deduplication_key = $9, model_version = $3, model_version_id = $3,
+         model_config = $10::jsonb
+     WHERE facility_id = $1 AND model_version_id = $2 AND scenario_id = ANY($11::text[])
+       AND deduplication_key LIKE '%' || $12::text
+     RETURNING id`,
+    [
+      facilityId, fromVersionId, toVersionId,
+      incident.title, JSON.stringify(incident.affectedAssets), incident.likelyCause,
+      JSON.stringify(incident.correlatedSignals), JSON.stringify(incident.thermalPath), incident.deduplicationKey,
+      JSON.stringify(config), scenarios.rows.map((row) => row.id), SCENARIO_INCIDENT_KEY_SUFFIX,
+    ],
+  );
+  if (!incidents.rows.length) return;
+  await client.query(
+    `UPDATE recommendations
+     SET title = $4, rationale = $5, command = $6::jsonb, explanation = $7::jsonb, evidence = $8::jsonb,
+         model_version_id = $3, version = version + 1, status = 'PROPOSED'
+     WHERE facility_id = $1 AND model_version_id = $2 AND incident_id = ANY($9::text[])`,
+    [
+      facilityId, fromVersionId, toVersionId,
+      recommendation.title, recommendation.rationale, JSON.stringify(recommendation.command),
+      JSON.stringify(recommendation.explanation), JSON.stringify(recommendation.evidence),
+      incidents.rows.map((row) => row.id),
+    ],
+  );
+}
+
+/**
+ * db:setup reseeds the scenario records against the SFO-01 reference model.
+ * Bind them back to whichever model each facility actually publishes.
+ */
+async function reconcileScenarioBindings() {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const stale = await client.query(
+      `SELECT f.id AS facility_id, f.model_version AS published_version_id, mv.config,
+              s.model_version_id AS bound_version_id
+       FROM facilities f
+       JOIN model_versions mv ON mv.id = f.model_version AND mv.status = 'PUBLISHED'
+       JOIN scenarios s ON s.facility_id = f.id AND s.status = 'PUBLISHED' AND s.model_version_id <> f.model_version
+       FOR UPDATE OF f`,
+    );
+    for (const row of stale.rows) {
+      await rebindScenarioRecords(client, row.facility_id, row.bound_version_id, row.published_version_id, row.config);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+type ModelVersionRow = {
+  id: string;
+  status: string;
+  config: FacilityModelConfig & { buildName?: string };
+  created_by: string | null;
+  created_at: string;
+  published_at: string | null;
+};
+
+/** A version as the Builder lists it: status, name and what its layout holds. */
+function buildSummary(row: ModelVersionRow) {
+  const layout = row.config?.layout;
+  return {
+    id: row.id,
+    status: row.status,
+    name: typeof row.config?.buildName === "string" ? row.config.buildName : null,
+    hasLayout: Boolean(layout),
+    counts: layout
+      ? { zones: layout.zones.length, items: layout.items.length, connections: layout.connections.length }
+      : null,
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    publishedAt: row.published_at,
+  };
+}
+
+// Facility Builder. Builds are model versions that carry a layout, so they
+// share Model Studio's draft -> validate -> publish -> rollback lifecycle and
+// Operations always runs exactly one published version. For now every role
+// with a view grant can build; build permissions will be added later.
+
+app.get("/api/facilities/:facilityId/builds", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const model = await publishedModel(facilityId);
+  if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
+  const versions = await pool.query(
+    `SELECT id, status, config, created_by, created_at, published_at
+     FROM model_versions WHERE facility_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [facilityId],
+  );
+  res.json({
+    published: {
+      id: model.model_version,
+      layout: model.config.layout ?? SFO_01_LAYOUT,
+      reference: !model.config.layout,
+    },
+    versions: versions.rows.map(buildSummary),
+  });
+});
+
+app.get("/api/facilities/:facilityId/builds/:versionId", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const result = await pool.query(
+    `SELECT id, status, config, created_by, created_at, published_at
+     FROM model_versions WHERE id = $1 AND facility_id = $2`,
+    [req.params.versionId, facilityId],
+  );
+  const row = result.rows[0] as ModelVersionRow | undefined;
+  if (!row) return res.status(404).json({ error: "Build not found" });
+  res.json({ ...buildSummary(row), layout: row.config?.layout ?? SFO_01_LAYOUT, reference: !row.config?.layout });
+});
+
+app.post("/api/facilities/:facilityId/builds", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const name = req.body?.name;
+  if (name !== undefined && (typeof name !== "string" || name.length > 80)) {
+    return res.status(400).json({ error: "A build name must be text of at most 80 characters" });
+  }
+  try {
+    assertFacilityLayout(req.body?.layout);
+  } catch (error) {
+    if (error instanceof FacilityLayoutError) return res.status(400).json({ error: error.message });
+    throw error;
+  }
+  const model = await publishedModel(facilityId);
+  if (!model) return res.status(409).json({ error: "Published facility model is unavailable" });
+  // A build changes the layout; the physics parameters carry over from what is published.
+  const config = {
+    scenario: model.config.scenario,
+    seed: model.config.seed,
+    thermalMass: model.config.thermalMass,
+    responseLag: model.config.responseLag,
+    layout: normalizeFacilityLayout(req.body.layout),
+    ...(typeof name === "string" && name.trim() ? { buildName: name.trim() } : {}),
+  };
+  const id = `build-${randomUUID().slice(0, 8)}`;
+  const result = await pool.query(
+    `INSERT INTO model_versions (id, facility_id, status, config, created_by)
+     VALUES ($1, $2, 'DRAFT', $3::jsonb, $4)
+     RETURNING id, status, config, created_by, created_at, published_at`,
+    [id, facilityId, JSON.stringify(config), req.userId],
+  );
+  res.status(201).json(buildSummary(result.rows[0]));
+});
+
+app.post("/api/facilities/:facilityId/builds/:versionId/validate", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const result = await pool.query(
+    `SELECT id, status, config FROM model_versions WHERE id = $1 AND facility_id = $2`,
+    [req.params.versionId, facilityId],
+  );
+  const row = result.rows[0] as Pick<ModelVersionRow, "id" | "status" | "config"> | undefined;
+  if (!row) return res.status(404).json({ error: "Build not found" });
+  if (row.status !== "DRAFT") return res.status(409).json({ error: "Only a draft build can be validated" });
+  if (!row.config?.layout) return res.status(409).json({ error: "This version has no layout to validate" });
+  try {
+    assertModelConfig(row.config);
+  } catch (error) {
+    return res.status(409).json({ error: error instanceof Error ? error.message : "Invalid facility model configuration" });
+  }
+  const checks = validateFacilityLayout(row.config.layout);
+  if (!checks.ok) {
+    return res.status(409).json({
+      error: `${checks.errors.length} design problem${checks.errors.length === 1 ? "" : "s"} to fix before this build can be validated`,
+      findings: checks.findings,
+    });
+  }
+  await pool.query("UPDATE model_versions SET status = 'VALIDATED' WHERE id = $1 AND status = 'DRAFT'", [row.id]);
+  res.json({ id: row.id, status: "VALIDATED", findings: checks.findings });
+});
+
+app.post("/api/facilities/:facilityId/builds/:versionId/publish", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const version = await client.query(
+      `SELECT id, config FROM model_versions
+       WHERE id = $1 AND facility_id = $2 AND status = 'VALIDATED' FOR UPDATE`,
+      [req.params.versionId, facilityId],
+    );
+    if (!version.rows[0]?.config?.layout) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "Validate this build before publishing" });
+    }
+    await activateModelVersion(client, facilityId, String(req.params.versionId));
+    await client.query("COMMIT");
+    res.json({ id: req.params.versionId, status: "PUBLISHED" });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/facilities/:facilityId/builds/rollback", requireAuth, async (req: AuthedRequest, res) => {
+  await ensureDemoAccess(req.userId!);
+  const facilityId = String(req.params.facilityId);
+  if (!await requireFacilityAccess(req.userId!, facilityId, res, "view")) return;
+  const versionId = req.body?.versionId;
+  if (typeof versionId !== "string") return res.status(400).json({ error: "A version to restore is required" });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const version = await client.query(
+      `SELECT id FROM model_versions
+       WHERE id = $1 AND facility_id = $2 AND status IN ('ARCHIVED','VALIDATED','PUBLISHED') FOR UPDATE`,
+      [versionId, facilityId],
+    );
+    if (!version.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Rollback target not found" });
+    }
+    await activateModelVersion(client, facilityId, versionId);
     await client.query("COMMIT");
     res.json({ id: versionId, status: "PUBLISHED" });
   } catch (error) {
@@ -2666,6 +3057,9 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if"
   assertModelConfig(row.model_config);
   const recommendedCommand = parseAdvisoryCommand(row.command);
   if (!recommendedCommand) return res.status(409).json({ error: "Persisted recommendation command is invalid" });
+  if (command.assetId !== recommendedCommand.assetId) {
+    return res.status(400).json({ error: `An alternative must command ${recommendedCommand.assetId.toUpperCase()}, the unit this recommendation advises` });
+  }
   const inaction = replaySnapshot(simulatedAt, row.model_config);
   const recommended = counterfactualCockpitSnapshot(simulatedAt, recommendedCommand, row.model_config);
   const alternative = counterfactualCockpitSnapshot(simulatedAt, command, row.model_config);
@@ -2678,7 +3072,7 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/what-if"
       simulatedAt,
       initialState: snapshotForAudit(inaction),
       modelConfig: row.model_config,
-      events: ["GPU Training Ramp", "Rack heat rise", "CDU-03 modeled response lag"],
+      events: ["GPU Training Ramp", "Rack heat rise", `${facilityPlant(row.model_config).advisedLabel} modeled response lag`],
     },
     options: [
       {
@@ -2745,6 +3139,9 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/evaluate
   if (!model || model.model_version !== row.model_version_id) {
     return res.status(409).json({ error: "Recommendation does not match the active facility model" });
   }
+  if (command.assetId !== advisedAssetId(model.config)) {
+    return res.status(400).json({ error: "Invalid advisory command" });
+  }
   const snapshot = counterfactualCockpitSnapshot(simulatedAt, command, model.config);
   const checks = safetyChecksFor(snapshot, command);
   const outcome = safetyOutcome(checks);
@@ -2796,6 +3193,34 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/evaluate
   });
 });
 
+const DISPOSITION_STATUSES = ["APPROVED", "REJECTED", "DEFERRED", "ALTERNATIVE_REQUESTED"];
+
+/**
+ * The disposition in force for a recommendation, if any. The recommendation
+ * status says whether one is in force; the latest non-acknowledgement decision
+ * says who recorded it and when.
+ */
+async function currentDisposition(client: pg.PoolClient, facilityId: string, recommendation: { id: string; status: string }) {
+  if (!DISPOSITION_STATUSES.includes(recommendation.status)) return undefined;
+  const result = await client.query(
+    `SELECT d.id, d.decision, d.outcome, d.simulated_at, d.created_at, u.display_name
+     FROM operator_decisions d JOIN users u ON u.id = d.user_id
+     WHERE d.facility_id = $1 AND d.recommendation_id = $2 AND d.decision <> 'ACKNOWLEDGE'
+     ORDER BY d.created_at DESC, d.id DESC LIMIT 1`,
+    [facilityId, recommendation.id],
+  );
+  const row = result.rows[0];
+  if (!row) return undefined;
+  return {
+    id: String(row.id),
+    decision: String(row.decision),
+    outcome: String(row.outcome),
+    simulatedAt: Number(row.simulated_at),
+    recordedAt: row.created_at,
+    recordedBy: String(row.display_name),
+  };
+}
+
 app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decisions", requireAuth, async (req: AuthedRequest, res) => {
   await ensureDemoAccess(req.userId!);
   const permission = await requireFacilityAccess(req.userId!, String(req.params.facilityId), res, "operate");
@@ -2803,10 +3228,12 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
   const simulatedAt = req.body?.simulatedAt;
   const decision = req.body?.decision;
   const note = req.body?.note;
+  const replacesDecisionId = req.body?.replacesDecisionId;
   if (
     !isScenarioTimestamp(simulatedAt) ||
     !["APPROVE", "REJECT", "DEFER", "REQUEST_ALTERNATIVE", "ACKNOWLEDGE"].includes(decision) ||
-    (note !== undefined && (typeof note !== "string" || note.length > 500))
+    (note !== undefined && (typeof note !== "string" || note.length > 500)) ||
+    (replacesDecisionId !== undefined && typeof replacesDecisionId !== "string")
   ) return res.status(400).json({ error: "Invalid operator disposition" });
 
   const client = await pool.connect();
@@ -2836,6 +3263,10 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
       return res.status(409).json({ error: "Recommendation model is no longer active; request a new recommendation" });
     }
     assertModelConfig(recommendation.model_config);
+    if (command.assetId !== advisedAssetId(recommendation.model_config)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "Invalid advisory command" });
+    }
     const snapshot = counterfactualCockpitSnapshot(simulatedAt, command, recommendation.model_config);
 
     let evaluation;
@@ -2863,7 +3294,26 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
     } else if (decision === "APPROVE") {
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "A current server-verified Safety Shield PASS is required" });
-    } else {
+    }
+
+    // A disposition stays in force until an operator deliberately replaces it.
+    // The caller must name the disposition being replaced, so a stale screen
+    // cannot overwrite a newer decision. The decision history stays append-only.
+    const currentDecision = decision === "ACKNOWLEDGE"
+      ? undefined
+      : await currentDisposition(client, String(req.params.facilityId), recommendation);
+    if (decision !== "ACKNOWLEDGE" && (currentDecision?.id ?? null) !== (replacesDecisionId ?? null)) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: currentDecision
+          ? `This recommendation already has a ${currentDecision.decision.replace(/_/g, " ")} disposition. Confirm that this decision replaces it.`
+          : "The disposition being replaced is no longer current",
+        code: "DISPOSITION_REPLACEMENT_REQUIRED",
+        currentDecision: currentDecision ?? null,
+      });
+    }
+
+    if (!evaluation) {
       const checks = safetyChecksFor(snapshot, command);
       const id = randomUUID();
       const outcome = safetyOutcome(checks);
@@ -2913,6 +3363,9 @@ app.post("/api/facilities/:facilityId/recommendations/:recommendationId/decision
       outcome,
       note: note ?? "",
       command,
+      replaces: currentDecision
+        ? { decisionId: currentDecision.id, decision: currentDecision.decision, outcome: currentDecision.outcome }
+        : null,
     };
     await client.query(
       `INSERT INTO operator_decisions
@@ -3002,6 +3455,11 @@ app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedReq
   });
 });
 
+// An API route that does not exist answers in JSON, never with the app's HTML page.
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
 if (process.env.NODE_ENV === "production" || process.env.RELEASE_GATE === "1") {
   app.use(express.static(resolve("dist"), { immutable: true, maxAge: "1y", index: false }));
   app.use((_req, res) => res.sendFile(resolve("dist/index.html")));
@@ -3017,6 +3475,7 @@ if (process.env.NODE_ENV === "production" || process.env.RELEASE_GATE === "1") {
   app.use(vite.middlewares);
 }
 
+void reconcileScenarioBindings().catch((error) => console.error("Scenario record reconciliation failed", error));
 void purgeExpiredLearningRecords().catch(() => {});
 const learningRetentionTimer = setInterval(() => {
   lastLearningPurgeAt = 0;
