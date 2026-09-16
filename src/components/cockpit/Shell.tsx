@@ -10,7 +10,7 @@ import { learningSurfaceForPath } from "@/lib/cockpit/learning";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { SCENARIO_DURATION_S } from "@/lib/cockpit/simulation";
 import { ROLES, canViewTopology, type Role } from "@/lib/security/rolePolicy";
-import { clearTestIdentity, describeError, navigate, post, SESSION_CHANGED } from "./api";
+import { ApiError, clearTestIdentity, describeError, navigate, post, SESSION_CHANGED } from "./api";
 import type { Facility, SessionData } from "./types";
 import { Brand, mono, Status, ThemeControl } from "./ui";
 
@@ -136,7 +136,11 @@ function SessionMenu({ data }: { data: SessionData }) {
       setOpen(false);
       navigate(seat.default_path.replace("{facilityId}", data.facilities[0]?.id ?? ""));
     } catch (cause) {
-      setError(describeError(cause));
+      // A server that predates role switching has no such route, and its API
+      // answers "Not found"; say what that actually means.
+      setError(cause instanceof ApiError && cause.status === 404
+        ? "This server has not picked up role switching yet. Restart or redeploy it, then try again."
+        : describeError(cause));
     } finally {
       setBusy(false);
     }
