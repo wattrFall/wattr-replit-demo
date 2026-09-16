@@ -389,7 +389,48 @@ try {
     throw new Error("Facility denial reveals whether a facility exists");
   }
 
-  console.log("HTTP role, route, admin, audit, cross-organization, and revocation checks passed.");
+  // The demo lets a signed-in member take another seat without an administrator:
+  // only their own, only a real role, and with the grants that role is meant to
+  // have. This viewer's facility grant was just revoked above, which is the same
+  // position as a visitor admitted to the preview as a read-only viewer.
+  const explorer = users.get("VIEWER")!;
+  const beforeSwitch = await request(explorer, "/api/me");
+  const asModelAdmin = await request(explorer, "/api/me/role", { method: "POST", body: JSON.stringify({ role: "MODEL_ADMIN" }) });
+  if (asModelAdmin.status !== 200 || asModelAdmin.body?.role !== "MODEL_ADMIN" || asModelAdmin.body?.capabilities?.model !== true) {
+    throw new Error(`Taking another role failed: ${asModelAdmin.status} ${JSON.stringify(asModelAdmin.body)}`);
+  }
+  const afterSwitch = await request(explorer, "/api/me");
+  if (afterSwitch.body.role !== "MODEL_ADMIN" || afterSwitch.body.is_admin !== beforeSwitch.body.is_admin || afterSwitch.body.is_owner !== beforeSwitch.body.is_owner) {
+    throw new Error(`A role switch must not change administrator or owner status: ${JSON.stringify(afterSwitch.body)}`);
+  }
+  const reachedTopology = await request(explorer, "/api/facilities/sfo-01/topology");
+  const reachedModel = await request(explorer, "/api/facilities/sfo-01/model/versions");
+  if (reachedTopology.status !== 200 || reachedModel.status !== 200) {
+    throw new Error(`The taken role's grants did not apply: topology ${reachedTopology.status}, model ${reachedModel.status}`);
+  }
+  const stillNotAdministrator = await request(explorer, "/api/admin/memberships");
+  if (stillNotAdministrator.status === 200) throw new Error("A role switch must not grant administration access");
+  const asViewerAgain = await request(explorer, "/api/me/role", { method: "POST", body: JSON.stringify({ role: "VIEWER" }) });
+  const modelAfterLeaving = await request(explorer, "/api/facilities/sfo-01/model/versions");
+  if (asViewerAgain.status !== 200 || modelAfterLeaving.status !== 404) {
+    throw new Error(`Leaving a role must withdraw its grants: ${asViewerAgain.status}, model ${modelAfterLeaving.status}`);
+  }
+  const unknownRole = await request(explorer, "/api/me/role", { method: "POST", body: JSON.stringify({ role: "SUPERUSER" }) });
+  if (unknownRole.status !== 400) throw new Error(`An unknown role was accepted: ${unknownRole.status}`);
+  const otherMember = users.get("OPERATOR")!;
+  const spoofed = await request(explorer, "/api/me/role", { method: "POST", body: JSON.stringify({ role: "VIEWER", userId: otherMember }) });
+  const otherRole = await pool.query("SELECT role FROM memberships WHERE user_id = $1 AND organization_id = 'wattr-demo'", [otherMember]);
+  if (spoofed.status !== 200 || otherRole.rows[0].role !== "OPERATOR") {
+    throw new Error(`A role switch must only change the caller: ${JSON.stringify(otherRole.rows[0])}`);
+  }
+  const signedOutSwitch = await fetch(`${baseUrl}/api/me/role`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ role: "OPERATOR" }),
+  });
+  if (signedOutSwitch.status !== 401) throw new Error(`Role switching without a session returned ${signedOutSwitch.status}`);
+
+console.log("HTTP role, route, admin, audit, cross-organization, and revocation checks passed.");
 } finally {
   server.kill("SIGTERM");
   await Promise.race([once(server, "exit"), new Promise((resolve) => setTimeout(resolve, 5_000))]);

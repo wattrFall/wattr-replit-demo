@@ -633,6 +633,66 @@ app.get("/api/me", requireAuth, async (req: AuthedRequest, res) => {
   });
 });
 
+/**
+ * Demo role switching.
+ *
+ * This deployment is one synthetic organization with no real facility data, so
+ * anyone signed in may take another role to see the product from that seat.
+ * It changes only the caller's own membership and their own grants on the demo
+ * facilities, and only to one of the five roles: administrator and owner rights
+ * stay where they are, and every other route keeps enforcing whichever role and
+ * grant it finds. Set DEMO_ROLE_SWITCHING=false if this environment is ever
+ * given real data.
+ */
+const DEMO_ROLE_SWITCHING = process.env.DEMO_ROLE_SWITCHING !== "false";
+
+app.post("/api/me/role", requireAuth, async (req: AuthedRequest, res) => {
+  if (!DEMO_ROLE_SWITCHING) return res.status(403).json({ error: "Role switching is turned off in this environment" });
+  const role = req.body?.role;
+  if (typeof role !== "string" || !ROLES.includes(role as Role)) {
+    return res.status(400).json({ error: "Choose one of the demo roles" });
+  }
+  const client = await pool.connect();
+  let member;
+  try {
+    await client.query("BEGIN");
+    const updated = await client.query(
+      `UPDATE memberships SET role = $3
+       WHERE user_id = $1 AND organization_id = $2
+       RETURNING role, is_admin`,
+      [req.userId, DEMO_ORGANIZATION_ID, role],
+    );
+    member = updated.rows[0];
+    if (member) {
+      // A seat is a role plus the facility grants that role is meant to have:
+      // everyone sees the demo facilities, only an operator may operate, and
+      // only a model administrator may edit the model.
+      await client.query(
+        `INSERT INTO facility_permissions (user_id, facility_id, can_view, can_operate, can_edit_model)
+         SELECT $1, f.id, true, $3, $4 FROM facilities f WHERE f.organization_id = $2
+         ON CONFLICT (user_id, facility_id) DO UPDATE
+           SET can_view = true,
+               can_operate = EXCLUDED.can_operate,
+               can_edit_model = EXCLUDED.can_edit_model`,
+        [req.userId, DEMO_ORGANIZATION_ID, role === "OPERATOR", role === "MODEL_ADMIN"],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  if (!member) return res.status(403).json({ error: "Organization membership required" });
+  res.json({
+    role: member.role as Role,
+    is_admin: Boolean(member.is_admin),
+    capabilities: ROLE_CAPABILITIES[role as Role],
+    default_path: defaultLandingPath(role as Role),
+  });
+});
+
 app.get("/api/facilities", requireAuth, async (req: AuthedRequest, res) => {
   const result = await pool.query(
     `SELECT f.id, f.name, f.location, f.model_version, f.provenance, mv.config AS model_config,

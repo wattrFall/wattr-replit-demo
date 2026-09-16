@@ -11,6 +11,14 @@ export const e2eTestUserId = () =>
 /** Sent after a model is published or restored, so every page reads the version Operations now runs. */
 export const FACILITIES_CHANGED = "wattr:facilities-changed";
 
+/** Sent after the signed-in person takes another role, so the whole session is re-read. */
+export const SESSION_CHANGED = "wattr:session-changed";
+
+/** Forget the development sign-in, if one was set on this page. */
+export function clearTestIdentity() {
+  delete (globalThis as typeof globalThis & { __WATTR_E2E_USER_ID__?: string }).__WATTR_E2E_USER_ID__;
+}
+
 export class ApiError extends Error {
   status: number;
   body: Record<string, any>;

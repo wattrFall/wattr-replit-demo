@@ -20,7 +20,7 @@ import { GuidanceProvider, useGuidance } from "./Guidance";
 import { FacilityBuilder } from "@/components/builder/FacilityBuilder";
 import { facilityAssets } from "@/lib/cockpit/facilityAssets";
 import { facilityPlant } from "@/lib/cockpit/simulation";
-import { ApiError, describeError, navigate, e2eTestUserId, FACILITIES_CHANGED, api, post, patch, remove } from "./api";
+import { ApiError, describeError, navigate, e2eTestUserId, FACILITIES_CHANGED, SESSION_CHANGED, api, post, patch, remove } from "./api";
 import { CLERK_LIGHT_APPEARANCE, Landing, PublicFrame, StateScreen } from "./PublicScreens";
 import { Recommendation } from "./RecommendationPage";
 import { ThermalGraphPage } from "./ThermalGraphPage";
@@ -761,6 +761,17 @@ function ProtectedApp({path}:{path:string}){
     };
     addEventListener(FACILITIES_CHANGED, reload);
     return () => removeEventListener(FACILITIES_CHANGED, reload);
+  }, []);
+  // Taking another role changes capabilities, navigation and the default page,
+  // so the whole session is re-read rather than just the facilities.
+  useEffect(() => {
+    const reload = () => {
+      Promise.all([api<Me>("/api/me"), api<Facility[]>("/api/facilities")])
+        .then(([me, facilities]) => setData({ me, facilities }))
+        .catch(() => {});
+    };
+    addEventListener(SESSION_CHANGED, reload);
+    return () => removeEventListener(SESSION_CHANGED, reload);
   }, []);
   if(error){
     const status = error instanceof ApiError ? error.status : undefined;

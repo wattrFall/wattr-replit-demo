@@ -1,15 +1,16 @@
 /** The signed-in page frame, its navigation and the shared replay controls. */
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useClerk } from "@clerk/react";
 import {
   Activity, AlertTriangle, ArrowRight, Boxes, BrainCircuit, CircleHelp, Clock3, Gauge, GitBranch, History,
-  LayoutDashboard, Menu, MessageSquare, Pause, Play, RotateCcw, ShieldCheck, SkipForward, SlidersHorizontal, UserCog,
+  LayoutDashboard, LogOut, Menu, MessageSquare, Pause, Play, RotateCcw, ShieldCheck, SkipForward, SlidersHorizontal, UserCog,
   type LucideIcon,
 } from "lucide-react";
 import { learningSurfaceForPath } from "@/lib/cockpit/learning";
 import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { SCENARIO_DURATION_S } from "@/lib/cockpit/simulation";
-import { canViewTopology } from "@/lib/security/rolePolicy";
-import { describeError, navigate, post } from "./api";
+import { ROLES, canViewTopology, type Role } from "@/lib/security/rolePolicy";
+import { clearTestIdentity, describeError, navigate, post, SESSION_CHANGED } from "./api";
 import type { Facility, SessionData } from "./types";
 import { Brand, mono, Status, ThemeControl } from "./ui";
 
@@ -81,6 +82,100 @@ function FeedbackControl({ facility }: { facility?: Facility }) {
   </div>;
 }
 
+const ROLE_LABELS: Record<Role, string> = {
+  PORTFOLIO_MANAGER: "Portfolio manager",
+  OPERATOR: "Operator",
+  ENGINEER: "Engineer",
+  MODEL_ADMIN: "Model admin",
+  VIEWER: "Viewer",
+};
+
+/**
+ * The seat you are in: the demo's role switch and the way out.
+ *
+ * This is a synthetic environment, so taking another role needs no further
+ * sign-in. The server still enforces whichever role it finds on every request,
+ * and administrator and owner rights are not granted here.
+ */
+function SessionMenu({ data }: { data: SessionData }) {
+  const clerk = useClerk();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current?.querySelector<HTMLElement>("button")?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    const closeOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!panelRef.current?.contains(target) && !triggerRef.current?.contains(target)) setOpen(false);
+    };
+    addEventListener("keydown", closeOnEscape);
+    addEventListener("mousedown", closeOutside);
+    return () => {
+      removeEventListener("keydown", closeOnEscape);
+      removeEventListener("mousedown", closeOutside);
+    };
+  }, [open]);
+
+  const takeRole = async (role: Role) => {
+    if (role === data.me.role) { setOpen(false); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const seat = await post<{ default_path: string }>("/api/me/role", { role });
+      dispatchEvent(new Event(SESSION_CHANGED));
+      setOpen(false);
+      navigate(seat.default_path.replace("{facilityId}", data.facilities[0]?.id ?? ""));
+    } catch (cause) {
+      setError(describeError(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    clearTestIdentity();
+    try {
+      await clerk.signOut();
+    } catch {
+      // Clerk is unavailable in local development; the development sign-in is already cleared.
+    }
+    location.assign("/");
+  };
+
+  return <div className="session-control">
+    <button ref={triggerRef} type="button" className="session-trigger" aria-expanded={open} aria-controls={open ? panelId : undefined} onClick={() => setOpen(!open)}>
+      <UserCog size={13} aria-hidden="true"/><span>{ROLE_LABELS[data.me.role] ?? data.me.role}</span>
+    </button>
+    {open && <div ref={panelRef} id={panelId} role="dialog" aria-label="Your seat in this demo" className="session-panel">
+      <b className="block text-sm">{data.me.display_name}</b>
+      <p className="mt-1 text-xs leading-5 text-slate-500">Synthetic demo environment: take any role to see the product from that seat. No further sign-in is needed, and the role you take is enforced on every request.</p>
+      <div className="mt-3 grid gap-1" role="group" aria-label="Take a role">
+        {ROLES.map((role) => <button
+          key={role}
+          type="button"
+          className={`session-role ${role === data.me.role ? "current" : ""}`}
+          aria-pressed={role === data.me.role}
+          disabled={busy}
+          onClick={() => takeRole(role)}
+        ><span>{ROLE_LABELS[role]}</span>{role === data.me.role && <small>current</small>}</button>)}
+      </div>
+      {data.me.is_owner && <p className="mt-2 text-[11px] leading-5 text-slate-500">Owner and administrator rights stay with your account whichever role you take.</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-red-300">{error}</p>}
+      <button type="button" className="button secondary mt-3 w-full justify-center" onClick={signOut}><LogOut size={14} aria-hidden="true"/>Sign out</button>
+    </div>}
+  </div>;
+}
+
 export function Shell({ data, facility, children }: { data: SessionData; facility?: Facility; children: ReactNode }) {
   const [mobile, setMobile] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -109,7 +204,7 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
       <div className="flex items-center gap-4">
         <button ref={menuButtonRef} type="button" className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"} aria-expanded={mobile} aria-controls="cockpit-navigation"><Menu size={20} aria-hidden="true"/></button><Brand/>
       </div>
-      <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><Status>{data.me.role.replace(/_/g, " ")}</Status><FeedbackControl facility={facility}/><ThemeControl/></div>
+      <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><SessionMenu data={data}/><FeedbackControl facility={facility}/><ThemeControl/></div>
     </header>
     {mobile && <button type="button" className="mobile-scrim md:hidden" aria-label="Close navigation" onClick={() => { setMobile(false); menuButtonRef.current?.focus(); }}/>}
     <aside id="cockpit-navigation" aria-label="Primary navigation" className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><nav className="space-y-1">{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/>{label}</button>)}</nav><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className="cockpit-nav"><CircleHelp size={16} aria-hidden="true"/>Help & tutorials</button></div></aside>
