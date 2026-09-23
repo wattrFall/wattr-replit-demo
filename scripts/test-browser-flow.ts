@@ -284,7 +284,7 @@ try {
     }
 
     const firstTwinStarted = performance.now();
-    await assertPageQuality(page, "/facilities/sfo-01/operations", "Synchronized facility twin");
+    await assertPageQuality(page, "/facilities/sfo-01/operations", "Contextual HUD");
     const twin = page.locator("[data-guide='twin']");
     const replay = page.getByLabel("Replay position");
     const replayBeforeViewpoint = await replay.getAttribute("aria-valuetext");
@@ -342,19 +342,22 @@ try {
     await page.getByRole("button", { name: "Thermal overlay" }).click();
     await page.locator(".twin-legend").waitFor();
     const overlayStarted = performance.now();
+    await page.getByRole("button", { name: /^Layers/ }).click();
     await page.getByText("Heat map", { exact: true }).locator("input").uncheck();
+    await page.keyboard.press("Escape");
     await page.waitForFunction(() => document.querySelector(".twin-layer-summary")?.textContent?.startsWith("Flow"));
     const overlayMs = performance.now() - overlayStarted;
     assert(overlayMs < 1_000, `overlay update exceeded 1s (${overlayMs.toFixed(0)}ms)`);
     await page.getByRole("button", { name: "Jump to forecast" }).click();
     assert.match(await replay.getAttribute("aria-valuetext") ?? "", /15 minutes/);
     assert.match(await page.locator(".twin-layer-summary").innerText(), /deterministic snapshot at 15m/i);
+    await page.getByRole("button", { name: "More replay controls" }).click();
     await page.getByRole("button", { name: "Reset" }).click();
 
     for (const width of [1280, 1440, 1728, 1920]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`${baseUrl}/facilities/sfo-01/operations`, { waitUntil: "domcontentloaded" });
-      await page.getByText("Synchronized facility twin").waitFor();
+      await page.locator("[data-guide='twin']").waitFor();
       for (const required of [
         page.locator("[data-guide='twin']"),
         page.getByLabel("Canonical replay controls"),

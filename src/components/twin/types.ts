@@ -17,4 +17,9 @@ export type FacilityTwinProps = {
   mode?: TwinMode;
   canEdit?: boolean;
   onGuideAction?: (action: string) => void;
+  /** Controls a page adds to the twin's toolbar: before the floor and camera, and after them. */
+  toolbarStart?: import("react").ReactNode;
+  toolbarEnd?: import("react").ReactNode;
+  /** More for the toolbar's "?" to explain, ahead of floors and camera. */
+  help?: import("react").ReactNode;
 };

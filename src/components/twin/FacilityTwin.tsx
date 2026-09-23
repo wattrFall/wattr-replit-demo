@@ -59,6 +59,7 @@ export function FacilityTwin(props: FacilityTwinProps) {
 
   return <div className="facility-twin">
     <div className="twin-toolbar">
+      {props.toolbarStart}
       <Segmented label="Facility floor" guide="floors" value={floor} onChange={(value) => { setFloor(value); props.onGuideAction?.("floor-change"); }} options={[
         { value: 1, label: "F1" },
         { value: 2, label: "F2", guide: "floor-change" },
@@ -67,8 +68,10 @@ export function FacilityTwin(props: FacilityTwinProps) {
         { value: "orbit", label: <><MousePointer2 size={13} aria-hidden="true"/>Orbit</>, guide: "camera-orbit" },
         { value: "walk", label: <><Footprints size={13} aria-hidden="true"/>Walk</>, guide: "camera-walk" },
       ]}/>
-      <ContextualHelp title="About floors and camera" align="start"><p>Floors change the visible level. Orbit is best for planning; Walk gives aisle-level movement. Neither changes replay state.</p></ContextualHelp>
-      <span className="twin-model"><Box size={12}/> {props.mode === "edit" ? `UNPUBLISHED DRAFT · BASED ON ${props.modelVersion}` : `OPERATIONS · ${props.modelVersion}`}</span>
+      {props.toolbarEnd}
+      <ContextualHelp title={props.help ? "About the twin" : "About floors and camera"} align="start">{props.help}<p className={props.help ? "mt-2" : undefined}>Floors change the visible level. Orbit is best for planning; Walk gives aisle-level movement. Neither changes replay state.</p></ContextualHelp>
+      {/* Operations shows its model version under Data transparency; a draft preview says what it is based on. */}
+      {props.mode === "edit" && <span className="twin-model"><Box size={12} aria-hidden="true"/> Unpublished draft · based on {props.modelVersion}</span>}
     </div>
     <div className="twin-stage" data-guide="twin" data-camera-state={cameraState}>
       <TwinBoundary fallback={fallback}>

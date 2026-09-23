@@ -2,7 +2,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useClerk } from "@clerk/react";
 import {
-  Activity, AlertTriangle, ArrowLeft, Boxes, BrainCircuit, Building2, ChevronsUpDown, CircleHelp, Clock3, FileUp,
+  Activity, AlertTriangle, ArrowLeft, Boxes, BrainCircuit, Building2, ChevronsUpDown, CircleHelp, Clock3, Ellipsis, FastForward, FileUp,
   FlaskConical, Gauge, History, LayoutDashboard, LogOut, Menu, MessageSquare, Network, Pause, Play, Rewind,
   RotateCcw, ScrollText, ShieldCheck, SkipForward, SlidersHorizontal, Users, type LucideIcon,
 } from "lucide-react";
@@ -295,10 +295,26 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
 export function ReplayBar({ onReset = () => {} }: { onReset?: () => void }) {
   const s = useScenarioSession();
   const elapsed = s.simulation.snapshot.elapsedS;
+  const [more, setMore] = useState(false);
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+  useDismiss(more, () => setMore(false), moreRef, panelRef);
   if (!location.pathname.endsWith("/operations")) return null;
-  return <section className="replay-bar mb-4" data-guide="replay" aria-label="Canonical replay controls">
-    <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300" aria-hidden="true"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><Segmented className="ml-auto" label="Replay speed" value={s.speed} onChange={s.setSpeed} options={([1, 5, 10, 30, 60] as const).map((v) => ({ value: v, label: `${v}×`, ariaLabel: `Replay speed ${v} times` }))}/><button type="button" className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15} aria-hidden="true"/> : <Play size={15} aria-hidden="true"/>} {s.playing ? "Pause" : "Play"}</button></div>
-    <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" className="button secondary" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={14} aria-hidden="true"/>Step 30s</button><button type="button" className="button secondary" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}>−5m</button><button type="button" className="button secondary" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}>+5m</button><button type="button" className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button><input aria-label="Replay position" aria-valuetext={`${Math.round(elapsed / 60)} minutes into the 30 minute scenario`} className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/><span className={`${mono} text-[10px] text-slate-500`}>{Math.round(elapsed / 60)}m</span><button type="button" className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15} aria-hidden="true"/>Reset</button></div>
-    <p className="sr-only" role="status" aria-live="polite">Replay at {Math.round(elapsed / 60)} minutes. {s.playing ? `Playing at ${s.speed} times speed.` : "Paused."}</p>
+  const minutes = Math.round(elapsed / 60);
+  return <section className="replay-bar" data-guide="replay" aria-label="Canonical replay controls">
+    <span className="replay-time"><Clock3 size={15} aria-hidden="true"/><span className={`${mono} text-slate-200`}>{formatSimulatedAt(s.simulatedAt)}</span><span>· {minutes} of 30 min</span></span>
+    <button type="button" className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15} aria-hidden="true"/> : <Play size={15} aria-hidden="true"/>}{s.playing ? "Pause" : "Play"}</button>
+    <input aria-label="Replay position" aria-valuetext={`${minutes} minutes into the 30 minute scenario`} className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/>
+    <Segmented label="Replay speed" value={s.speed} onChange={s.setSpeed} options={([1, 5, 10, 30, 60] as const).map((v) => ({ value: v, label: `${v}×`, ariaLabel: `Replay speed ${v} times` }))}/>
+    <button type="button" className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button>
+    <button ref={moreRef} type="button" className="icon-button" aria-label="More replay controls" aria-expanded={more} aria-controls={more ? panelId : undefined} onClick={() => setMore(!more)}><Ellipsis size={16} aria-hidden="true"/></button>
+    <Floating open={more} anchorRef={moreRef} floatingRef={panelRef} id={panelId} role="dialog" aria-label="Step through the replay" className="menu-panel">
+      <button type="button" className="menu-item" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={15} aria-hidden="true"/>Step 30 s</button>
+      <button type="button" className="menu-item" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}><Rewind size={15} aria-hidden="true"/>Back 5 min</button>
+      <button type="button" className="menu-item" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}><FastForward size={15} aria-hidden="true"/>Forward 5 min</button>
+      <button type="button" className="menu-item" onClick={() => { s.reset(); onReset(); setMore(false); }}><RotateCcw size={15} aria-hidden="true"/>Reset</button>
+    </Floating>
+    <p className="sr-only" role="status" aria-live="polite">Replay at {minutes} minutes. {s.playing ? `Playing at ${s.speed} times speed.` : "Paused."}</p>
   </section>;
 }

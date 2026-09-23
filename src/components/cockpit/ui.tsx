@@ -1,6 +1,6 @@
 /** Shared cockpit building blocks: theme, headings, status, metrics and help. */
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Activity, ArrowRight, CircleHelp, Monitor, Moon, Sun } from "lucide-react";
+import { Activity, ArrowRight, ArrowUpRight, CircleHelp, Monitor, Moon, Sun } from "lucide-react";
 import { navigate, patch } from "./api";
 import { Floating, type Align } from "./Floating";
 import type { ThemePreference } from "./types";
@@ -192,7 +192,7 @@ export function Brand() {
   return <button onClick={() => navigate("/")} className="flex items-center gap-2.5 text-left"><span className="grid h-8 w-8 place-items-center rounded-md bg-cyan-400 text-slate-950"><Activity size={18}/></span><span><b className="block text-sm tracking-[.18em]">WATTR</b><small className="block text-[9px] tracking-[.2em] text-slate-500">OPERATOR COCKPIT</small></span></button>;
 }
 /** Acronyms and identifiers a badge keeps in capitals. */
-const BADGE_KEEP = /^(CDU(-\d+)?|HUD|IT|OT|PUE|KPI|IFC|CSV|AI|SFO-\d+|ID|ROM)$/;
+const BADGE_KEEP = /^(HUD|IT|OT|PUE|KPI|IFC|CSV|AI|ID|UTC|GPU|API|CDU|SFO)$/;
 
 /**
  * A badge reads in sentence case: "REPLAY-CONTROLLED" and "watch" become
@@ -204,14 +204,20 @@ function badgeText(children: ReactNode): ReactNode {
   if (!parts.every((part) => typeof part === "string" || typeof part === "number")) return children;
   const text = parts.join("");
   if (/[a-z]/.test(text) && /[A-Z]/.test(text)) return text;
-  const words = text.split(/(\s+)/).map((word) => BADGE_KEEP.test(word) ? word : word.toLowerCase()).join("");
+  // Acronyms and anything with a digit in it (SFO-01, CDU-03, a time) keep their capitals.
+  const words = text.split(/(\s+)/).map((word) => BADGE_KEEP.test(word) || /\d/.test(word) ? word : word.toLowerCase()).join("");
   const first = words.search(/[a-z]/i);
   return first < 0 ? words : words.slice(0, first) + words.charAt(first).toUpperCase() + words.slice(first + 1);
 }
 
 export function Status({ children, tone = "good" }: { children: ReactNode; tone?: "good" | "warn" | "bad" }) { return <span className={`status ${tone}`}>{badgeText(children)}</span>; }
 export function Metric({ label, value, unit, sub, warn, help, onClick }: { label: string; value: string; unit?: string; sub: string; warn?: boolean; help?: string; onClick?: () => void }) {
-  return <article className="panel metric" aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. ${sub}`}><div className="metric-header"><div className="metric-label">{label}</div>{help && <ContextualHelp title={`About ${label}`}><p>{help}</p></ContextualHelp>}</div><div className={`metric-value ${warn ? "warn" : ""}`}>{value}<small>{unit}</small></div><div className="metric-sub">{sub}</div>{onClick && <button type="button" className="mt-3 flex items-center gap-2 text-left text-sm font-semibold text-cyan-400 hover:underline" onClick={onClick} aria-label={`Investigate ${label}`}>Inspect sources <ArrowRight size={14}/></button>}</article>;
+  return <article className="metric" aria-label={`${label}: ${value}${unit ? ` ${unit}` : ""}. ${sub}`}><div className="metric-header"><div className="metric-label">{label}</div><div className="flex items-center">{onClick && <button type="button" className="metric-link" onClick={onClick} aria-label={`Inspect ${label} sources`} title="Inspect sources"><ArrowUpRight size={14} aria-hidden="true"/></button>}{help && <ContextualHelp title={`About ${label}`}><p>{help}</p></ContextualHelp>}</div></div><div className={`metric-value ${warn ? "warn" : ""}`}>{value}<small>{unit}</small></div><div className="metric-sub">{sub}</div></article>;
+}
+
+/** A row of headline figures on one surface, divided by hairlines rather than boxed one by one. */
+export function MetricStrip({ children, label }: { children: ReactNode; label?: string }) {
+  return <section className="panel metric-strip" aria-label={label}>{children}</section>;
 }
 export function PageHead({ eyebrow, title, detail, action }: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
   return <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div className="min-w-0"><div className="eyebrow mb-1">{eyebrow}</div><h1 className="page-title">{title}</h1><p className="page-detail">{detail}</p></div>{action}</div>;

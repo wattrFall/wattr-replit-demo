@@ -76,7 +76,8 @@ function CameraRig({ mode, floor, frame, obstacles, onCameraState }: {
   };
   useEffect(() => {
     if (mode === "walk") camera.position.set(0, 1.65, frame.halfD + WALK_MARGIN);
-    else camera.position.set(frame.span * .78, frame.span * .62, frame.span * .86);
+    // Close enough that the build fills the stage, with room around it to orbit.
+    else camera.position.set(frame.span * .6, frame.span * .5, frame.span * .66);
     camera.rotation.set(0, mode === "walk" ? Math.PI : 0, 0);
     report("idle");
   }, [camera, mode, floor, frame]);
