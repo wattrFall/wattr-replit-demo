@@ -226,4 +226,53 @@ assert.match(describeError(new TypeError("Failed to fetch")), /could not reach t
 assert.equal(describeError(new TypeError("Cannot read properties of undefined")), "Cannot read properties of undefined", "a code error is not reported as a network error");
 assert(!/^Error:/.test(describeError(new Error("Model not published"))), "messages never start with a raw error prefix");
 
+// The twin's labels never cover one another; rack IDs win, nearer labels win, and a moved label keeps a leader.
+const { layoutLabels } = await import("../src/lib/twin/labelLayout");
+const stage = { width: 800, height: 480, inset: { top: 6, right: 6, bottom: 48, left: 6 } };
+const label = (id: string, x: number, y: number, extra: Partial<Parameters<typeof layoutLabels>[0][number]> = {}) => ({
+  id, anchorX: x, anchorY: y, targetX: x, targetY: y + 20, width: 40, height: 18, priority: 0, distance: 10, inFront: true, leader: true, ...extra,
+});
+const clear = (placements: ReturnType<typeof layoutLabels>, sizes: Map<string, [number, number]>) => {
+  const boxes = placements.filter((place) => place.visible).map((place) => {
+    const [w, h] = sizes.get(place.id)!;
+    return { id: place.id, x: place.x, y: place.y, w: w * place.scale, h: h * place.scale };
+  });
+  for (const a of boxes) for (const b of boxes) {
+    if (a === b) continue;
+    const overlapping = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    assert(!overlapping, `${a.id} and ${b.id} must not overlap`);
+    assert(a.x >= stage.inset.left && a.y >= stage.inset.top && a.x + a.w <= stage.width - stage.inset.right && a.y + a.h <= stage.height - stage.inset.bottom, `${a.id} stays inside the stage`);
+  }
+};
+{
+  const stacked = layoutLabels([label("A01", 300, 200), label("A02", 300, 200, { distance: 12 })], stage);
+  const [a01, a02] = stacked;
+  assert(a01.visible && a02.visible, "two labels on one spot both show");
+  assert.equal(a01.leader, null, "the nearer label keeps its spot");
+  assert(a02.leader, "the label that moved keeps a leader line to its equipment");
+  clear(stacked, new Map([["A01", [40, 18]], ["A02", [40, 18]]]));
+}
+{
+  const [rack, callout] = layoutLabels([label("A01", 300, 200, { distance: 14 }), label("path", 300, 200, { priority: 2, distance: 5, leader: false, width: 120 })], stage);
+  assert.equal(rack.leader, null, "a rack ID keeps its spot over a nearer callout");
+  assert(Math.abs(rack.x + 20 * rack.scale - 300) < 1 && Math.abs(rack.y + 9 * rack.scale - 200) < 1, "a rack ID sits centred on its anchor");
+  assert(callout.visible && callout.leader === null, "a callout moves aside without a leader");
+}
+{
+  const [behind, offscreen] = layoutLabels([label("A01", 300, 200, { inFront: false }), label("A02", 900, 200)], stage);
+  assert(!behind.visible && !offscreen.visible, "labels behind the camera or off the stage are hidden");
+}
+{
+  const cluster = Array.from({ length: 12 }, (_, i) => label(`R${i}`, 380 + (i % 4) * 6, 220 + Math.floor(i / 4) * 5, { distance: 10 + i }));
+  const placements = layoutLabels(cluster, stage);
+  assert(placements.every((place) => place.visible), "every rack ID in a tight cluster shows");
+  clear(placements, new Map(cluster.map((item) => [item.id, [40, 18] as [number, number]])));
+  assert.equal(placements[0].scale, 1, "the nearest label is full size");
+  assert(placements[11].scale < 1 && placements[11].opacity < 1, "the furthest label shrinks and fades a little");
+}
+{
+  const [edge] = layoutLabels([label("A01", 10, 470)], stage);
+  assert(edge.visible && edge.x >= stage.inset.left && edge.y + 18 <= stage.height - stage.inset.bottom, "a label near the edge moves inside the stage");
+}
+
 console.log("Operating workspace model, traversal, and comparison tests passed.");

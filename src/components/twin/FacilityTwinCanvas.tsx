@@ -1,6 +1,6 @@
-import { Suspense, useEffect, useMemo, useRef } from "react";
+import { Suspense, useEffect, useId, useMemo, useRef, type RefObject } from "react";
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
-import { Edges, Html, OrbitControls } from "@react-three/drei";
+import { Edges, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { Body } from "@/components/sandbox/scene/Placeable";
 import { PipeRun } from "@/components/sandbox/scene/Pipe";
@@ -9,6 +9,7 @@ import { useReducedMotion } from "@/hooks/use-reduced-motion";
 import { facilityAssets, itemLabel, twinAssetId } from "@/lib/cockpit/facilityAssets";
 import type { FacilityLayout } from "@/lib/facility/layout";
 import { SFO_01_LAYOUT } from "@/lib/facility/templates";
+import { layoutLabels, type LabelInput } from "@/lib/twin/labelLayout";
 import { CATALOGUE } from "@/lib/sandbox/catalogue";
 import { boundsToWorld, cellToWorld, zoneRect } from "@/lib/sandbox/geometry";
 import { rackHeatFraction } from "@/lib/sandbox/model";
@@ -29,8 +30,6 @@ type Obstacle = { x: number; z: number; w: number; d: number };
 /** Where a floor sits in the world, so the camera can frame a build of any size. */
 type Frame = { cx: number; cz: number; halfW: number; halfD: number; span: number };
 
-/** Html overlays stay below the page's own menus, dialogs and guidance. */
-const HTML_Z_RANGE: [number, number] = [30, 0];
 /** Room to walk around the outside of the floor. */
 const WALK_MARGIN = 1.6;
 
@@ -181,9 +180,6 @@ function TwinUnit({ item, props }: { item: SandboxItem; props: CanvasProps }) {
       <boxGeometry args={[entry.footprint.w, entry.height + .2, entry.footprint.d]}/>
       <meshBasicMaterial visible={false}/>
     </mesh>
-    {props.overlays.includes("labels") && item.kind !== "sensor" && <Html center position={[0, entry.height + .45, 0]} zIndexRange={HTML_Z_RANGE}>
-      <button type="button" className="scene-label" onClick={() => props.onSelect(id)}>{item.kind === "rack" ? id : itemLabel(item).toUpperCase()}</button>
-    </Html>}
   </group>;
 }
 
@@ -201,8 +197,6 @@ function LayoutFloor(props: CanvasProps & { layout: FacilityLayout; frame: Frame
   const kinds = useMemo(() => new Map(layout.items.map((item) => [item.id, item.kind])), [layout]);
   const selectedItem = layout.items.find((item) => twinAssetId(item) === props.selectedId);
   const showSensors = overlays.includes("sensors");
-  const hotRack = layout.items.find((item) => item.kind === "rack" && twinAssetId(item) === props.snapshot.incident.rackId);
-  const hotAt = hotRack ? cellToWorld(hotRack.cell, "rack") : null;
   const ignoreClick = (event: ThreeEvent<MouseEvent>) => event.stopPropagation();
 
   return <group position={[-frame.cx, 0, -frame.cz]}>
@@ -222,12 +216,6 @@ function LayoutFloor(props: CanvasProps & { layout: FacilityLayout; frame: Frame
     {layout.items
       .filter((item) => showSensors || item.kind !== "sensor")
       .map((item) => <TwinUnit key={item.id} item={item} props={props}/>)}
-    {overlays.includes("forecast") && hotAt && <Html position={[hotAt[0], CATALOGUE.rack.height + 1.1, hotAt[2]]} zIndexRange={HTML_Z_RANGE}>
-      <div className="scene-forecast">{Math.round(props.snapshot.forecast.horizonS / 60)} MIN FORECAST<br/><b>{props.snapshot.forecast.baselinePeakC.toFixed(1)}°C</b></div>
-    </Html>}
-    {props.highlightedPath?.length ? <Html center position={[frame.cx, 4.2, frame.cz]} zIndexRange={HTML_Z_RANGE}>
-      <div className="scene-forecast">FOCUSED THERMAL PATH<br/><b>{props.highlightedPath.join(" → ")}</b></div>
-    </Html> : null}
   </group>;
 }
 
@@ -244,15 +232,160 @@ function ReferenceFloorTwo(props: CanvasProps) {
           <meshStandardMaterial color={SBX.surface3} emissive={selected ? SBX.primaryBright : "#000000"} emissiveIntensity={selected ? .35 : 0} roughness={.7} metalness={.1}/>
           <Edges color={selected ? SBX.primaryBright : asset.kind === "rack" ? CATALOGUE.rack.accent : "#EAB308"}/>
         </mesh>
-        {props.overlays.includes("labels") && <Html center position={[0, asset.h + .35, 0]} zIndexRange={HTML_Z_RANGE}>
-          <button type="button" className="scene-label" onClick={() => props.onSelect(asset.id)}>{asset.label}</button>
-        </Html>}
       </group>;
     })}
   </>;
 }
 
-function FacilityScene(props: CanvasProps) {
+/** One label over the scene: an asset's name, or a callout that belongs to the scene as a whole. */
+type SceneLabel = {
+  id: string;
+  text: string;
+  /** A second line, such as the hot rack's forecast. */
+  detail?: string;
+  tone?: "warn";
+  /** Where the label centres when nothing is in the way, and the point its leader line returns to. */
+  anchor: [number, number, number];
+  target: [number, number, number];
+  priority: number;
+  /** Asset labels select their asset; scene callouts are not controls. */
+  selectable: boolean;
+};
+
+/** Everything the scene labels, in world coordinates. */
+function sceneLabels(props: CanvasProps): SceneLabel[] {
+  const layout = props.model.layout ?? SFO_01_LAYOUT;
+  const showNames = props.overlays.includes("labels");
+  const labels: SceneLabel[] = [];
+  if (props.floor === 2) {
+    if (!props.model.layout) {
+      if (showNames) for (const asset of REFERENCE_FLOOR_TWO) labels.push({
+        id: asset.id, text: asset.label, anchor: [asset.x, asset.h + .45, asset.z], target: [asset.x, asset.h, asset.z],
+        priority: asset.kind === "rack" ? 0 : 1, selectable: true,
+      });
+    } else {
+      labels.push({ id: "single-floor", text: "SINGLE-FLOOR BUILD", detail: "No floor 2", anchor: [0, .6, 0], target: [0, .6, 0], priority: 2, selectable: false });
+    }
+    return labels;
+  }
+  const frame = layoutFrame(layout);
+  const forecast = props.overlays.includes("forecast") ? props.snapshot.forecast : null;
+  for (const item of layout.items) {
+    if (item.kind === "sensor") continue;
+    const id = twinAssetId(item);
+    // The forecast rides on its rack's own label rather than floating over the scene.
+    const hot = Boolean(forecast) && item.kind === "rack" && id === props.snapshot.incident.rackId;
+    if (!showNames && !hot) continue;
+    const [x, y, z] = cellToWorld(item.cell, item.kind);
+    const top = y + CATALOGUE[item.kind].height;
+    labels.push({
+      id,
+      text: item.kind === "rack" ? id : itemLabel(item).toUpperCase(),
+      ...(hot && forecast ? {
+        detail: `${forecast.baselinePeakC.toFixed(1)}°C in ${Math.round(forecast.horizonS / 60)} min`,
+        tone: forecast.risk === "clear" ? undefined : "warn" as const,
+      } : {}),
+      anchor: [x - frame.cx, top + .45, z - frame.cz],
+      target: [x - frame.cx, top, z - frame.cz],
+      priority: item.kind === "rack" ? 0 : 1,
+      selectable: true,
+    });
+  }
+  if (props.highlightedPath?.length) labels.push({
+    id: "focused-path", text: "FOCUSED THERMAL PATH", detail: props.highlightedPath.join(" → "),
+    anchor: [0, 4.2, 0], target: [0, 4.2, 0], priority: 2, selectable: false,
+  });
+  return labels;
+}
+
+/** The label layer's elements, which the scene positions directly each time the view changes. */
+type LabelElements = { labels: Map<string, HTMLElement>; leaders: Map<string, SVGLineElement> };
+
+/** Space kept clear at the stage's bottom edge for the camera instructions. */
+const INSTRUCTIONS_CLEARANCE = 48;
+
+/**
+ * Places the labels whenever the camera, the stage's size or the labels
+ * change, writing positions straight to their elements so a moving camera
+ * never re-renders React.
+ */
+function LabelPlacer({ labels, elements }: { labels: SceneLabel[]; elements: RefObject<LabelElements> }) {
+  const { camera, size } = useThree();
+  const last = useRef({ signature: "", at: 0 });
+  const point = useMemo(() => new THREE.Vector3(), []);
+  const key = labels.map((label) => `${label.id}:${label.text}:${label.detail ?? ""}`).join("|");
+  useFrame(() => {
+    const refs = elements.current;
+    if (!refs) return;
+    const now = performance.now();
+    const signature = `${size.width}x${size.height}|${key}|${camera.matrixWorld.elements.map((n) => n.toFixed(4)).join(",")}|${camera.projectionMatrix.elements[0].toFixed(4)}`;
+    // Re-check now and then as well, in case a label's size changed when its font arrived.
+    if (signature === last.current.signature && now - last.current.at < 500) return;
+    last.current = { signature, at: now };
+    const project = (at: [number, number, number]) => {
+      point.set(...at).project(camera);
+      return { x: (point.x + 1) / 2 * size.width, y: (1 - point.y) / 2 * size.height, inFront: point.z > -1 && point.z < 1 };
+    };
+    const inputs: LabelInput[] = [];
+    for (const label of labels) {
+      const element = refs.labels.get(label.id);
+      if (!element) continue;
+      const anchor = project(label.anchor);
+      const target = project(label.target);
+      inputs.push({
+        id: label.id, anchorX: anchor.x, anchorY: anchor.y, targetX: target.x, targetY: target.y,
+        width: element.offsetWidth, height: element.offsetHeight, priority: label.priority,
+        distance: camera.position.distanceTo(point.set(...label.anchor)), inFront: anchor.inFront,
+        leader: label.selectable,
+      });
+    }
+    const placements = layoutLabels(inputs, { width: size.width, height: size.height, inset: { top: 6, right: 6, bottom: INSTRUCTIONS_CLEARANCE, left: 6 } });
+    for (const place of placements) {
+      const element = refs.labels.get(place.id);
+      if (element) {
+        element.style.visibility = place.visible ? "visible" : "hidden";
+        element.style.opacity = String(place.opacity);
+        element.style.transform = `translate3d(${place.x.toFixed(1)}px, ${place.y.toFixed(1)}px, 0) scale(${place.scale.toFixed(3)})`;
+      }
+      const leader = refs.leaders.get(place.id);
+      if (!leader) continue;
+      leader.style.visibility = place.visible && place.leader ? "visible" : "hidden";
+      if (place.leader) {
+        leader.setAttribute("x1", place.leader.x1.toFixed(1));
+        leader.setAttribute("y1", place.leader.y1.toFixed(1));
+        leader.setAttribute("x2", place.leader.x2.toFixed(1));
+        leader.setAttribute("y2", place.leader.y2.toFixed(1));
+      }
+    }
+  });
+  return null;
+}
+
+/** The labels themselves: one layer over the canvas, positioned by LabelPlacer. */
+function SceneLabelLayer({ labels, elements, selectedId, onSelect }: { labels: SceneLabel[]; elements: RefObject<LabelElements>; selectedId: string; onSelect: (id: string) => void }) {
+  const register = <T extends Element>(map: Map<string, T> | undefined, id: string) => (element: T | null) => {
+    if (!map) return;
+    if (element) map.set(id, element);
+    else map.delete(id);
+  };
+  // A dot where each leader meets its equipment, so a leader never reads as a pipe.
+  const dot = `scene-leader-dot-${useId().replace(/:/g, "")}`;
+  return <div className="scene-labels">
+    <svg className="scene-leaders" aria-hidden="true">
+      <defs><marker id={dot} viewBox="0 0 6 6" refX="3" refY="3" markerWidth="6" markerHeight="6" markerUnits="userSpaceOnUse"><circle cx="3" cy="3" r="2.5"/></marker></defs>
+      {labels.filter((label) => label.selectable).map((label) => <line key={label.id} ref={register(elements.current?.leaders, label.id)} markerStart={`url(#${dot})`}/>)}
+    </svg>
+    {labels.map((label) => {
+      const className = `scene-label${label.tone ? ` ${label.tone}` : ""}${label.selectable ? "" : " callout"}${selectedId === label.id ? " selected" : ""}`;
+      const content = <><span>{label.text}</span>{label.detail && <b>{label.detail}</b>}</>;
+      return label.selectable
+        ? <button key={label.id} ref={register(elements.current?.labels, label.id)} type="button" className={className} onClick={() => onSelect(label.id)}>{content}</button>
+        : <div key={label.id} ref={register(elements.current?.labels, label.id)} className={className}>{content}</div>;
+    })}
+  </div>;
+}
+
+function FacilityScene(props: CanvasProps & { labels: SceneLabel[]; labelElements: RefObject<LabelElements> }) {
   const reducedMotion = useReducedMotion();
   const layout = props.model.layout ?? SFO_01_LAYOUT;
   const reference = !props.model.layout;
@@ -280,14 +413,20 @@ function FacilityScene(props: CanvasProps) {
     </mesh>
     {props.floor === 1
       ? <LayoutFloor {...props} layout={layout} frame={frame} reducedMotion={reducedMotion}/>
-      : reference
-        ? <ReferenceFloorTwo {...props}/>
-        : <Html center position={[0, .6, 0]} zIndexRange={HTML_Z_RANGE}><div className="scene-forecast">SINGLE-FLOOR BUILD<br/><b>No floor 2</b></div></Html>}
+      : reference ? <ReferenceFloorTwo {...props}/> : null}
     <CameraRig mode={props.cameraMode} floor={props.floor} frame={frame} obstacles={obstacles} onCameraState={props.onCameraState}/>
+    <LabelPlacer labels={props.labels} elements={props.labelElements}/>
   </>;
 }
 
 export default function FacilityTwinCanvas(props: CanvasProps) {
   const workloadId = facilityAssets(props.model).workload.id;
-  return <Canvas aria-hidden="true" camera={{ position: [15, 12, 16], fov: 48, near: .1, far: 400 }} dpr={[1, 1.7]} gl={{ antialias: true, powerPreference: "high-performance" }} onPointerMissed={() => props.onSelect(workloadId)}><FacilityScene {...props}/></Canvas>;
+  const labels = sceneLabels(props);
+  const labelElements = useRef<LabelElements>({ labels: new Map(), leaders: new Map() });
+  return <>
+    <Canvas aria-hidden="true" camera={{ position: [15, 12, 16], fov: 48, near: .1, far: 400 }} dpr={[1, 1.7]} gl={{ antialias: true, powerPreference: "high-performance" }} onPointerMissed={() => props.onSelect(workloadId)}>
+      <FacilityScene {...props} labels={labels} labelElements={labelElements}/>
+    </Canvas>
+    <SceneLabelLayer labels={labels} elements={labelElements} selectedId={props.selectedId} onSelect={props.onSelect}/>
+  </>;
 }

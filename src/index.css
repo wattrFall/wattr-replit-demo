@@ -350,9 +350,18 @@ html[data-theme="light"] { color-scheme: light; }
 .twin-asset-strip button.selected { border-color:#52d5dd; background:rgba(57,199,209,.12); color:#75e7ed; }
 .twin-strip-note { align-self:center; padding:.35rem .2rem; color:#647e90; font:9px var(--font-mono); text-transform:uppercase; letter-spacing:.08em; }
 .twin-layer-summary { border-top:1px solid #1d2c38; padding:.45rem .75rem; color:#647e90; font:9px var(--font-mono); text-transform:uppercase; letter-spacing:.08em; }
-.scene-label { border:1px solid #527386; border-radius:3px; background:rgba(7,16,24,.9); padding:3px 5px; color:#d9e8ef; font:9px monospace; white-space:nowrap; }
-.scene-forecast { border:1px solid #9c6c24; border-radius:4px; background:rgba(21,15,7,.9); padding:6px 8px; color:#eab45d; font:8px monospace; white-space:nowrap; }
-.scene-forecast b { font-size:13px; }
+/* Scene labels: one layer over the twin's canvas, placed so no label covers another. */
+.scene-labels { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
+.scene-leaders { position:absolute; inset:0; width:100%; height:100%; }
+.scene-leaders line { visibility:hidden; stroke:#b7d3e2; stroke-opacity:.9; stroke-width:1.25; }
+.scene-leaders marker circle { fill:#b7d3e2; }
+.scene-label { position:absolute; left:0; top:0; display:flex; flex-direction:column; align-items:center; transform-origin:0 0; visibility:hidden; pointer-events:auto; border:1px solid #527386; border-radius:4px; background:rgba(7,16,24,.94); padding:2px 6px; color:#d9e8ef; font:600 11px/1.35 var(--font-mono); white-space:nowrap; transition:opacity .15s ease, border-color .15s ease; }
+.scene-label b { color:#eab45d; font-weight:700; }
+.scene-label.warn { border-color:#b07a2a; }
+button.scene-label:hover { border-color:#8fb8cc; }
+.scene-label.selected { border-color:var(--cockpit-primary); box-shadow:0 0 0 1px var(--cockpit-primary); color:#fff; }
+.scene-label.callout { pointer-events:none; border-color:#9c6c24; background:rgba(21,15,7,.94); color:#eab45d; }
+.scene-label.callout b { color:#f5d7a4; }
 @media (max-width:640px){.twin-stage{height:480px}.twin-instructions{max-width:90%;white-space:normal;text-align:center}.twin-model{width:100%;margin-left:4px}}
 .replay-range { min-width:160px; flex:1 1 220px; accent-color:#49c9d4; padding:0; border:0; background:transparent; }
 .twin-canvas { position:relative; min-height:395px; overflow:hidden; background:#0b141e; }
