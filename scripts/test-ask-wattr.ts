@@ -17,6 +17,7 @@ const users: Record<Role, string> = {
   MODEL_ADMIN: `${prefix}-model-admin`,
   VIEWER: `${prefix}-viewer`,
 };
+const testUserIds = Object.values(users);
 const emptyFacilityId = `${prefix}-empty`;
 const emptyModelId = `${prefix}-model`;
 const emptyScenarioId = `${prefix}-scenario`;
@@ -113,8 +114,27 @@ async function seed() {
 }
 
 async function cleanup() {
-  await pool.query("DELETE FROM users WHERE id LIKE $1", [`${prefix}%`]);
-  await pool.query("DELETE FROM facilities WHERE id = $1", [emptyFacilityId]);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("ALTER TABLE replay_change_events DISABLE TRIGGER replay_change_events_immutable");
+    await client.query(
+      `DELETE FROM replay_change_events
+       WHERE actor_user_id = ANY($1::text[])
+          OR (facility_id = $2 AND model_version_id = $3)`,
+      [testUserIds, emptyFacilityId, emptyModelId],
+    );
+    await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable");
+    await client.query("DELETE FROM users WHERE id LIKE $1", [`${prefix}%`]);
+    await client.query("DELETE FROM facilities WHERE id = $1", [emptyFacilityId]);
+    await client.query("COMMIT");
+  } catch (error) {
+    try { await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable"); } catch { /* rollback restores DDL */ }
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 await seed();

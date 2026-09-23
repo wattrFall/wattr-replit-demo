@@ -6,3 +6,5 @@
 - [Product learning boundaries](product-learning-boundaries.md) — learning signals stay structured, facility-scoped, best-effort, sparse, and independently expired.
 - [Causal variant branching](causal-variant-branching.md) — branch every comparison from one thermal state; apply command lag from branch time and disclose unsupported metrics.
 - [Ephemeral test ports](ephemeral-test-ports.md) — port discovery does not reserve a port; multi-server tests must reject duplicate allocations before binding.
+- [WebGL browser readiness](webgl-browser-readiness.md) — use explicit rendered controls instead of network-idle checks for Three.js pages and static bundles for test servers.
+- [Engineering data boundaries](engineering-data-boundaries.md) — imported geometry and historical inputs do not validate thermal predictions; keep source and simulation claims separate.

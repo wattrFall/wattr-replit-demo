@@ -22,6 +22,10 @@
     "test:product-learning": "npm run db:setup && tsx scripts/test-product-learning.ts",
     "test:browser": "playwright install chromium && npm run db:setup && npm run build && tsx scripts/test-browser-flow.ts",
     "test:performance": "npm run build && tsx scripts/test-performance.ts",
+    "test:facility-intelligence": "tsx scripts/test-intelligence-contracts.ts",
+    "test:facility-imports": "tsx scripts/test-facility-imports.ts",
+    "test:historical-replay": "tsx scripts/test-replay.ts",
+    "test:prd-integration": "tsx scripts/test-prd-integration.ts",
     "demo:validate": "tsx scripts/validate-demo-scenario.ts",
     "release:gates": "tsx scripts/run-release-gates.ts"
   },

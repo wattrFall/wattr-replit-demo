@@ -34,6 +34,8 @@ export interface ZoneSpec {
   /** Size in tiles. */
   w: number;
   d: number;
+  /** Optional imported spatial/provenance facts retained with a facility build. */
+  metadata?: Record<string, unknown>;
 }
 
 /** A cell on the site grid. */
@@ -62,6 +64,8 @@ export interface SandboxItem {
   cell: GridCell;
   /** Values keyed by ParamSpec.key. Always populated from defaults on create. */
   params: Record<string, number>;
+  /** Imported, curated, or manually verified information about this asset. */
+  metadata?: Record<string, unknown>;
 }
 
 /** A directed link, e.g. a CRAC cooling a rack. */
@@ -92,6 +96,16 @@ export interface SandboxLayout {
   items: SandboxItem[];
   connections: Connection[];
   zones: ZoneSpec[];
+  /** Non-authoring visual references, such as a verified floor-plan upload. */
+  referenceLayers?: Array<{
+    id: string;
+    fileId: string;
+    name: string;
+    mimeType: string;
+    grid: { x: number; z: number; w: number; d: number };
+    provenance: "IMPORTED";
+    source: string;
+  }>;
 }
 
 /**

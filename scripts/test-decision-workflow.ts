@@ -14,6 +14,7 @@ import { availableTestPort } from "./test-port";
 if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const userId = `decision-workflow-${randomUUID().slice(0, 8)}`;
+const testUserIds = [userId];
 const port = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
@@ -34,6 +35,12 @@ async function cleanup() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query("ALTER TABLE replay_change_events DISABLE TRIGGER replay_change_events_immutable");
+    await client.query(
+      "DELETE FROM replay_change_events WHERE actor_user_id = ANY($1::text[])",
+      [testUserIds],
+    );
+    await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable");
     await client.query("ALTER TABLE audit_records DISABLE TRIGGER audit_records_immutable");
     await client.query("ALTER TABLE operator_decisions DISABLE TRIGGER operator_decisions_immutable");
     await client.query("DELETE FROM audit_records WHERE user_id = $1", [userId]);
@@ -45,6 +52,7 @@ async function cleanup() {
     await client.query("UPDATE recommendations SET status = 'PROPOSED' WHERE id = 'rec-17'");
     await client.query("COMMIT");
   } catch (error) {
+    try { await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable"); } catch { /* rollback restores DDL */ }
     await client.query("ROLLBACK");
     throw error;
   } finally {

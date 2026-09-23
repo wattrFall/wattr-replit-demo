@@ -189,6 +189,9 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
     ...(data.me.role === "PORTFOLIO_MANAGER" ? [[BrainCircuit, "Ask Wattr", "/ask-wattr"] as [LucideIcon, string, string]] : []),
     ...(active ? [
       [Gauge, "Operations", `/facilities/${active.id}/operations`] as [LucideIcon, string, string],
+      [Boxes, "Facility intelligence", `/facilities/${active.id}/intelligence`] as [LucideIcon, string, string],
+      [History, "Configuration history", `/facilities/${active.id}/history`] as [LucideIcon, string, string],
+      [GitBranch, "Scenario replay", `/facilities/${active.id}/replay`] as [LucideIcon, string, string],
       [AlertTriangle, "Incident", `/facilities/${active.id}/incidents/inc-204`] as [LucideIcon, string, string],
       [ShieldCheck, "Recommendation", `/facilities/${active.id}/recommendations/rec-17`] as [LucideIcon, string, string],
       [History, "Audit history", `/facilities/${active.id}/audit`] as [LucideIcon, string, string],
@@ -197,6 +200,7 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
       ...(active.can_engineer ? [[BrainCircuit, "Model Lab", `/facilities/${active.id}/model-lab`] as [LucideIcon, string, string]] : []),
       // Everyone with access to the facility can build for now; build permissions come later.
       [Boxes, "Facility builder", `/facilities/${active.id}/builder`] as [LucideIcon, string, string],
+      [Boxes, "Import engineering data", `/facilities/${active.id}/import`] as [LucideIcon, string, string],
       ...(active.can_edit_model ? [[SlidersHorizontal, "Model Studio", `/facilities/${active.id}/model`] as [LucideIcon, string, string]] : []),
     ] : []),
     ...(data.me.is_admin ? [[UserCog, "Access administration", "/admin"] as [LucideIcon, string, string]] : []),

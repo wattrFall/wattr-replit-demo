@@ -76,6 +76,18 @@ try {
       version: "0012_role_scoped_tutorial_progress",
       file: new URL("../database/migrations/0012_role_scoped_tutorial_progress.sql", import.meta.url),
     },
+    {
+      version: "0013_intelligence_asset_annotations",
+      file: new URL("../database/migrations/0013_intelligence_asset_annotations.sql", import.meta.url),
+    },
+    {
+      version: "0014_replay_history_and_scenarios",
+      file: new URL("../database/migrations/0014_replay_history_and_scenarios.sql", import.meta.url),
+    },
+    {
+      version: "0015_facility_imports",
+      file: new URL("../database/migrations/0015_facility_imports.sql", import.meta.url),
+    },
   ];
 
   for (const migration of migrations) {

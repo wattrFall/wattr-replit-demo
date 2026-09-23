@@ -31,6 +31,9 @@ import {
   validateFacilityLayout,
 } from "../src/lib/facility/layout";
 import { SFO_01_LAYOUT } from "../src/lib/facility/templates";
+import { registerIntelligenceRoutes } from "./intelligence-routes";
+import { registerReplayRoutes, recordReplayModelChange } from "./replay-routes";
+import { registerImportRoutes } from "./import-routes";
 import { SCENARIO_INCIDENT_KEY_SUFFIX, scenarioRecords } from "../src/lib/cockpit/scenarioRecords";
 import {
   canViewTopology,
@@ -484,6 +487,7 @@ async function requireLearningViewer(userId: string, res: Response) {
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "wattr-operator-cockpit" }));
 
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
+app.use("/api/facilities/:facilityId/imports", express.json({ limit: "30mb" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -2766,7 +2770,7 @@ app.post("/api/facilities/:facilityId/model/versions/:versionId/publish", requir
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "Validate this model before publishing" });
     }
-    await activateModelVersion(client, String(req.params.facilityId), String(req.params.versionId));
+    await activateModelVersion(client, String(req.params.facilityId), String(req.params.versionId), req.userId!, "MODEL_PUBLISH");
     await client.query("COMMIT");
     res.json({ id: req.params.versionId, status: "PUBLISHED" });
   } catch (error) {
@@ -2794,7 +2798,7 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Rollback target not found" });
     }
-    await activateModelVersion(client, String(req.params.facilityId), versionId);
+    await activateModelVersion(client, String(req.params.facilityId), versionId, req.userId!, "MODEL_ROLLBACK");
     await client.query("COMMIT");
     res.json({ id: versionId, status: "PUBLISHED" });
   } catch (error) {
@@ -2813,7 +2817,7 @@ app.post("/api/facilities/:facilityId/model/rollback", requireAuth, async (req: 
  * that was just published. Decisions, safety evaluations, audit records and
  * replay checkpoints keep the model they were made with.
  */
-async function activateModelVersion(client: pg.PoolClient, facilityId: string, versionId: string) {
+async function activateModelVersion(client: pg.PoolClient, facilityId: string, versionId: string, actorUserId: string, source: "MODEL_PUBLISH" | "MODEL_ROLLBACK") {
   const facility = await client.query("SELECT model_version FROM facilities WHERE id = $1 FOR UPDATE", [facilityId]);
   const previousVersionId: string | undefined = facility.rows[0]?.model_version;
   await client.query("UPDATE model_versions SET status = 'ARCHIVED' WHERE facility_id = $1 AND status = 'PUBLISHED'", [facilityId]);
@@ -2823,6 +2827,7 @@ async function activateModelVersion(client: pg.PoolClient, facilityId: string, v
   );
   await client.query("UPDATE facilities SET model_version = $1 WHERE id = $2", [versionId, facilityId]);
   if (previousVersionId && previousVersionId !== versionId && activated.rows[0]) {
+    await recordReplayModelChange({ client, facilityId, previousVersionId, nextVersionId: versionId, actorUserId, source });
     await rebindScenarioRecords(client, facilityId, previousVersionId, versionId, activated.rows[0].config);
   }
 }
@@ -3056,7 +3061,7 @@ app.post("/api/facilities/:facilityId/builds/:versionId/publish", requireAuth, a
       await client.query("ROLLBACK");
       return res.status(409).json({ error: "Validate this build before publishing" });
     }
-    await activateModelVersion(client, facilityId, String(req.params.versionId));
+    await activateModelVersion(client, facilityId, String(req.params.versionId), req.userId!, "MODEL_PUBLISH");
     await client.query("COMMIT");
     res.json({ id: req.params.versionId, status: "PUBLISHED" });
   } catch (error) {
@@ -3085,7 +3090,7 @@ app.post("/api/facilities/:facilityId/builds/rollback", requireAuth, async (req:
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Rollback target not found" });
     }
-    await activateModelVersion(client, facilityId, versionId);
+    await activateModelVersion(client, facilityId, versionId, req.userId!, "MODEL_ROLLBACK");
     await client.query("COMMIT");
     res.json({ id: versionId, status: "PUBLISHED" });
   } catch (error) {
@@ -3516,11 +3521,22 @@ app.post("/api/facilities/:facilityId/audit", requireAuth, async (req: AuthedReq
 });
 
 // An API route that does not exist answers in JSON, never with the app's HTML page.
+registerIntelligenceRoutes({ app, pool, requireAuth, ensureDemoAccess, requireFacilityAccess, publishedModel, replaySnapshot });
+registerReplayRoutes(app, { pool, requireFacilityAccess, publishedModel });
+registerImportRoutes({
+  app, pool, requireAuth, ensureDemoAccess, requireFacilityAccess, publishedModel,
+  requireImportAccess: async (userId, facilityId, res) => {
+    const permission = await facilityPermission(userId, facilityId, "engineer")
+      ?? await facilityPermission(userId, facilityId, "model");
+    if (!permission) res.status(404).json({ error: "Facility unavailable" });
+    return permission;
+  },
+});
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
-if (process.env.NODE_ENV === "production" || process.env.RELEASE_GATE === "1") {
+if (process.env.NODE_ENV === "production" || process.env.NODE_ENV === "test" || process.env.RELEASE_GATE === "1") {
   app.use(express.static(resolve("dist"), { immutable: true, maxAge: "1y", index: false }));
   app.use((_req, res) => res.sendFile(resolve("dist/index.html")));
 } else {
@@ -3529,6 +3545,7 @@ if (process.env.NODE_ENV === "production" || process.env.RELEASE_GATE === "1") {
     server: {
       middlewareMode: true,
       hmr: process.env.NODE_ENV === "test" ? false : undefined,
+      watch: process.env.NODE_ENV === "test" ? null : undefined,
     },
     appType: "spa",
   });

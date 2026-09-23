@@ -12,6 +12,7 @@ import { SandboxStage } from "@/components/sandbox/SandboxStage";
 import { useSandboxShortcuts } from "@/components/sandbox/useSandboxShortcuts";
 import { useSandboxSimulation } from "@/components/sandbox/useSandboxSimulation";
 import { useSceneDescription } from "@/components/sandbox/useSceneDescription";
+import { ReferenceLayerPreview } from "@/components/imports/ReferenceLayerPreview";
 
 export type BuildStatus = "DRAFT" | "VALIDATED" | "PUBLISHED" | "ARCHIVED";
 
@@ -52,9 +53,9 @@ const jsonPost = (body: unknown): RequestInit => ({
 });
 
 /** The layout currently in the editor, as a comparable string. */
-function editorFingerprint() {
+function editorFingerprint(referenceLayers: FacilityLayout["referenceLayers"] = []) {
   const { zones, items, connections } = useSandboxStore.getState();
-  return JSON.stringify({ zones, items, connections });
+  return JSON.stringify({ zones, items, connections, referenceLayers });
 }
 
 /**
@@ -93,16 +94,18 @@ export function FacilityBuilder({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [serverFindings, setServerFindings] = useState<{ versionId: string; findings: Finding[] } | null>(null);
+  const [referenceLayers, setReferenceLayers] = useState<FacilityLayout["referenceLayers"]>([]);
   const baseline = useRef("");
 
-  const layout = useMemo<FacilityLayout>(() => ({ zones, items, connections }), [zones, items, connections]);
+  const layout = useMemo<FacilityLayout>(() => ({ zones, items, connections, ...(referenceLayers?.length ? { referenceLayers } : {}) }), [zones, items, connections, referenceLayers]);
   const checks = useMemo(() => validateFacilityLayout(layout), [layout]);
   const dirty = baseline.current !== "" && JSON.stringify(layout) !== baseline.current;
 
   const open = useCallback(
     (next: FacilityLayout, label: string, presetId: string | null = null) => {
       loadLayout(next, presetId);
-      baseline.current = editorFingerprint();
+      setReferenceLayers(next.referenceLayers ?? []);
+      baseline.current = editorFingerprint(next.referenceLayers);
       setEditing(label);
       setPending(null);
       setServerFindings(null);
@@ -163,7 +166,7 @@ export function FacilityBuilder({
         `/api/facilities/${facilityId}/builds`,
         jsonPost({ layout, name: name.trim() || undefined }),
       );
-      baseline.current = editorFingerprint();
+      baseline.current = editorFingerprint(referenceLayers);
       setEditing(`Draft ${saved.id}${saved.name ? ` · ${saved.name}` : ""}`);
       setServerFindings(null);
       setMessage(`Saved ${saved.id} as a draft. Validate it next.`);
@@ -270,6 +273,8 @@ export function FacilityBuilder({
           </div>
         )}
       </section>
+
+      <ReferenceLayerPreview facilityId={facilityId} layout={layout}/>
 
       <div className="overflow-hidden rounded-[14px] border border-[var(--sbx-border-strong)] bg-[var(--sbx-surface-1)] font-[family-name:var(--sbx-font-sans)]">
         <div className="flex flex-col gap-3 p-3 lg:flex-row">

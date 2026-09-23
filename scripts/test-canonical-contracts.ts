@@ -63,6 +63,9 @@ try {
     "0010_product_learning_privacy",
     "0011_guided_tutorial_progress",
     "0012_role_scoped_tutorial_progress",
+    "0013_intelligence_asset_annotations",
+    "0014_replay_history_and_scenarios",
+    "0015_facility_imports",
   ]);
 
   const counts = await pool.query(`

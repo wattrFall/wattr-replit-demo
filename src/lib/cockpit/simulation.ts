@@ -53,6 +53,8 @@ export type FacilityModelConfig = {
    * which run on the SFO-01 reference layout.
    */
   layout?: FacilityLayout;
+  /** Provenance for a verified import-backed Builder draft. */
+  importMetadata?: { source: string; importId: string; kind: "FLOORPLAN" | "IFC"; provenance: "IMPORTED" };
 };
 export const DEFAULT_FACILITY_MODEL: FacilityModelConfig = {
   scenario: "gpu-training-ramp-v1",

@@ -21,6 +21,8 @@ export const FACILITY_LIMITS = {
   items: 240,
   connections: 720,
   nameLength: 40,
+  referenceLayers: 8,
+  metadataBytes: 12000,
 } as const;
 
 /** Ids follow the graph spec's component id pattern. */
@@ -44,6 +46,12 @@ export class FacilityLayoutError extends RangeError {}
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const metadata = (value: unknown, what: string) => {
+  if (value === undefined) return;
+  if (!isRecord(value)) fail(`${what} metadata must be an object`);
+  if (JSON.stringify(value).length > FACILITY_LIMITS.metadataBytes) fail(`${what} metadata is too large`);
+};
+
 const fail = (message: string): never => {
   throw new FacilityLayoutError(`Invalid facility layout: ${message}`);
 };
@@ -56,7 +64,7 @@ const fail = (message: string): never => {
  */
 export function assertFacilityLayout(value: unknown): asserts value is FacilityLayout {
   if (!isRecord(value)) fail("expected an object with zones, items and connections");
-  const { zones, items, connections } = value as Record<string, unknown>;
+  const { zones, items, connections, referenceLayers } = value as Record<string, unknown>;
   if (!Array.isArray(zones) || !Array.isArray(items) || !Array.isArray(connections)) {
     fail("zones, items and connections must be arrays");
   }
@@ -67,6 +75,22 @@ export function assertFacilityLayout(value: unknown): asserts value is FacilityL
   if (itemList.length > FACILITY_LIMITS.items) fail(`a build holds at most ${FACILITY_LIMITS.items} items`);
   if (connectionList.length > FACILITY_LIMITS.connections) {
     fail(`a build holds at most ${FACILITY_LIMITS.connections} connections`);
+  }
+  if (referenceLayers !== undefined) {
+    if (!Array.isArray(referenceLayers) || referenceLayers.length > FACILITY_LIMITS.referenceLayers) fail("reference layers are invalid");
+    const layers = referenceLayers as unknown[];
+    for (const rawLayer of layers) {
+      const layer = rawLayer as Record<string, unknown>;
+      const grid = isRecord(layer.grid) ? layer.grid : undefined;
+      if (!isRecord(layer) || typeof layer.id !== "string" || !ID_PATTERN.test(layer.id) ||
+          typeof layer.fileId !== "string" || !ID_PATTERN.test(layer.fileId) ||
+          typeof layer.name !== "string" || layer.name.length > 160 || layer.provenance !== "IMPORTED" ||
+          typeof layer.mimeType !== "string" || !grid ||
+          ![grid.x, grid.z, grid.w, grid.d].every((n) => typeof n === "number" && Number.isFinite(n)) ||
+          (grid.w as number) <= 0 || (grid.d as number) <= 0) {
+        fail("a reference layer is invalid");
+      }
+    }
   }
 
   const ids = new Set<string>();
@@ -84,6 +108,7 @@ export function assertFacilityLayout(value: unknown): asserts value is FacilityL
     if (typeof z.name !== "string" || z.name.length > FACILITY_LIMITS.nameLength) {
       fail(`zone ${id} needs a name of at most ${FACILITY_LIMITS.nameLength} characters`);
     }
+    metadata(z.metadata, `zone ${id}`);
     if (!ZONE_KINDS.includes(z.kind as ZoneKind)) fail(`zone ${id} has an unknown kind`);
     const [x, zPos, w, d] = [z.x, z.z, z.w, z.d];
     if (![x, zPos, w, d].every((n) => Number.isInteger(n))) fail(`zone ${id} must be placed and sized in whole tiles`);
@@ -117,6 +142,7 @@ export function assertFacilityLayout(value: unknown): asserts value is FacilityL
       fail(`item ${id} is not on the site`);
     }
     if (!isRecord(it.params)) fail(`item ${id} needs a params object`);
+    metadata(it.metadata, `item ${id}`);
     const specs = new Map(CATALOGUE[kind].params.map((spec) => [spec.key, facilityParamSpec(kind, spec)]));
     for (const [key, raw] of Object.entries(it.params as Record<string, unknown>)) {
       if (typeof raw !== "number" || !Number.isFinite(raw)) fail(`item ${id} parameter ${key} must be a finite number`);
@@ -144,14 +170,23 @@ export function assertFacilityLayout(value: unknown): asserts value is FacilityL
 /** The layout with only the fields a build stores, so extra keys never reach the database. */
 export function normalizeFacilityLayout(layout: FacilityLayout): FacilityLayout {
   return {
-    zones: layout.zones.map(({ id, name, kind, x, z, w, d }) => ({ id, name, kind, x, z, w, d })),
-    items: layout.items.map(({ id, kind, cell, params }) => ({
+    zones: layout.zones.map(({ id, name, kind, x, z, w, d, metadata }) => ({
+      id, name, kind, x, z, w, d, ...(metadata ? { metadata: JSON.parse(JSON.stringify(metadata)) } : {}),
+    })),
+    items: layout.items.map(({ id, kind, cell, params, metadata }) => ({
       id,
       kind,
       cell: { x: cell.x, z: cell.z },
       params: { ...params },
+      ...(metadata ? { metadata: JSON.parse(JSON.stringify(metadata)) } : {}),
     })),
     connections: layout.connections.map(({ id, fromId, toId }) => ({ id, fromId, toId })),
+    ...(layout.referenceLayers ? {
+      referenceLayers: layout.referenceLayers.map((layer) => ({
+        ...layer,
+        grid: { ...layer.grid },
+      })),
+    } : {}),
   };
 }
 

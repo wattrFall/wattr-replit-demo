@@ -11,6 +11,7 @@ if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 const suffix = randomUUID().slice(0, 8);
 const userId = `browser-flow-${suffix}`;
 const browserUserId = `browser-manager-${suffix}`;
+const testUserIds = [userId, browserUserId];
 const port = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
@@ -84,6 +85,12 @@ async function cleanup() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query("ALTER TABLE replay_change_events DISABLE TRIGGER replay_change_events_immutable");
+    await client.query(
+      "DELETE FROM replay_change_events WHERE actor_user_id = ANY($1::text[])",
+      [testUserIds],
+    );
+    await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable");
     await client.query("ALTER TABLE audit_records DISABLE TRIGGER audit_records_immutable");
     await client.query("ALTER TABLE operator_decisions DISABLE TRIGGER operator_decisions_immutable");
     await client.query("DELETE FROM audit_records WHERE user_id = $1", [userId]);
@@ -95,6 +102,7 @@ async function cleanup() {
     await client.query("UPDATE recommendations SET status = $1 WHERE id = 'rec-17'", [originalRecommendationStatus]);
     await client.query("COMMIT");
   } catch (error) {
+    try { await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable"); } catch { /* rollback restores DDL */ }
     await client.query("ROLLBACK");
     throw error;
   } finally {
@@ -229,7 +237,7 @@ try {
       path: string,
       expected: string,
     ) => {
-      await page.goto(`${baseUrl}${path}`, { waitUntil: "networkidle" });
+      await page.goto(`${baseUrl}${path}`, { waitUntil: "domcontentloaded" });
       try {
         await page.getByText(expected, { exact: false }).first().waitFor({ timeout: 10_000 });
       } catch {
@@ -345,7 +353,7 @@ try {
 
     for (const width of [1280, 1440, 1728, 1920]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto(`${baseUrl}/facilities/sfo-01/operations`, { waitUntil: "networkidle" });
+      await page.goto(`${baseUrl}/facilities/sfo-01/operations`, { waitUntil: "domcontentloaded" });
       await page.getByText("Synchronized facility twin").waitFor();
       for (const required of [
         page.locator("[data-guide='twin']"),
@@ -366,7 +374,7 @@ try {
     assert(await page.getByText("Review advisory", { exact: true }).isVisible(), "decision control hidden at 125% zoom");
     await page.evaluate(() => document.body.style.zoom = "");
 
-    await page.goto(`${baseUrl}/help`, { waitUntil: "networkidle" });
+    await page.goto(`${baseUrl}/help`, { waitUntil: "domcontentloaded" });
     const restartGuide = page.getByRole("button", { name: "Restart guided tutorial" });
     await restartGuide.focus();
     await restartGuide.click();
@@ -390,7 +398,7 @@ try {
     const savedTutorial = await request("/api/me");
     assert.equal(savedTutorial.body.tutorial_step, 1, "tutorial action completion was not persisted");
     assert.equal(savedTutorial.body.tutorial_complete, true, "skipping the tutorial was not remembered");
-    await page.reload({ waitUntil: "networkidle" });
+    await page.reload({ waitUntil: "domcontentloaded" });
     assert.equal(await page.locator(".guide-card").count(), 0, "a skipped tutorial reopened on reload");
     await request("/api/me/tutorial", {
       method: "PATCH",
@@ -415,7 +423,7 @@ try {
         return original.call(this, type as never, ...(args as []));
       };
     });
-    await fallbackPage.goto(`${baseUrl}/demo/sandbox`, { waitUntil: "networkidle" });
+    await fallbackPage.goto(`${baseUrl}/demo/sandbox`, { waitUntil: "domcontentloaded" });
     await fallbackPage.getByText("This preview does not provide WebGL", { exact: false }).waitFor();
     assert(
       await fallbackPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
@@ -432,7 +440,7 @@ try {
         return original.call(this, type as never, ...(args as []));
       };
     });
-    await twinFallbackPage.goto(`${baseUrl}/facilities/sfo-01/operations`, { waitUntil: "networkidle" });
+    await twinFallbackPage.goto(`${baseUrl}/facilities/sfo-01/operations`, { waitUntil: "domcontentloaded" });
     await twinFallbackPage.getByText("3D scene unavailable", { exact: true }).waitFor();
     await twinFallbackPage.getByRole("img", { name: /Authorized facility model/ }).waitFor();
     assert(await twinFallbackPage.getByLabel("Canonical replay controls").isVisible(), "WebGL failure hid replay controls");

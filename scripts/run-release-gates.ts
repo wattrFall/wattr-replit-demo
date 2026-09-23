@@ -10,6 +10,10 @@ const gates = [
   ["deterministic replay", "test:simulation"],
   ["operating workspaces", "test:workspaces"],
   ["canonical contracts", "test:contracts"],
+  ["facility intelligence contracts", "test:facility-intelligence"],
+  ["engineering import verification", "test:facility-imports"],
+  ["historical replay invariants", "test:historical-replay"],
+  ["PRD API and browser workflows", "test:prd-integration"],
   ["role and persistence security", "test:role-security"],
   ["role security API", "test:role-security-api"],
   ["assistant grounding and actions", "test:ask-wattr"],
@@ -24,6 +28,7 @@ const failures: string[] = [];
 const startedAt = Date.now();
 const timeoutByScript: Record<string, number> = {
   "test:browser": 240_000,
+  "test:prd-integration": 240_000,
   "test:performance": 120_000,
   build: 180_000,
   "db:setup": 180_000,

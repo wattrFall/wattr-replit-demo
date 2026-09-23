@@ -1,0 +1,716 @@
+# Facility Intelligence, Import & Scenario Replay
+
+**Status:** Draft
+**Priority:** P0 / MVP
+**Product area:** Digital Twin
+**Primary users:** Data-centre operators, facility engineers, cooling engineers
+
+## 1. Objective
+
+Wattr should allow an engineer to:
+
+1. find any operationally relevant piece of information about the facility;
+2. move from a high-level KPI to the underlying physical asset or telemetry causing it;
+3. create the digital twin from existing engineering information rather than manually rebuilding the facility; and
+4. test proposed physical or operational changes against historical operating conditions before those changes are made.
+
+The product should behave as a facility intelligence layer rather than merely a 3D visualisation tool.
+
+---
+
+# Requirement 1 — Unified Facility Information Model
+
+### Problem
+
+Information about a data centre may exist across floor plans, equipment inventories, telemetry systems, engineering documents and operational history.
+
+Users should not need to know which underlying source contains a piece of information before finding it.
+
+### User story
+
+**As a data-centre engineer, I want every physical asset and relevant operational metric to have a clear place within Wattr so that I can find the information I need without searching across disconnected systems.**
+
+### Functional requirements
+
+**FR-1.1 — Facility hierarchy**
+
+Wattr must represent physical assets through a consistent hierarchy:
+
+**Facility → Floor → Zone → Rack / Cooling Equipment → Component**
+
+The model must support future extension without requiring the hierarchy to be redesigned.
+
+---
+
+**FR-1.2 — Canonical asset record**
+
+Every physical asset must have one canonical Wattr asset ID.
+
+An asset record should be capable of containing:
+
+* asset type;
+* manufacturer;
+* model;
+* physical location;
+* dimensions;
+* rated capacity;
+* relevant power characteristics;
+* relevant cooling characteristics;
+* current telemetry;
+* historical telemetry;
+* alarms;
+* relationships to other assets;
+* source/provenance of imported data;
+* change history.
+
+The same asset displayed in the 3D twin, dashboard, search results and audit history must resolve to the same underlying asset record.
+
+---
+
+**FR-1.3 — Multiple operational views**
+
+The same facility should be explorable through different perspectives without duplicating the underlying asset:
+
+**Physical | Cooling | Power | Telemetry | History**
+
+For MVP, Wattr does not need to reproduce every DCIM domain.
+
+Cooling, power and thermal telemetry should receive priority because they directly support Wattr's thermal-intelligence use case.
+
+---
+
+**FR-1.4 — Global asset search**
+
+Users must be able to search by at least:
+
+* asset name;
+* asset ID;
+* rack;
+* equipment type;
+* manufacturer/model.
+
+Selecting a search result must navigate directly to the corresponding asset in the facility.
+
+### Acceptance criteria
+
+* Every object displayed in the operational twin has a unique asset ID.
+* Selecting an asset from the 3D environment opens its canonical asset record.
+* Selecting the same asset from a dashboard opens the same record.
+* Every asset is associated with a physical location or explicitly marked as unresolved.
+* Imported values expose their source rather than appearing as manually entered facts.
+* An operator can navigate from the facility level to an individual rack or cooling asset without changing applications.
+* Search returns the relevant asset and provides a direct navigation path to it.
+
+### MVP
+
+Include:
+
+**Facility → Floor → Zone → Rack / Cooling Unit → Asset**
+
+with:
+
+**Physical, Cooling, Telemetry and History**
+
+views.
+
+Do not attempt to replicate the complete information architecture of a traditional enterprise DCIM platform in MVP.
+
+---
+
+# Requirement 2 — Progressive Dashboard Drill-Down
+
+### Problem
+
+A dashboard that only reports aggregate KPIs tells an operator that something is wrong without helping them determine where or why.
+
+The dashboard should act as an investigation interface.
+
+### User story
+
+**As an operator, when I notice an abnormal KPI, I want to progressively drill into the physical source of that metric so that I can identify where the problem is occurring.**
+
+### Required interaction
+
+A metric should support navigation such as:
+
+**Facility**
+→ **Floor**
+→ **Zone**
+→ **Rack / Cooling asset**
+→ **Metric / sensor**
+→ **Historical time series**
+
+Example:
+
+**Cooling power ↑**
+→ Floor 3
+→ Cooling Zone B
+→ CRAH-07
+→ Fan speed
+→ historical fan-speed and pressure telemetry
+→ relevant configuration changes
+
+### Functional requirements
+
+**FR-2.1 — Clickable KPI dimensions**
+
+Relevant charts and KPI cards must expose the dimensions contributing to the aggregate value.
+
+---
+
+**FR-2.2 — Persistent drill-down context**
+
+When a user drills from Facility → Floor → Zone, dashboard components should automatically filter to the selected scope.
+
+---
+
+**FR-2.3 — Breadcrumb navigation**
+
+The current hierarchy must remain visible.
+
+Example:
+
+**Oakland DC / Floor 2 / Zone B / Rack R17**
+
+Users must be able to return to any previous level directly.
+
+---
+
+**FR-2.4 — Raw-data access**
+
+Where Wattr has the underlying data, a chart must provide access to the corresponding time-series or tabular values rather than only the visualisation.
+
+---
+
+**FR-2.5 — Twin/dashboard linking**
+
+Where applicable, selecting a dashboard entity should highlight or navigate to that entity inside the digital twin.
+
+The inverse should also work:
+
+**Select Rack R17 in twin → dashboard filters to Rack R17.**
+
+### Acceptance criteria
+
+* Clicking a supported KPI opens the next available dimension.
+* The selected time range persists while drilling down.
+* The selected facility scope persists while changing between dashboard and twin views.
+* Breadcrumbs accurately show the user's current location.
+* Users can navigate from a facility KPI to a specific rack or cooling asset.
+* A supported chart provides access to its underlying telemetry.
+* Selecting an asset in either dashboard or twin identifies the same canonical asset.
+
+### MVP dashboards
+
+The demo should concentrate on metrics Wattr can credibly model:
+
+* rack power;
+* rack inlet temperature;
+* maximum inlet temperature;
+* cooling power / fan power where available;
+* thermal headroom;
+* hotspot count or hotspot duration;
+* relevant environmental measurements.
+
+Do not populate metrics merely because conventional DCIM dashboards contain them. A value should only be shown where Wattr has a source or model capable of calculating it.
+
+---
+
+# Requirement 3 — Existing-Data-First Digital Twin Creation
+
+### Problem
+
+Operators should not have to manually recreate an existing facility before receiving value from Wattr.
+
+Wattr should consume engineering information that already exists and turn it into an editable facility model.
+
+### User story 3A — Floor plan
+
+**As an engineer, I want to upload an existing facility floor plan so that I do not have to redraw the building before creating the digital twin.**
+
+### User story 3B — BIM model
+
+**As an engineer with an existing BIM model, I want Wattr to ingest its geometry and asset metadata so that the digital twin begins from my existing engineering model.**
+
+### User story 3C — Equipment catalogue
+
+**As an engineer adding equipment, I want to select the manufacturer and model so that standard equipment characteristics are automatically populated rather than entered manually.**
+
+### Functional requirements
+
+**FR-3.1 — Floor-plan import**
+
+MVP must accept common floor-plan representations such as:
+
+* PDF;
+* PNG/JPEG;
+* SVG where available.
+
+The floor plan should become a spatial reference layer on which Wattr assets can be positioned.
+
+---
+
+**FR-3.2 — IFC import**
+
+MVP should support **IFC** as the first structured BIM ingestion format.
+
+Imported models should preserve, where available:
+
+* geometry;
+* floors/storeys;
+* spaces;
+* object identifiers;
+* object types;
+* object properties;
+* manufacturer/model metadata.
+
+IFC is an open, vendor-neutral international BIM standard and therefore provides a suitable first structured interchange format for Wattr.
+
+---
+
+**FR-3.3 — Asset mapping**
+
+Imported objects should be mapped to Wattr's internal asset types.
+
+Example:
+
+**Imported object**
+`IfcUnitaryEquipment`
+
+→
+
+**Wattr asset**
+`Cooling Equipment`
+
+The import workflow must identify:
+
+**Mapped assets | Unresolved assets | Ignored objects**
+
+rather than silently discarding information.
+
+---
+
+**FR-3.4 — Verification workflow**
+
+Imported information must be reviewable before becoming authoritative.
+
+For each inferred/matched asset, users should be able to:
+
+**Confirm | Modify | Ignore**
+
+Where automatic matching is used, Wattr should display the basis or confidence of the match.
+
+---
+
+**FR-3.5 — Equipment catalogue**
+
+When creating or resolving an asset, the user should be able to choose:
+
+**Equipment category → Manufacturer → Model**
+
+Selecting a known model can populate known manufacturer-level properties.
+
+Site-specific attributes must remain editable.
+
+---
+
+**FR-3.6 — Data provenance**
+
+Wattr must distinguish between:
+
+* imported model data;
+* manufacturer/specification data;
+* telemetry;
+* manually entered data;
+* Wattr-inferred values.
+
+A user inspecting an important asset property should be able to determine its source.
+
+### Acceptance criteria
+
+* User can upload a floor plan and display it inside Build mode.
+* User can position Wattr assets relative to that floor plan.
+* User can upload a supported IFC file.
+* Wattr creates a preview of imported geometry before confirmation.
+* Recognised imported elements become Wattr assets.
+* Unrecognised objects appear in an unresolved-assets workflow.
+* Original source identifiers are retained where available.
+* User can correct an automatically assigned asset type.
+* User can select an equipment model from Wattr's catalogue.
+* Catalogue selection populates known fields without overwriting explicitly entered site-specific data.
+* Imported and inferred data expose their provenance.
+
+### MVP
+
+Support:
+
+**Floor plan upload + IFC import + manual asset verification + small curated equipment catalogue**
+
+The equipment catalogue only needs to contain the equipment required for the demonstration facility.
+
+### Post-MVP
+
+Add:
+
+* native RVT ingestion;
+* native DWG/DXF workflows;
+* Autodesk Platform Services integration;
+* automated extraction from engineering drawings;
+* spec-sheet/PDF extraction;
+* enterprise asset-register imports;
+* automatic manufacturer/model matching at scale.
+
+Native Revit translation can be supported through Autodesk's Model Derivative tooling rather than requiring Wattr to implement a Revit parser. Autodesk currently supports extracting model data and translating RVT files into formats including IFC and web-viewable representations.
+
+---
+
+# Requirement 4 — Change History
+
+### Problem
+
+Operators need to understand how the facility arrived at its current configuration before they can reason about alternative configurations.
+
+### User story
+
+**As an engineer, I want to see what changed, when it changed and what the previous configuration was so that I can investigate operational behaviour around facility modifications.**
+
+### Functional requirements
+
+**FR-4.1 — Change log**
+
+Material facility changes must generate a history record containing:
+
+* timestamp;
+* affected asset;
+* change type;
+* previous value/configuration;
+* new value/configuration;
+* user/source responsible for the change where available.
+
+---
+
+**FR-4.2 — Historical facility state**
+
+Wattr should be capable of reconstructing the configuration of supported assets at a selected historical point in time.
+
+---
+
+**FR-4.3 — Timeline linkage**
+
+Asset telemetry and configuration changes should be viewable on a common timeline.
+
+Example:
+
+**14:00 — CRAH setpoint changed**
+**14:12 — Fan speed increased**
+**14:20 — Rack inlet temperatures stabilised**
+
+This presentation must not imply causality solely from temporal correlation.
+
+### Acceptance criteria
+
+* Moving a supported asset generates an audit record.
+* Changing a supported configuration parameter generates an audit record.
+* Previous and new values can be inspected.
+* An operator can navigate from an asset to its change history.
+* Supported historical configurations can be loaded as the starting point for Scenario Replay.
+
+---
+
+# Requirement 5 — Historical Scenario Replay
+
+### Problem
+
+A simple before/after comparison cannot determine what would have happened under an alternative facility configuration because workload, weather, cooling behaviour and other operating conditions may also have changed.
+
+Wattr should allow engineers to evaluate a proposed configuration while holding historical operating conditions constant.
+
+### User story
+
+**As a data-centre engineer, I want to change a facility configuration and replay historical operating conditions against it so that I can estimate how the proposed change would have affected thermal and energy performance before implementing it physically.**
+
+### Core workflow
+
+**1. Select historical period**
+
+Example:
+
+`1–7 September`
+
+↓
+
+**2. Load historical facility configuration**
+
+↓
+
+**3. Create scenario**
+
+Example:
+
+`Move Rack R17 from A12 → C08`
+
+↓
+
+**4. Replay historical boundary conditions**
+
+Same:
+
+* workload;
+* rack power;
+* external/environmental conditions;
+* supported cooling inputs.
+
+↓
+
+**5. Simulate candidate configuration**
+
+↓
+
+**6. Compare**
+
+**Baseline vs Proposed**
+
+---
+
+### Functional requirements
+
+**FR-5.1 — Scenario creation**
+
+Users must be able to duplicate a supported historical facility state into an isolated scenario.
+
+Scenario edits must not affect the production/current facility model.
+
+---
+
+**FR-5.2 — Supported modifications**
+
+MVP should initially support a tightly constrained change:
+
+**rack / thermal-load relocation**
+
+Example:
+
+**R17: Position A → Position B**
+
+Additional variables should only be added once Wattr can model them credibly.
+
+---
+
+**FR-5.3 — Historical replay**
+
+Where historical data exists, baseline and candidate scenarios must be evaluated against the same input period.
+
+The scenario engine should not compare unrelated before/after periods and present the difference as the effect of the proposed change.
+
+---
+
+**FR-5.4 — Comparison**
+
+Results must show:
+
+**Baseline | Proposed | Difference**
+
+For each supported metric.
+
+Potential MVP outputs:
+
+* maximum rack inlet temperature;
+* mean rack inlet temperature;
+* hotspot duration;
+* thermal headroom;
+* cooling/fan energy where the model supports it;
+* thermal-limit violations.
+
+---
+
+**FR-5.5 — Simulation labelling**
+
+Scenario results must be clearly labelled as simulated/modelled outcomes rather than measured facility telemetry.
+
+---
+
+**FR-5.6 — Assumptions and confidence**
+
+The scenario result should surface:
+
+* simulation period;
+* data sources used;
+* model version;
+* major assumptions;
+* missing inputs;
+* validation status or model error where available.
+
+### Acceptance criteria
+
+Given a valid historical dataset and supported facility model:
+
+1. User can select a historical period.
+2. User can create a scenario from the corresponding facility state.
+3. User can reposition a rack or its thermal load.
+4. The baseline configuration remains unchanged.
+5. Baseline and candidate use identical historical boundary conditions.
+6. Wattr runs both configurations through the supported thermal model.
+7. User receives a side-by-side comparison.
+8. User can inspect differences spatially in the twin.
+9. User can inspect differences over time.
+10. Results are visibly labelled **Simulated**.
+11. Wattr does not generate an energy-saving figure where the active model cannot calculate cooling-energy effects.
+
+Current commercial systems validate the broader workflow: Airedale exposes historical replay and permits scenario simulation from a historical state, while Schneider describes using live or historical operating data to test rack moves, thermal-load placement, airflow and cooling behaviour.
+
+---
+
+# MVP Scope
+
+## P0 — Must exist in the demo
+
+### Facility model
+
+* Facility → Floor → Zone → Rack / Cooling Unit hierarchy.
+* Canonical asset records.
+* Physical location and core equipment metadata.
+* Telemetry attached to assets.
+* Asset history.
+
+### Investigation
+
+* Dashboard → Floor → Zone → Rack drill-down.
+* Dashboard ↔ digital-twin linking.
+* Historical telemetry view.
+* Breadcrumb navigation.
+
+### Facility creation
+
+* Floor-plan upload.
+* IFC import.
+* Imported-object review.
+* Manual asset correction.
+* Small equipment-model catalogue.
+* Data provenance.
+
+### Change tracking
+
+* Record rack/component moves.
+* Record supported property changes.
+* Display before/after configuration.
+
+### Scenario replay
+
+* Select historical period.
+* Fork baseline into scenario.
+* Move one rack / thermal load.
+* Replay the same historical input conditions.
+* Compare thermal outcomes.
+* Display results spatially and as KPI differences.
+
+---
+
+# Explicit MVP Non-Goals
+
+The initial product should **not** attempt to become a complete DCIM replacement.
+
+Exclude from MVP:
+
+* full CAD authoring;
+* arbitrary CAD-format compatibility;
+* native RVT editing;
+* detailed cable/network management;
+* complete electrical one-line modelling;
+* work-order management;
+* inventory/procurement management;
+* automatic extraction of arbitrary engineering PDFs;
+* automatic creation of every asset from incomplete documentation;
+* production-grade CFD authored interactively in the browser;
+* unrestricted modification of every cooling-system parameter;
+* automatic BMS control/write-back;
+* autonomous execution of recommended physical changes.
+
+These capabilities can be considered after Wattr validates whether operators value the core workflow.
+
+---
+
+# Demo Golden Path
+
+The demo should tell one coherent story rather than demonstrate each feature independently.
+
+### 1. Import
+
+> “You don't need to rebuild your data centre inside Wattr.”
+
+Upload an existing floor plan or IFC model.
+
+Wattr constructs the starting facility.
+
+### 2. Verify
+
+> “Wattr maps your existing engineering data onto an operational twin.”
+
+Review imported racks and cooling equipment and resolve uncertain assets.
+
+### 3. Operate
+
+> “Everything resolves to the physical system underneath it.”
+
+Open the dashboard.
+
+Notice a thermal/cooling anomaly.
+
+Drill:
+
+**Facility → Floor → Zone → Rack**
+
+Then jump directly into the rack in the digital twin.
+
+### 4. Investigate
+
+View:
+
+* telemetry;
+* equipment information;
+* surrounding thermal conditions;
+* historical changes.
+
+### 5. Test
+
+> “Instead of changing the physical facility and seeing what happens, test the change first.”
+
+Select:
+
+**Scenario Replay**
+
+Move the rack to another location.
+
+Replay a historical operating period.
+
+### 6. Compare
+
+Show:
+
+**CURRENT**
+vs
+**PROPOSED**
+
+with spatial and numerical differences in supported metrics.
+
+### 7. Decision
+
+The user can save the scenario for engineering review rather than Wattr automatically executing the change.
+
+---
+
+# Product Principle
+
+Wattr should not compete by having the most complete 3D model.
+
+The workflow should be:
+
+**Import what already exists
+→ understand the facility
+→ identify the problem
+→ drill into its cause
+→ test an intervention
+→ quantify the predicted outcome.**
+
+The digital twin is the interface.
+
+The historical telemetry and calibrated thermal model are what make the twin operationally useful.

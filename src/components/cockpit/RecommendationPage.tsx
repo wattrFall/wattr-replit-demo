@@ -290,13 +290,12 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
       <aside className="space-y-4">
         <DecisionStatus history={history} error={historyError} onRetry={loadHistory} facilityId={facility.id}/>
         <section className="panel p-6" data-guide="safety">
-          <div className="eyebrow">SAFETY SHIELD · SERVER VERIFIED</div>
+          <div className="flex items-center justify-between gap-2"><div className="eyebrow">SAFETY SHIELD · SERVER VERIFIED</div><ContextualHelp title="Who has decision authority?"><p>The Safety Shield verifies constraints but does not approve the advisory. Only an authorized operator can record a disposition, and approval never sends an equipment command.</p></ContextualHelp></div>
           {evaluation ? <>
             <div className="mt-2 flex items-center justify-between"><h2 className={`text-2xl font-semibold ${evaluationTone}`}>{evaluation.outcome}</h2><Status tone={evaluation.outcome === "PASS" ? "good" : evaluation.outcome === "WARNING" ? "warn" : "bad"}>{evaluation.modelVersionId}</Status></div>
             <p className="mt-2 text-xs text-slate-500">Bound to recommendation v{evaluation.recommendationVersion}, this command, user, model, and replay instant.</p>
             <ul className="mt-5 space-y-3">{evaluation.checks.map((check) => <li key={check.id} className="flex gap-3 text-sm"><span className={check.status === "PASS" ? "text-teal-300" : check.status === "WARNING" ? "text-amber-300" : "text-red-300"}>{check.status === "PASS" ? <Check size={16}/> : <X size={16}/>}</span><span><span className="flex items-center gap-2"><b>{check.id.replace(/_/g, " ")}</b><Status tone={check.status === "PASS" ? "good" : check.status === "WARNING" ? "warn" : "bad"}>{check.status}</Status></span><small className="mt-1 block leading-5 text-slate-500">{check.detail}</small></span></li>)}</ul>
           </> : <p className="copy">Run the server-side evaluation after choosing the command. A changed parameter, replay instant, model, or reused result invalidates approval.</p>}
-          <ContextualHelp title="Who has decision authority?"><p>The Safety Shield verifies constraints but does not approve the advisory. Only an authorized operator can record a disposition, and approval never sends an equipment command.</p></ContextualHelp>
           {facility.can_assistant && <button className="button primary mt-5 w-full justify-center" onClick={evaluate}><ShieldCheck size={15}/>Run Safety Shield</button>}
           {!facility.can_operate && <p className="mt-3 text-xs leading-5 text-slate-500">You can run the Safety Shield to preview whether this command passes. Only an operator can use a PASS to approve.</p>}
         </section>

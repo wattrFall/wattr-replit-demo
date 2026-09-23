@@ -46,7 +46,7 @@ try {
     recommendations: 1,
     checkpoints: 4,
     forecasts: 4,
-    migrations: 13,
+    migrations: 16,
   });
 
   const triggers = await client.query(`

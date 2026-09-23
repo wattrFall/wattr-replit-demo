@@ -12,9 +12,11 @@ const users = new Map<Role, string>(ROLES.map((role) => [role, `${prefix}-${role
 const adminId = `${prefix}-admin`;
 const targetId = `${prefix}-target`;
 const outsiderId = `${prefix}-outsider`;
+const testUserIds = [...users.values(), adminId, targetId, outsiderId];
 const outsiderOrganizationId = `${prefix}-organization`;
 const port = await availableTestPort();
 const baseUrl = `http://127.0.0.1:${port}`;
+const createdVersions: string[] = [];
 
 async function request(userId: string, path: string, init: RequestInit = {}) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -72,6 +74,17 @@ async function cleanup() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Publication and rollback append immutable history rows with these test
+    // users as actors. Remove only rows owned by this run before deleting the
+    // referenced models/users; the runtime trigger is never weakened.
+    await client.query("ALTER TABLE replay_change_events DISABLE TRIGGER replay_change_events_immutable");
+    await client.query(
+      `DELETE FROM replay_change_events
+       WHERE actor_user_id = ANY($2::text[])
+          OR (facility_id = 'sfo-01' AND model_version_id = ANY($1::text[]))`,
+      [createdVersions, testUserIds],
+    );
+    await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable");
     // Test cleanup deliberately bypasses the immutable trigger after the test
     // has separately proved ordinary updates/deletes are rejected.
     await client.query("ALTER TABLE administrative_audit_records DISABLE TRIGGER administrative_audit_records_immutable");
@@ -84,6 +97,7 @@ async function cleanup() {
     await client.query("DELETE FROM organizations WHERE id = $1", [outsiderOrganizationId]);
     await client.query("COMMIT");
   } catch (error) {
+    try { await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable"); } catch { /* rollback restores DDL */ }
     await client.query("ROLLBACK");
     throw error;
   } finally {
@@ -148,7 +162,6 @@ try {
   // even if a check fails, so later suites still run on the reference model.
   const facilityBefore = await pool.query("SELECT model_version FROM facilities WHERE id = 'sfo-01'");
   const originalModelVersion: string = facilityBefore.rows[0].model_version;
-  const createdVersions: string[] = [];
   // The scenario incident and recommendation, as Operations and Safety Shield read them.
   const scenarioRecordsQuery = `
     SELECT r.title, r.rationale, r.command, r.explanation, r.evidence, r.model_version_id, r.version, r.status,
@@ -342,9 +355,25 @@ try {
         );
         await client.query("DELETE FROM safety_evaluations WHERE model_version_id = ANY($1::text[])", [createdVersions]);
       }
-      if (createdVersions.length) await client.query("DELETE FROM model_versions WHERE id = ANY($1::text[])", [createdVersions]);
+      if (createdVersions.length) {
+        // The publish/rollback hook records references to both the temporary
+        // models and the test actor. Delete only this run's history first.
+        await client.query("ALTER TABLE replay_change_events DISABLE TRIGGER replay_change_events_immutable");
+        await client.query(
+          `DELETE FROM replay_change_events
+           WHERE actor_user_id = ANY($2::text[])
+              OR (facility_id = 'sfo-01' AND model_version_id = ANY($1::text[]))`,
+          [createdVersions, testUserIds],
+        );
+        await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable");
+        await client.query(
+          "DELETE FROM model_versions WHERE id = ANY($1::text[]) AND facility_id = 'sfo-01' AND created_by = ANY($2::text[])",
+          [createdVersions, testUserIds],
+        );
+      }
       await client.query("COMMIT");
     } catch (error) {
+      try { await client.query("ALTER TABLE replay_change_events ENABLE TRIGGER replay_change_events_immutable"); } catch { /* rollback restores DDL */ }
       await client.query("ROLLBACK");
       throw error;
     } finally {
