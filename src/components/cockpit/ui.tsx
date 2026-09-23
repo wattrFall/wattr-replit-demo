@@ -1,7 +1,8 @@
 /** Shared cockpit building blocks: theme, headings, status, metrics and help. */
-import { createContext, useContext, useEffect, useId, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Activity, ArrowRight, CircleHelp, Monitor, Moon, Sun } from "lucide-react";
 import { navigate, patch } from "./api";
+import { Floating, type Align } from "./Floating";
 import type { ThemePreference } from "./types";
 
 export const mono = "font-[family-name:var(--font-mono)]";
@@ -69,21 +70,70 @@ export function ThemeProvider({ initialTheme, children }: { initialTheme: string
   </ThemeContext.Provider>;
 }
 
-export function ContextualHelp({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * A "?" that explains the control beside it. The explanation opens on hover,
+ * keyboard focus or a tap, stays while the pointer moves onto it, and closes
+ * with Escape. It floats on the body-level layer, so no panel can clip it.
+ */
+export function ContextualHelp({ title, children, align = "end" }: { title: string; children: ReactNode; align?: Align }) {
   const tooltipId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const leaveTimer = useRef(0);
+  const open = (hovered || focused || pinned) && !dismissed;
+  const enter = () => { clearTimeout(leaveTimer.current); setHovered(true); };
+  // A short grace period lets the pointer cross the gap onto the explanation.
+  const leave = () => { leaveTimer.current = window.setTimeout(() => { setHovered(false); setDismissed(false); }, 120); };
+  useEffect(() => () => clearTimeout(leaveTimer.current), []);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { setDismissed(true); setPinned(false); } };
+    const onPress = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !tooltipRef.current?.contains(target)) setPinned(false);
+    };
+    addEventListener("keydown", onKey);
+    addEventListener("mousedown", onPress);
+    return () => { removeEventListener("keydown", onKey); removeEventListener("mousedown", onPress); };
+  }, [open]);
   return <span className="context-help">
     <button
+      ref={triggerRef}
       type="button"
       className="context-help-trigger"
       aria-label={title}
       aria-describedby={tooltipId}
+      aria-expanded={open}
+      onPointerEnter={enter}
+      onPointerLeave={leave}
+      // Keyboard focus opens it; a click toggles it instead, so a second click closes it.
+      onFocus={(event) => setFocused(event.currentTarget.matches(":focus-visible"))}
+      onBlur={() => { setFocused(false); setDismissed(false); }}
+      onClick={() => { setDismissed(false); setPinned(!pinned); }}
     >
       <CircleHelp size={14} aria-hidden="true"/>
     </button>
-    <span id={tooltipId} className="context-help-content" role="tooltip">
+    <Floating
+      open={open}
+      keepMounted
+      anchorRef={triggerRef}
+      floatingRef={tooltipRef}
+      side="top"
+      align={align}
+      gap={9}
+      id={tooltipId}
+      role="tooltip"
+      className="context-help-content"
+      onPointerEnter={enter}
+      onPointerLeave={leave}
+    >
       <strong>{title}</strong>
       {children}
-    </span>
+    </Floating>
   </span>;
 }
 

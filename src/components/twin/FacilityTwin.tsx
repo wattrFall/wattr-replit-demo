@@ -1,5 +1,6 @@
 import { Component, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Box, CircleHelp, Footprints, Layers3, MousePointer2 } from "lucide-react";
+import { Box, Footprints, Layers3, MousePointer2 } from "lucide-react";
+import { ContextualHelp } from "@/components/cockpit/ui";
 import { facilityAssets, type FacilityAssetKind } from "@/lib/cockpit/facilityAssets";
 import type { FacilityTwinProps, TwinOverlay } from "./types";
 
@@ -65,7 +66,7 @@ export function FacilityTwin(props: FacilityTwinProps) {
         <button data-guide="camera-orbit" className={cameraMode === "orbit" ? "active" : ""} aria-pressed={cameraMode === "orbit"} onClick={() => { setCameraMode("orbit"); props.onGuideAction?.("camera-orbit"); }}><MousePointer2 size={13}/> Orbit</button>
         <button data-guide="camera-walk" className={cameraMode === "walk" ? "active" : ""} aria-pressed={cameraMode === "walk"} onClick={() => { setCameraMode("walk"); props.onGuideAction?.("camera-walk"); }}><Footprints size={13}/> Walk</button>
       </div>
-      <details className="twin-help"><summary aria-label="Camera and floor help"><CircleHelp size={13}/></summary><p>Floors change the visible level. Orbit is best for planning; Walk gives aisle-level movement. Neither changes replay state.</p></details>
+      <ContextualHelp title="About floors and camera" align="start"><p>Floors change the visible level. Orbit is best for planning; Walk gives aisle-level movement. Neither changes replay state.</p></ContextualHelp>
       <span className="twin-model"><Box size={12}/> {props.mode === "edit" ? `UNPUBLISHED DRAFT · BASED ON ${props.modelVersion}` : `OPERATIONS · ${props.modelVersion}`}</span>
     </div>
     <div className="twin-stage" data-guide="twin" data-camera-state={cameraState}>

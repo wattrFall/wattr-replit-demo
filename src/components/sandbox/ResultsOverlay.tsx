@@ -194,7 +194,7 @@ export function ResultsOverlay() {
       role="dialog"
       aria-modal="true"
       aria-label={blocked ? "Design checks failed" : "Simulation results"}
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-[var(--sbx-surface-0)]/95 p-4 backdrop-blur-sm sm:p-8"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center overflow-y-auto bg-[var(--sbx-surface-0)]/95 p-4 backdrop-blur-sm sm:p-8"
     >
       <div className="w-full max-w-[880px] rounded-[14px] border border-[var(--sbx-border-strong)] bg-[var(--sbx-surface-1)] font-[family-name:var(--sbx-font-sans)]">
         <header className="flex items-start justify-between gap-4 border-b border-[var(--sbx-border)] px-5 py-4">

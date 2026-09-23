@@ -11,6 +11,7 @@ import { formatSimulatedAt, useScenarioSession } from "@/lib/cockpit/session";
 import { SCENARIO_DURATION_S } from "@/lib/cockpit/simulation";
 import { ROLES, canViewTopology, type Role } from "@/lib/security/rolePolicy";
 import { ApiError, clearTestIdentity, describeError, navigate, post, SESSION_CHANGED } from "./api";
+import { Floating, useDismiss } from "./Floating";
 import type { Facility, SessionData } from "./types";
 import { Brand, mono, Status, ThemeControl } from "./ui";
 
@@ -28,25 +29,7 @@ function FeedbackControl({ facility }: { facility?: Facility }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
 
-  useEffect(() => {
-    if (!open) return;
-    panelRef.current?.querySelector<HTMLElement>("button")?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    const closeOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!panelRef.current?.contains(target) && !triggerRef.current?.contains(target)) setOpen(false);
-    };
-    addEventListener("keydown", closeOnEscape);
-    addEventListener("mousedown", closeOutside);
-    return () => {
-      removeEventListener("keydown", closeOnEscape);
-      removeEventListener("mousedown", closeOutside);
-    };
-  }, [open]);
+  useDismiss(open, () => setOpen(false), triggerRef, panelRef);
 
   const submit = async () => {
     try {
@@ -66,7 +49,7 @@ function FeedbackControl({ facility }: { facility?: Facility }) {
     <button ref={triggerRef} type="button" className="feedback-trigger" aria-expanded={open} aria-controls={open ? panelId : undefined} onClick={() => { setOpen(!open); setMessage(""); }}>
       <MessageSquare size={13} aria-hidden="true"/><span>Feedback</span>
     </button>
-    {open && <div ref={panelRef} id={panelId} role="dialog" aria-label="Share feedback on this workspace" className="feedback-panel">
+    <Floating open={open} anchorRef={triggerRef} floatingRef={panelRef} gap={10} id={panelId} role="dialog" aria-label="Share feedback on this workspace" className="feedback-panel">
       <b className="block text-sm">Feedback on this workspace</b>
       <p className="mt-1 text-xs leading-5 text-slate-500">Optional. Structured choices only, so no facility details or notes are recorded.</p>
       <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="How was this workspace?">
@@ -78,7 +61,7 @@ function FeedbackControl({ facility }: { facility?: Facility }) {
         <button type="button" className="button secondary" onClick={() => { setOpen(false); triggerRef.current?.focus(); }}>Close</button>
       </div>
       {message && <p className="mt-2 text-xs leading-5 text-slate-400" role="status">{message}</p>}
-    </div>}
+    </Floating>
   </div>;
 }
 
@@ -106,25 +89,7 @@ function SessionMenu({ data }: { data: SessionData }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const panelId = useId();
 
-  useEffect(() => {
-    if (!open) return;
-    panelRef.current?.querySelector<HTMLElement>("button")?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    const closeOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (!panelRef.current?.contains(target) && !triggerRef.current?.contains(target)) setOpen(false);
-    };
-    addEventListener("keydown", closeOnEscape);
-    addEventListener("mousedown", closeOutside);
-    return () => {
-      removeEventListener("keydown", closeOnEscape);
-      removeEventListener("mousedown", closeOutside);
-    };
-  }, [open]);
+  useDismiss(open, () => setOpen(false), triggerRef, panelRef);
 
   const takeRole = async (role: Role) => {
     if (role === data.me.role) { setOpen(false); return; }
@@ -160,7 +125,7 @@ function SessionMenu({ data }: { data: SessionData }) {
     <button ref={triggerRef} type="button" className="session-trigger" aria-expanded={open} aria-controls={open ? panelId : undefined} onClick={() => setOpen(!open)}>
       <UserCog size={13} aria-hidden="true"/><span>{ROLE_LABELS[data.me.role] ?? data.me.role}</span>
     </button>
-    {open && <div ref={panelRef} id={panelId} role="dialog" aria-label="Your seat in this demo" className="session-panel">
+    <Floating open={open} anchorRef={triggerRef} floatingRef={panelRef} gap={10} id={panelId} role="dialog" aria-label="Your seat in this demo" className="session-panel">
       <b className="block text-sm">{data.me.display_name}</b>
       <p className="mt-1 text-xs leading-5 text-slate-500">Synthetic demo environment: take any role to see the product from that seat. No further sign-in is needed, and the role you take is enforced on every request.</p>
       <div className="mt-3 grid gap-1" role="group" aria-label="Take a role">
@@ -176,7 +141,7 @@ function SessionMenu({ data }: { data: SessionData }) {
       {data.me.is_owner && <p className="mt-2 text-[11px] leading-5 text-slate-500">Owner and administrator rights stay with your account whichever role you take.</p>}
       {error && <p role="alert" className="mt-2 text-xs text-red-300">{error}</p>}
       <button type="button" className="button secondary mt-3 w-full justify-center" onClick={signOut}><LogOut size={14} aria-hidden="true"/>Sign out</button>
-    </div>}
+    </Floating>
   </div>;
 }
 
@@ -238,14 +203,14 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
   ];
   return <div className="cockpit min-h-[100dvh] bg-[#0a1018] text-slate-200">
     <a className="skip-link" href="#main-content">Skip to main content</a>
-    <header className="cockpit-header fixed inset-x-0 top-0 z-30 flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4">
+    <header className="cockpit-header fixed inset-x-0 top-0 z-[var(--z-header)] flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4">
       <div className="flex items-center gap-4">
         <button ref={menuButtonRef} type="button" className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"} aria-expanded={mobile} aria-controls="cockpit-navigation"><Menu size={20} aria-hidden="true"/></button><Brand/>
       </div>
       <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><SessionMenu data={data}/><FeedbackControl facility={facility}/><ThemeControl/></div>
     </header>
     {mobile && <button type="button" className="mobile-scrim md:hidden" aria-label="Close navigation" onClick={() => { setMobile(false); menuButtonRef.current?.focus(); }}/>}
-    <aside id="cockpit-navigation" aria-label="Primary navigation" className={`cockpit-sidebar fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}>
+    <aside id="cockpit-navigation" aria-label="Primary navigation" className={`cockpit-sidebar fixed bottom-0 left-0 top-[62px] z-[var(--z-sidebar)] w-[232px] border-r border-slate-800 bg-[#0b121c] transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="sidebar-facility rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div>
       <nav ref={navRef} className="sidebar-nav" onScroll={(event) => { sidebarScrollTop = event.currentTarget.scrollTop; markSidebarOverflow(event.currentTarget); }}>{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/><span>{label}</span></button>)}</nav>
       <div className="sidebar-footer"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className={`cockpit-nav ${location.pathname === "/help" ? "active" : ""}`} aria-current={location.pathname === "/help" ? "page" : undefined}><CircleHelp size={16} aria-hidden="true"/><span>Help & tutorials</span></button></div>
