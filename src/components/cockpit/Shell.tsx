@@ -65,7 +65,7 @@ function FeedbackControl({ facility }: { facility?: Facility }) {
   </div>;
 }
 
-const ROLE_LABELS: Record<Role, string> = {
+export const ROLE_LABELS: Record<Role, string> = {
   PORTFOLIO_MANAGER: "Portfolio manager",
   OPERATOR: "Operator",
   ENGINEER: "Engineer",
@@ -138,7 +138,7 @@ function SessionMenu({ data }: { data: SessionData }) {
           onClick={() => takeRole(role)}
         ><span>{ROLE_LABELS[role]}</span>{role === data.me.role && <small>current</small>}</button>)}
       </div>
-      {data.me.is_owner && <p className="mt-2 text-[11px] leading-5 text-slate-500">Owner and administrator rights stay with your account whichever role you take.</p>}
+      {data.me.is_owner && <p className="mt-2 text-xs leading-5 text-slate-500">Owner and administrator rights stay with your account whichever role you take.</p>}
       {error && <p role="alert" className="mt-2 text-xs text-red-300">{error}</p>}
       <button type="button" className="button secondary mt-3 w-full justify-center" onClick={signOut}><LogOut size={14} aria-hidden="true"/>Sign out</button>
     </Floating>

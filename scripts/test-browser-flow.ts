@@ -358,7 +358,7 @@ try {
       for (const required of [
         page.locator("[data-guide='twin']"),
         page.getByLabel("Canonical replay controls"),
-        page.getByText("CONTEXTUAL HUD", { exact: true }),
+        page.getByText("Contextual HUD", { exact: true }),
         page.getByText("Review advisory", { exact: true }),
       ]) {
         const box = await required.first().boundingBox();
@@ -444,7 +444,7 @@ try {
     await twinFallbackPage.getByText("3D scene unavailable", { exact: true }).waitFor();
     await twinFallbackPage.getByRole("img", { name: /Authorized facility model/ }).waitFor();
     assert(await twinFallbackPage.getByLabel("Canonical replay controls").isVisible(), "WebGL failure hid replay controls");
-    assert(await twinFallbackPage.getByText("CONTEXTUAL HUD", { exact: true }).isVisible(), "WebGL failure hid equivalent HUD");
+    assert(await twinFallbackPage.getByText("Contextual HUD", { exact: true }).isVisible(), "WebGL failure hid equivalent HUD");
     await twinFallbackContext.close();
   } finally {
     await browser.close();

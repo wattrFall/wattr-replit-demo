@@ -204,7 +204,7 @@ export function GuidanceProvider({ role, facilityId, initialStep, initialComplet
     {open && current && <div className="guide-layer" aria-live="polite">
       {rect && <div className="guide-spotlight" style={{ left: rect.left - 5, top: rect.top - 5, width: rect.width + 10, height: rect.height + 10 }}/>}
       <section ref={cardRef} tabIndex={-1} className="guide-card" style={cardStyle} role="region" aria-labelledby="guide-title" aria-describedby="guide-body">
-        <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">GUIDED TWIN · {stepIndex + 1}/{steps.length}</div><h2 id="guide-title" className="mt-1 font-semibold">{current.title}</h2></div><button className="icon-button" onClick={skip} aria-label="Close tutorial"><X size={15}/></button></div>
+        <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">Guided twin · {stepIndex + 1}/{steps.length}</div><h2 id="guide-title" className="mt-1 font-semibold">{current.title}</h2></div><button className="icon-button" onClick={skip} aria-label="Close tutorial"><X size={15}/></button></div>
         <p id="guide-body" className="mt-3 text-xs leading-5 text-slate-300">{current.body}</p>
         <p className="mt-3 text-xs text-cyan-300">{current.actionLabel ? `Required: ${current.actionLabel}.` : "Review this area, then continue."}</p>
         {!onStepPage && <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-amber-300"><span>This step is on the {tutorialPageLabel(current.route)} page.</span><button className="button secondary" onClick={() => navigate(stepPath)}>Open {tutorialPageLabel(current.route)} <ArrowRight size={14}/></button></div>}

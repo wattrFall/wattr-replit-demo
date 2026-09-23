@@ -72,7 +72,7 @@ export function FacilityImportPage({ data, facility }: { data: SessionData; faci
     } catch (cause) { setError(describeError(cause)); } finally { setBusy(false); }
   };
   return <Shell data={data} facility={facility}>
-    <PageHead eyebrow="FACILITY CREATION" title="Import existing engineering data" detail="Store a floor-plan reference or parse IFC STEP data, review every proposed mapping, then create a Builder draft. Imports cannot publish Operations directly."/>
+    <PageHead eyebrow="Facility creation" title="Import existing engineering data" detail="Store a floor-plan reference or parse IFC STEP data, review every proposed mapping, then create a Builder draft. Imports cannot publish Operations directly."/>
     <div className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
       <section className="panel p-5">
         <div className="flex items-start gap-3"><FileUp className="mt-1 text-cyan-300" aria-hidden="true"/><div><h2 className="font-semibold">1. Upload a source</h2><p className="copy">Floor plan: PDF, PNG, JPEG, SVG (max 15 MB; SVG max 5 MB). IFC: ISO-10303-21 STEP .ifc (max 20 MB).</p></div></div>
@@ -81,14 +81,14 @@ export function FacilityImportPage({ data, facility }: { data: SessionData; faci
         <button className="button primary mt-4" type="button" disabled={!canImport || !upload || busy} onClick={uploadFile}>{busy ? <LoaderCircle className="animate-spin" size={15}/> : <FileUp size={15}/>} Upload and {upload?.name.toLowerCase().endsWith(".ifc") ? "parse IFC" : "store reference"}</button>
         {!canImport && <p className="mt-2 text-xs text-amber-300">Import writes require Engineer, Model admin, or owner authorization. You can still view authorized imported records.</p>}
         <div className="subpanel mt-5">
-          <div className="eyebrow">CURATED DEMO CATALOGUE</div>
+          <div className="eyebrow">Curated demo catalogue</div>
           <p className="mt-2 text-xs leading-5 text-slate-400">Values are illustrative Wattr demonstration data, not certified manufacturer specifications. Site-entered properties remain editable.</p>
           <ul className="mt-3 space-y-2">{CURATED_EQUIPMENT_CATALOGUE.map((model) => <li key={model.id} className="text-xs"><b>{model.manufacturer} · {model.model}</b><span className="ml-2 text-slate-500">{readable(model.category)}</span></li>)}</ul>
         </div>
       </section>
       <section className="panel p-5" aria-live="polite">
         {!preview ? <div className="flex min-h-64 flex-col items-center justify-center text-center text-slate-500"><Layers3 size={32} aria-hidden="true"/><p className="mt-3 text-sm">Upload a supported source to begin a reviewable import.</p></div> : <>
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">2. VERIFY BEFORE BUILD</div><h2 className="mt-1 font-semibold">{preview.sourceName}</h2><p className="mt-1 text-xs text-slate-400">{preview.kind === "IFC" ? `${preview.objects.length} recognised or unresolved IFC objects` : "Floor-plan spatial reference layer"}</p></div><Status tone="warn">{preview.kind}</Status></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="eyebrow">2. Verify before build</div><h2 className="mt-1 font-semibold">{preview.sourceName}</h2><p className="mt-1 text-xs text-slate-400">{preview.kind === "IFC" ? `${preview.objects.length} recognised or unresolved IFC objects` : "Floor-plan spatial reference layer"}</p></div><Status tone="warn">{preview.kind}</Status></div>
           {preview.geometry?.bounds && <div className="subpanel mt-4 text-xs"><b>Geometry preview</b><p className="mt-1 text-slate-400">World-space placement bounds: {preview.geometry.bounds.min.join(", ")} → {preview.geometry.bounds.max.join(", ")} {preview.geometry.units ?? "(units not declared)"}. This is a point/bounds preview, not a full mesh renderer.</p></div>}
           {preview.kind === "IFC" && <div className="mt-4 overflow-x-auto">
             <table className="w-full text-left text-xs">

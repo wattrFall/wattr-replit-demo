@@ -34,7 +34,7 @@ export function FacilityHistoryPage({ data, facility }: { data: SessionData; fac
 
   return <Shell data={data} facility={facility}>
     <PageHead
-      eyebrow="FACILITY HISTORY / IMMUTABLE CONFIGURATION"
+      eyebrow="Facility history / immutable configuration"
       title={assetId ? `Change history: ${assetId}` : "Change history"}
       detail={assetId ? "Filtered to this affected asset. Configuration changes retain before/after snapshots; timeline proximity to telemetry does not establish causality." : "Configuration changes retain before/after snapshots. Timeline proximity to telemetry does not establish causality."}
       action={<button type="button" className="button primary" onClick={() => navigate(`/facilities/${facility.id}/replay`)}>Open Scenario Replay <ArrowRight size={15}/></button>}
@@ -47,9 +47,9 @@ export function FacilityHistoryPage({ data, facility }: { data: SessionData; fac
           <summary><span><b>{event.change_type === "RACK_RELOCATED" ? `Moved ${event.asset_id}` : event.change_type.replace(/_/g, " ")}</b><small className="mt-1 block text-slate-500">{new Date(event.occurred_at).toLocaleString()} · {event.source.replace(/_/g, " ")} · asset {event.asset_id ?? "facility-model"}</small></span><Status tone="warn">{event.model_version_id}</Status></summary>
           <div className="disclosure-content grid gap-3 md:grid-cols-2">
             <ChangeSpecifics event={event}/>
-            <div className="subpanel"><span className="eyebrow">BEFORE</span><pre className="mt-2 overflow-x-auto text-[10px] text-slate-400">{JSON.stringify(event.before_config, null, 2)}</pre></div>
-            <div className="subpanel"><span className="eyebrow">AFTER</span><pre className="mt-2 overflow-x-auto text-[10px] text-slate-400">{JSON.stringify(event.after_config, null, 2)}</pre></div>
-            <p className="text-[11px] text-slate-500">Responsible user: {event.actor_user_id ?? "source unavailable"}. Metadata is retained with the immutable event.</p>
+            <div className="subpanel"><span className="eyebrow">Before</span><pre className="mt-2 overflow-x-auto text-xs text-slate-400">{JSON.stringify(event.before_config, null, 2)}</pre></div>
+            <div className="subpanel"><span className="eyebrow">After</span><pre className="mt-2 overflow-x-auto text-xs text-slate-400">{JSON.stringify(event.after_config, null, 2)}</pre></div>
+            <p className="text-xs text-slate-500">Responsible user: {event.actor_user_id ?? "source unavailable"}. Metadata is retained with the immutable event.</p>
           </div>
         </details>)}
         {!events.length && !error && <p className="p-6 text-sm text-slate-500">No supported configuration differences have been recorded yet. Identical configuration publishes do not create a change event.</p>}
@@ -58,7 +58,7 @@ export function FacilityHistoryPage({ data, facility }: { data: SessionData; fac
         <div className="border-b border-slate-800 p-5"><div className="flex items-center gap-2"><Layers3 size={16} className="text-cyan-300"/><h2 className="font-semibold">Historical model states</h2></div><p className="mt-2 text-xs text-slate-500">Select a version in Scenario Replay to fork its immutable configuration.</p></div>
         {versions.map((version) => <details key={version.id} className="disclosure border-x-0 border-t-0">
           <summary><span><b className={mono}>{version.id}</b><small className="mt-1 block text-slate-500"><Clock3 size={11} className="mr-1 inline"/>{new Date(version.created_at).toLocaleString()}</small></span><Status tone={version.status === "PUBLISHED" ? "good" : "warn"}>{version.status}</Status></summary>
-          <div className="disclosure-content"><pre className="overflow-x-auto rounded bg-black/20 p-3 text-[10px] text-slate-400">{JSON.stringify(version.config, null, 2)}</pre><button type="button" className="button secondary mt-3" onClick={() => navigate(`/facilities/${facility.id}/replay?modelVersion=${encodeURIComponent(version.id)}`)}>Use as replay baseline <ArrowRight size={14}/></button></div>
+          <div className="disclosure-content"><pre className="overflow-x-auto rounded bg-black/20 p-3 text-xs text-slate-400">{JSON.stringify(version.config, null, 2)}</pre><button type="button" className="button secondary mt-3" onClick={() => navigate(`/facilities/${facility.id}/replay?modelVersion=${encodeURIComponent(version.id)}`)}>Use as replay baseline <ArrowRight size={14}/></button></div>
         </details>)}
         {!versions.length && !error && <p className="p-6 text-sm text-slate-500">Loading model history…</p>}
       </section>
@@ -73,7 +73,7 @@ function ChangeSpecifics({ event }: { event: ChangeEvent }) {
   const parameters = [...new Set([...Object.keys(before?.params ?? {}), ...Object.keys(after?.params ?? {})])]
     .filter((key) => before?.params?.[key] !== after?.params?.[key]);
   if (!moved && !parameters.length) return null;
-  return <div className="subpanel md:col-span-2"><span className="eyebrow">AFFECTED ASSET DETAIL</span>
+  return <div className="subpanel md:col-span-2"><span className="eyebrow">Affected asset detail</span>
     {moved && <p className="mt-2 text-sm text-cyan-100">Position moved: ({before!.cell!.x}, {before!.cell!.z}) → ({after!.cell!.x}, {after!.cell!.z})</p>}
     {parameters.map((key) => <p key={key} className="mt-1 text-xs text-slate-400">{key}: {String(before?.params?.[key] ?? "unset")} → {String(after?.params?.[key] ?? "unset")}</p>)}
   </div>;

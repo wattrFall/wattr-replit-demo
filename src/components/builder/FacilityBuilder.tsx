@@ -222,11 +222,11 @@ export function FacilityBuilder({
       <section className="panel p-5" aria-labelledby="builder-source">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="eyebrow">OPERATIONS RUNS</div>
+            <div className="eyebrow">Operations runs</div>
             <p className="mt-1 text-sm font-medium">{builds ? publishedLabel(builds) : "Loading the published model…"}</p>
           </div>
           <div className="text-right">
-            <div id="builder-source" className="eyebrow">EDITING</div>
+            <div id="builder-source" className="eyebrow">Editing</div>
             <p className="mt-1 text-sm text-slate-300">
               {editing || "—"}
               {dirty && <span className="ml-2 text-amber-300">· unsaved changes</span>}
@@ -235,7 +235,7 @@ export function FacilityBuilder({
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="eyebrow mr-1">START FROM</span>
+          <span className="eyebrow mr-1">Start from</span>
           {FACILITY_TEMPLATES.map((template) => (
             <button
               key={template.id}

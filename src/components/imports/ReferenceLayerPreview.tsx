@@ -26,7 +26,7 @@ export function ReferenceLayerPreview({ facilityId, layout }: { facilityId: stri
   if (!layer) return null;
   return <section className="panel overflow-hidden p-4" aria-labelledby="builder-reference-plan">
     <div className="flex flex-wrap items-baseline justify-between gap-2">
-      <div><div className="eyebrow">SPATIAL REFERENCE</div><h2 id="builder-reference-plan" className="mt-1 text-sm font-semibold">{layer.name}</h2></div>
+      <div><div className="eyebrow">Spatial reference</div><h2 id="builder-reference-plan" className="mt-1 text-sm font-semibold">{layer.name}</h2></div>
       <span className="status warn">IMPORTED · NOT TO SCALE</span>
     </div>
     <p className="copy">Asset markers use the Builder grid. Move assets in the editor to position them relative to this reference; the plan is not interpreted as authoritative geometry.</p>

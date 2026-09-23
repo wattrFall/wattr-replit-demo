@@ -97,15 +97,15 @@ function WhenToAct({ config, elapsedS, avoidedNow }: { config: FacilityModelConf
           aria-label={`Move the replay to ${scenarioMinutes(point.elapsedS)}: acting then avoids ${point.minutesAvoided} constraint minutes${isBest ? ", the most in the ramp" : ""}`}
           className={`flex flex-col items-center gap-1 rounded-md border px-1 pb-1.5 pt-2 transition-colors hover:border-cyan-400 ${isNow ? "border-cyan-400 bg-cyan-400/10" : "border-slate-800"}`}
         >
-          <span className={`${mono} text-[10px] ${isBest ? "text-teal-300" : "text-slate-400"}`}>{point.minutesAvoided}</span>
+          <span className={`${mono} text-xs ${isBest ? "text-teal-300" : "text-slate-400"}`}>{point.minutesAvoided}</span>
           <span className="flex h-16 w-full items-end justify-center" aria-hidden="true">
             <i className={`block w-3 rounded-sm ${isBest ? "bg-teal-400" : "bg-cyan-500/60"}`} style={{ height: `${Math.max(4, (point.minutesAvoided / tallest) * 100)}%` }}/>
           </span>
-          <span className={`text-[10px] ${isNow ? "text-cyan-300" : "text-slate-500"}`}>{Math.round(point.elapsedS / 60)}m</span>
+          <span className={`text-xs ${isNow ? "text-cyan-300" : "text-slate-500"}`}>{Math.round(point.elapsedS / 60)}m</span>
         </button>;
       })}
     </div>
-    <p className="mt-2 text-[11px] leading-5 text-slate-500">Minutes of modeled constraint avoided if the advisory is taken at that replay time. Select a bar to move the replay there.</p>
+    <p className="mt-2 text-xs leading-5 text-slate-500">Minutes of modeled constraint avoided if the advisory is taken at that replay time. Select a bar to move the replay there.</p>
   </div>;
 }
 
@@ -119,8 +119,8 @@ function DecisionStatus({ history, error, onRetry, facilityId }: {
   const status = history ? STATUS_LABELS[history.recommendation.status] ?? { label: history.recommendation.status, tone: "warn" as const } : null;
   return <section className="panel p-5" aria-busy={!history && !error}>
     <div className="flex items-center justify-between gap-2">
-      <div className="eyebrow">STATUS AND HISTORY</div>
-      {history && <span className={`${mono} text-[10px] text-slate-500`}>v{history.recommendation.version} · {history.recommendation.modelVersionId}</span>}
+      <div className="eyebrow">Status and history</div>
+      {history && <span className={`${mono} text-xs text-slate-500`}>v{history.recommendation.version} · {history.recommendation.modelVersionId}</span>}
     </div>
     {error ? <>
       <p role="alert" className="mt-2 text-sm leading-6 text-red-300">The decision history could not be loaded. {error}</p>
@@ -246,7 +246,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
   const evaluationTone = evaluation?.outcome === "PASS" ? "text-teal-300" : evaluation?.outcome === "WARNING" ? "text-amber-300" : "text-red-300";
 
   return <Shell data={data} facility={facility}>
-    <PageHead eyebrow="RECOMMENDATION / REC-17" title={`Pre-emptive ${unitLabel} flow adjustment`} detail={`Bound to ${formatSimulatedAt(snapshot.simulatedAt)}, GPU Training Ramp, and ${facility.model_version}.`}/>
+    <PageHead eyebrow="Recommendation / rec-17" title={`Pre-emptive ${unitLabel} flow adjustment`} detail={`Bound to ${formatSimulatedAt(snapshot.simulatedAt)}, GPU Training Ramp, and ${facility.model_version}.`}/>
     <ReplayBar/>
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(330px,.75fr)]">
       <div className="space-y-4">
@@ -261,7 +261,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
         </section>
 
         <section className="panel p-5" data-guide="what-if">
-          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="eyebrow">WHAT-IF COMPARISON</div><h2 className="mt-2 text-lg font-semibold">Compare before you decide</h2><p className="copy">Adjust the permitted advisory and compare it with inaction and with the recommendation. Only the advisory parameters change; the initial state, event stream, replay instant and model version stay fixed.</p></div><SlidersHorizontal className="shrink-0 text-cyan-300" aria-hidden="true"/></div>
+          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="eyebrow">What-if comparison</div><h2 className="mt-2 text-xl font-semibold">Compare before you decide</h2><p className="copy">Adjust the permitted advisory and compare it with inaction and with the recommendation. Only the advisory parameters change; the initial state, event stream, replay instant and model version stay fixed.</p></div><SlidersHorizontal className="shrink-0 text-cyan-300" aria-hidden="true"/></div>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <label className="field">{unitLabel} flow: <b>{flowPercent}%</b><input aria-label={`Alternative ${unitLabel.split("-")[0]} flow percent`} type="range" min="60" max="85" step="1" value={flowPercent} onChange={(event) => setFlowPercent(Number(event.target.value))}/></label>
             <label className="field">Duration: <b>{durationMinutes} minutes</b><input aria-label="Alternative duration minutes" type="range" min="1" max="30" step="1" value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}/></label>
@@ -271,13 +271,13 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
         </section>
 
         <section className="panel p-6">
-          <div className="eyebrow">WHY THIS ADVISORY</div>
+          <div className="eyebrow">Why this advisory</div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {[
-              ["WHY", snapshot.recommendation.why],
-              ["WHERE", snapshot.recommendation.where],
-              ["EXPECTED EFFECT", snapshot.recommendation.expectedEffect],
-              ["CONFIDENCE", `${Math.round(snapshot.recommendation.confidence * 100)}% at the ${snapshot.forecast.horizonS / 60}-minute horizon; quality GOOD inside the disclosed domain.`],
+              ["Why", snapshot.recommendation.why],
+              ["Where", snapshot.recommendation.where],
+              ["Expected effect", snapshot.recommendation.expectedEffect],
+              ["Confidence", `${Math.round(snapshot.recommendation.confidence * 100)}% at the ${snapshot.forecast.horizonS / 60}-minute horizon; quality GOOD inside the disclosed domain.`],
             ].map(([label, value]) => <div key={label} className="subpanel"><span className="eyebrow">{label}</span><p className="text-sm leading-6 text-slate-300">{value}</p></div>)}
           </div>
           <div className="mt-5 grid gap-2">
@@ -290,7 +290,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
       <aside className="space-y-4">
         <DecisionStatus history={history} error={historyError} onRetry={loadHistory} facilityId={facility.id}/>
         <section className="panel p-6" data-guide="safety">
-          <div className="flex items-center justify-between gap-2"><div className="eyebrow">SAFETY SHIELD · SERVER VERIFIED</div><ContextualHelp title="Who has decision authority?"><p>The Safety Shield verifies constraints but does not approve the advisory. Only an authorized operator can record a disposition, and approval never sends an equipment command.</p></ContextualHelp></div>
+          <div className="flex items-center justify-between gap-2"><div className="eyebrow">Safety Shield · server verified</div><ContextualHelp title="Who has decision authority?"><p>The Safety Shield verifies constraints but does not approve the advisory. Only an authorized operator can record a disposition, and approval never sends an equipment command.</p></ContextualHelp></div>
           {evaluation ? <>
             <div className="mt-2 flex items-center justify-between"><h2 className={`text-2xl font-semibold ${evaluationTone}`}>{evaluation.outcome}</h2><Status tone={evaluation.outcome === "PASS" ? "good" : evaluation.outcome === "WARNING" ? "warn" : "bad"}>{evaluation.modelVersionId}</Status></div>
             <p className="mt-2 text-xs text-slate-500">Bound to recommendation v{evaluation.recommendationVersion}, this command, user, model, and replay instant.</p>
@@ -300,7 +300,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
           {!facility.can_operate && <p className="mt-3 text-xs leading-5 text-slate-500">You can run the Safety Shield to preview whether this command passes. Only an operator can use a PASS to approve.</p>}
         </section>
         {facility.can_operate ? <section className="panel p-6" data-guide="disposition">
-          <div className="eyebrow">OPERATOR DISPOSITION</div>
+          <div className="eyebrow">Operator disposition</div>
           <label className="field">Decision note (optional)<textarea className="textarea mt-2 min-h-[76px] w-full" maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Record operational context"/></label>
           <div className="mt-4 grid grid-cols-2 gap-2">
             <button className="button primary justify-center" disabled={evaluation?.outcome !== "PASS"} onClick={() => decide("APPROVE")}><Check size={14}/>Approve</button>
@@ -319,7 +319,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
               <button className="button secondary" onClick={() => setPendingReplacement(null)}>{pendingReplacement.current ? "Keep current disposition" : "Dismiss"}</button>
             </div>
           </div>}
-          <p className="mt-3 text-[11px] leading-5 text-slate-500">Approval is available only for an unused, unexpired PASS. This records an advisory disposition; it never sends an equipment command.</p>
+          <p className="mt-3 text-xs leading-5 text-slate-500">Approval is available only for an unused, unexpired PASS. This records an advisory disposition; it never sends an equipment command.</p>
         </section> : <section className="panel p-6 text-sm leading-6 text-slate-500">View-only for your role. You can compare outcomes and preview the Safety Shield, but only an operator can approve, reject, defer, or request an alternative.</section>}
         {error && <p role="alert" className="panel p-4 text-sm text-red-300">{error}</p>}
         {message && <p role="status" className="panel p-4 text-sm text-teal-300">{message}</p>}

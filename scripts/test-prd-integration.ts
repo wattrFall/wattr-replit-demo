@@ -714,7 +714,7 @@ async function browserRegression() {
           assert(await page.getByText("SYNTHETIC DEMO", { exact: true }).count() > 0, "replay source label is missing");
           assert(await page.getByText(/energy savings/i).count() > 0, "replay energy omission is not disclosed");
         } else if (name === "import") {
-          await page.getByText("CURATED DEMO CATALOGUE", { exact: true }).waitFor({ timeout: 15_000 });
+          await page.getByText("Curated demo catalogue", { exact: true }).waitFor({ timeout: 15_000 });
         }
         assert(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1),
