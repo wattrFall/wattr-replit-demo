@@ -24,7 +24,7 @@ import { graphSelection, thermalGraph, type GraphView, type ThermalGraphNode } f
 import { navigate } from "./api";
 import { ReplayBar, Shell } from "./Shell";
 import type { Facility, SessionData } from "./types";
-import { PageHead, Status } from "./ui";
+import { PageHead, Segmented, Status } from "./ui";
 
 const VIEWS: ReadonlyArray<readonly [GraphView, string]> = [
   ["current", "Current heat"],
@@ -216,9 +216,7 @@ export function ThermalGraphPage({ data, facility }: { data: SessionData; facili
     <ReplayBar/>
     <section className={`panel lineage${expanded ? " focus-mode" : ""}`} style={{ "--heat-gradient": HEAT_GRADIENT } as CSSProperties}>
       <div className="lineage-toolbar">
-        <div className="flex flex-wrap gap-1" role="group" aria-label="Graph view">
-          {VIEWS.map(([value, label]) => <button key={value} type="button" className={`speed ${view === value ? "selected" : ""}`} aria-pressed={view === value} onClick={() => setView(value)}>{label}</button>)}
-        </div>
+        <Segmented label="Graph view" value={view} onChange={setView} options={VIEWS.map(([value, label]) => ({ value, label }))}/>
         {view === "topology"
           ? <span className="lineage-note">Structure only · no heat readings</span>
           : <div className="lineage-legend" role="img" aria-label="Heat scale from blue for cool to red at the limit"><span>Cool</span><i/><span>At limit</span></div>}

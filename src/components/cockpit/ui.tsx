@@ -143,6 +143,30 @@ export function ContextualHelp({ title, children, align = "end" }: { title: stri
   </span>;
 }
 
+export type SegmentOption<T> = { value: T; label: ReactNode; ariaLabel?: string; guide?: string };
+
+/** Choose one of a few: floors, views, speeds, appearance, mode. One control, one look, everywhere. */
+export function Segmented<T extends string | number>({ label, value, options, onChange, guide, className = "" }: {
+  label: string;
+  value: T;
+  options: ReadonlyArray<SegmentOption<T>>;
+  onChange: (value: T) => void;
+  guide?: string;
+  className?: string;
+}) {
+  return <div className={`segmented ${className}`} role="group" aria-label={label} data-guide={guide}>
+    {options.map((option) => <button
+      key={String(option.value)}
+      type="button"
+      className={option.value === value ? "selected" : ""}
+      aria-pressed={option.value === value}
+      aria-label={option.ariaLabel}
+      data-guide={option.guide}
+      onClick={() => onChange(option.value)}
+    >{option.label}</button>)}
+  </div>;
+}
+
 export function DisclosureSection({ label, children, engineering = false }: { label: string; children: ReactNode; engineering?: boolean }) {
   return <details className={`disclosure ${engineering ? "engineering" : ""}`}>
     <summary>{label}<ArrowRight size={13} aria-hidden="true"/></summary>
@@ -152,21 +176,16 @@ export function DisclosureSection({ label, children, engineering = false }: { la
 
 export function ThemeControl() {
   const { theme, setTheme } = useTheme();
-  return <fieldset className="theme-control">
-    <legend>Appearance</legend>
-    {([
-      ["system", "System", Monitor],
-      ["light", "Light", Sun],
-      ["dark", "Dark", Moon],
-    ] as const).map(([value, label, Icon]) => <button
-      key={value}
-      type="button"
-      className={theme === value ? "selected" : ""}
-      aria-pressed={theme === value}
-      aria-label={`${label} appearance`}
-      onClick={() => setTheme(value)}
-    ><Icon size={13} aria-hidden="true"/><span>{label}</span></button>)}
-  </fieldset>;
+  return <Segmented
+    label="Appearance"
+    value={theme}
+    onChange={setTheme}
+    options={([["system", "System", Monitor], ["light", "Light", Sun], ["dark", "Dark", Moon]] as const).map(([value, label, Icon]) => ({
+      value,
+      ariaLabel: `${label} appearance`,
+      label: <><Icon size={13} aria-hidden="true"/>{label}</>,
+    }))}
+  />;
 }
 
 export function Brand() {

@@ -13,7 +13,7 @@ import { ROLES, canViewTopology, type Role } from "@/lib/security/rolePolicy";
 import { ApiError, clearTestIdentity, describeError, navigate, post, SESSION_CHANGED } from "./api";
 import { Floating, useDismiss } from "./Floating";
 import type { Facility, SessionData } from "./types";
-import { Brand, mono, Status, ThemeControl } from "./ui";
+import { Brand, mono, Segmented, Status, ThemeControl } from "./ui";
 
 /**
  * Feedback on the current workspace, from a small header control rather than a
@@ -52,9 +52,9 @@ function FeedbackControl({ facility }: { facility?: Facility }) {
     <Floating open={open} anchorRef={triggerRef} floatingRef={panelRef} gap={10} id={panelId} role="dialog" aria-label="Share feedback on this workspace" className="feedback-panel">
       <b className="block text-sm">Feedback on this workspace</b>
       <p className="mt-1 text-xs leading-5 text-slate-500">Optional. Structured choices only, so no facility details or notes are recorded.</p>
-      <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="How was this workspace?">
-        {([["POSITIVE", "Good"], ["NEUTRAL", "Okay"], ["NEGATIVE", "Poor"]] as const).map(([value, label]) => <button type="button" key={value} className={`speed ${sentiment === value ? "selected" : ""}`} aria-pressed={sentiment === value} onClick={() => setSentiment(value)}>{label}</button>)}
-      </div>
+      <Segmented className="mt-3" label="How was this workspace?" value={sentiment} onChange={setSentiment} options={[
+        { value: "POSITIVE", label: "Good" }, { value: "NEUTRAL", label: "Okay" }, { value: "NEGATIVE", label: "Poor" },
+      ]}/>
       <label className="field mt-3 block">What best describes it?<select className="select mt-2 w-full" value={feedbackCode} onChange={(event) => setFeedbackCode(event.target.value)}><option value="HELPFUL">Helpful</option><option value="UNCLEAR">Unclear</option><option value="MISSING_CONTEXT">Missing context</option><option value="TOO_SLOW">Too slow</option><option value="UNEXPECTED_RESULT">Unexpected result</option><option value="OTHER">Other product friction</option></select></label>
       <div className="mt-3 flex items-center gap-2">
         <button type="button" className="button primary" onClick={submit}>Send feedback</button>
@@ -224,7 +224,7 @@ export function ReplayBar({ onReset = () => {} }: { onReset?: () => void }) {
   const elapsed = s.simulation.snapshot.elapsedS;
   if (!location.pathname.endsWith("/operations")) return null;
   return <section className="replay-bar mb-4" data-guide="replay" aria-label="Canonical replay controls">
-    <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300" aria-hidden="true"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><div className="ml-auto flex items-center gap-1" role="group" aria-label="Replay speed"><span className="mr-1 text-[10px] uppercase tracking-[.12em] text-slate-500">Speed</span>{([1,5,10,30,60] as const).map(v => <button type="button" aria-label={`Replay speed ${v} times`} aria-pressed={s.speed === v} key={v} onClick={() => s.setSpeed(v)} className={`speed ${s.speed === v ? "selected" : ""}`}>{v}×</button>)}</div><button type="button" className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15} aria-hidden="true"/> : <Play size={15} aria-hidden="true"/>} {s.playing ? "Pause" : "Play"}</button></div>
+    <div className="flex flex-wrap items-center gap-3"><Clock3 size={15} className="text-cyan-300" aria-hidden="true"/><span className={`${mono} text-xs`}>{formatSimulatedAt(s.simulatedAt)}</span><span className="text-xs text-slate-500">· {Math.round(elapsed / 60)} of 30 min</span><Segmented className="ml-auto" label="Replay speed" value={s.speed} onChange={s.setSpeed} options={([1, 5, 10, 30, 60] as const).map((v) => ({ value: v, label: `${v}×`, ariaLabel: `Replay speed ${v} times` }))}/><button type="button" className="button secondary" onClick={() => s.setPlaying(!s.playing)}>{s.playing ? <Pause size={15} aria-hidden="true"/> : <Play size={15} aria-hidden="true"/>} {s.playing ? "Pause" : "Play"}</button></div>
     <div className="mt-3 flex flex-wrap items-center gap-2"><button type="button" className="button secondary" onClick={() => s.step(30)} disabled={elapsed >= SCENARIO_DURATION_S}><SkipForward size={14} aria-hidden="true"/>Step 30s</button><button type="button" className="button secondary" onClick={() => s.jump(Math.max(0, elapsed - 300))} disabled={elapsed === 0}>−5m</button><button type="button" className="button secondary" onClick={() => s.jump(Math.min(SCENARIO_DURATION_S, elapsed + 300))} disabled={elapsed >= SCENARIO_DURATION_S}>+5m</button><button type="button" className="button secondary" onClick={() => s.jump(900)} disabled={elapsed === 900}>Jump to forecast</button><input aria-label="Replay position" aria-valuetext={`${Math.round(elapsed / 60)} minutes into the 30 minute scenario`} className="replay-range" type="range" min="0" max={SCENARIO_DURATION_S} step="1" value={elapsed} onChange={(event) => s.jump(Number(event.target.value))}/><span className={`${mono} text-[10px] text-slate-500`}>{Math.round(elapsed / 60)}m</span><button type="button" className="button secondary" onClick={() => { s.reset(); onReset(); }}><RotateCcw size={15} aria-hidden="true"/>Reset</button><Status tone={s.mode === "Advisory" ? "warn" : "good"}>{s.mode} · human-in-loop</Status></div>
     <p className="sr-only" role="status" aria-live="polite">Replay at {Math.round(elapsed / 60)} minutes. {s.playing ? `Playing at ${s.speed} times speed.` : "Paused."}</p>
   </section>;

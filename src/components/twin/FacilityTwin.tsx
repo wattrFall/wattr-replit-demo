@@ -1,6 +1,6 @@
 import { Component, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Box, Footprints, Layers3, MousePointer2 } from "lucide-react";
-import { ContextualHelp } from "@/components/cockpit/ui";
+import { ContextualHelp, Segmented } from "@/components/cockpit/ui";
 import { facilityAssets, type FacilityAssetKind } from "@/lib/cockpit/facilityAssets";
 import type { FacilityTwinProps, TwinOverlay } from "./types";
 
@@ -59,13 +59,14 @@ export function FacilityTwin(props: FacilityTwinProps) {
 
   return <div className="facility-twin">
     <div className="twin-toolbar">
-      <div className="twin-toolgroup" role="group" aria-label="Facility floor" data-guide="floors">
-        {([1, 2] as const).map((value) => <button key={value} data-guide={value === 2 ? "floor-change" : undefined} className={floor === value ? "active" : ""} aria-pressed={floor === value} onClick={() => { setFloor(value); props.onGuideAction?.("floor-change"); }}>F{value}</button>)}
-      </div>
-      <div className="twin-toolgroup" role="group" aria-label="Camera mode" data-guide="camera">
-        <button data-guide="camera-orbit" className={cameraMode === "orbit" ? "active" : ""} aria-pressed={cameraMode === "orbit"} onClick={() => { setCameraMode("orbit"); props.onGuideAction?.("camera-orbit"); }}><MousePointer2 size={13}/> Orbit</button>
-        <button data-guide="camera-walk" className={cameraMode === "walk" ? "active" : ""} aria-pressed={cameraMode === "walk"} onClick={() => { setCameraMode("walk"); props.onGuideAction?.("camera-walk"); }}><Footprints size={13}/> Walk</button>
-      </div>
+      <Segmented label="Facility floor" guide="floors" value={floor} onChange={(value) => { setFloor(value); props.onGuideAction?.("floor-change"); }} options={[
+        { value: 1, label: "F1" },
+        { value: 2, label: "F2", guide: "floor-change" },
+      ]}/>
+      <Segmented label="Camera mode" guide="camera" value={cameraMode} onChange={(value) => { setCameraMode(value); props.onGuideAction?.(value === "orbit" ? "camera-orbit" : "camera-walk"); }} options={[
+        { value: "orbit", label: <><MousePointer2 size={13} aria-hidden="true"/>Orbit</>, guide: "camera-orbit" },
+        { value: "walk", label: <><Footprints size={13} aria-hidden="true"/>Walk</>, guide: "camera-walk" },
+      ]}/>
       <ContextualHelp title="About floors and camera" align="start"><p>Floors change the visible level. Orbit is best for planning; Walk gives aisle-level movement. Neither changes replay state.</p></ContextualHelp>
       <span className="twin-model"><Box size={12}/> {props.mode === "edit" ? `UNPUBLISHED DRAFT · BASED ON ${props.modelVersion}` : `OPERATIONS · ${props.modelVersion}`}</span>
     </div>
