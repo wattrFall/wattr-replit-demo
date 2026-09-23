@@ -217,7 +217,7 @@ export function Metric({ label, value, unit, sub, warn, help, onClick }: { label
 
 /** A row of headline figures on one surface, divided by hairlines rather than boxed one by one. */
 export function MetricStrip({ children, label }: { children: ReactNode; label?: string }) {
-  return <section className="panel metric-strip" aria-label={label}>{children}</section>;
+  return <section className="panel metric-strip" aria-label={label}><div className="metric-grid">{children}</div></section>;
 }
 export function PageHead({ eyebrow, title, detail, action }: { eyebrow: string; title: string; detail: string; action?: ReactNode }) {
   return <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div className="min-w-0"><div className="eyebrow mb-1">{eyebrow}</div><h1 className="page-title">{title}</h1><p className="page-detail">{detail}</p></div>{action}</div>;
