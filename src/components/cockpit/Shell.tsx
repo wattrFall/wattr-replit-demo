@@ -238,7 +238,7 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
   ];
   return <div className="cockpit min-h-[100dvh] bg-[#0a1018] text-slate-200">
     <a className="skip-link" href="#main-content">Skip to main content</a>
-    <header className="fixed inset-x-0 top-0 z-30 flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4">
+    <header className="cockpit-header fixed inset-x-0 top-0 z-30 flex h-[62px] items-center justify-between border-b border-slate-800 bg-[#0a1018]/95 px-4">
       <div className="flex items-center gap-4">
         <button ref={menuButtonRef} type="button" className="md:hidden" onClick={() => setMobile(!mobile)} aria-label={mobile ? "Close navigation" : "Open navigation"} aria-expanded={mobile} aria-controls="cockpit-navigation"><Menu size={20} aria-hidden="true"/></button><Brand/>
       </div>

@@ -565,8 +565,9 @@ html[data-theme="light"] { color-scheme: light; }
   color: var(--cockpit-text);
   overflow-x: hidden;
 }
-.cockpit header, .cockpit aside { background: var(--cockpit-bg) !important; border-color: var(--cockpit-border-soft) !important; }
-.cockpit aside > div:first-child, .cockpit .panel { background: var(--cockpit-surface); border-color: var(--cockpit-border-soft); }
+/* The shell's own header and sidebar only: pages use <header> and <aside> for their own content. */
+.cockpit .cockpit-header, .cockpit .cockpit-sidebar { background: var(--cockpit-bg) !important; border-color: var(--cockpit-border-soft) !important; }
+.cockpit .sidebar-facility, .cockpit .panel { background: var(--cockpit-surface); border-color: var(--cockpit-border-soft); }
 .cockpit .panel { color: var(--cockpit-text); }
 .cockpit .text-slate-100, .cockpit .text-slate-200, .cockpit .text-slate-300 { color: var(--cockpit-text) !important; }
 .cockpit .text-slate-400 { color: var(--cockpit-muted) !important; }
