@@ -1,5 +1,5 @@
 /** The signed-in page frame, its navigation and the shared replay controls. */
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useClerk } from "@clerk/react";
 import {
   Activity, AlertTriangle, ArrowRight, Boxes, BrainCircuit, CircleHelp, Clock3, Gauge, GitBranch, History,
@@ -180,9 +180,39 @@ function SessionMenu({ data }: { data: SessionData }) {
   </div>;
 }
 
+/** Where the sidebar was scrolled, so it holds its place as pages change. */
+let sidebarScrollTop = 0;
+
+/** Mark which edges of the sidebar list have more items beyond them, for the fade that says so. */
+function markSidebarOverflow(list: HTMLElement) {
+  const above = list.scrollTop > 1;
+  const below = list.scrollTop + list.clientHeight < list.scrollHeight - 1;
+  list.dataset.more = [above && "above", below && "below"].filter(Boolean).join(" ");
+}
+
 export function Shell({ data, facility, children }: { data: SessionData; facility?: Facility; children: ReactNode }) {
   const [mobile, setMobile] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const navRef = useRef<HTMLElement>(null);
+  // Each page mounts its own shell: restore the sidebar's scroll, then make sure the current page shows.
+  useLayoutEffect(() => {
+    const list = navRef.current;
+    if (!list) return;
+    list.scrollTop = sidebarScrollTop;
+    const current = list.querySelector<HTMLElement>("[aria-current='page']");
+    if (!current) return;
+    const top = current.offsetTop - list.offsetTop;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (top + current.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + current.offsetHeight - list.clientHeight;
+  }, []);
+  useEffect(() => {
+    const list = navRef.current;
+    if (!list) return;
+    const mark = () => markSidebarOverflow(list);
+    mark();
+    addEventListener("resize", mark);
+    return () => removeEventListener("resize", mark);
+  }, []);
   const active = facility ?? data.facilities[0];
   const nav: Array<[LucideIcon, string, string]> = [
     ...(data.me.role === "PORTFOLIO_MANAGER" ? [[LayoutDashboard, "Portfolio", "/portfolio"] as [LucideIcon, string, string]] : []),
@@ -215,7 +245,11 @@ export function Shell({ data, facility, children }: { data: SessionData; facilit
       <div className="flex items-center gap-3 text-xs"><span className="hidden text-slate-500 sm:inline">SYNTHETIC ENVIRONMENT</span><SessionMenu data={data}/><FeedbackControl facility={facility}/><ThemeControl/></div>
     </header>
     {mobile && <button type="button" className="mobile-scrim md:hidden" aria-label="Close navigation" onClick={() => { setMobile(false); menuButtonRef.current?.focus(); }}/>}
-    <aside id="cockpit-navigation" aria-label="Primary navigation" className={`fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] p-3 transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}><div className="mb-5 rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div><nav className="space-y-1">{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/>{label}</button>)}</nav><div className="absolute bottom-5 left-3 right-3 border-t border-slate-800 pt-3"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className="cockpit-nav"><CircleHelp size={16} aria-hidden="true"/>Help & tutorials</button></div></aside>
+    <aside id="cockpit-navigation" aria-label="Primary navigation" className={`cockpit-sidebar fixed bottom-0 left-0 top-[62px] z-20 w-[232px] border-r border-slate-800 bg-[#0b121c] transition-transform md:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}>
+      <div className="sidebar-facility rounded-md border border-slate-800 bg-[#101a26] p-3"><div className="text-[9px] tracking-[.18em] text-slate-500">AUTHORIZED FACILITY</div><div className="mt-1 text-sm font-semibold">{active?.name ?? "No facility access"}</div><div className="text-[11px] text-slate-500">{active?.location}</div></div>
+      <nav ref={navRef} className="sidebar-nav" onScroll={(event) => { sidebarScrollTop = event.currentTarget.scrollTop; markSidebarOverflow(event.currentTarget); }}>{nav.map(([Icon, label, path]) => <button type="button" key={label} onClick={() => { setMobile(false); navigate(path); }} className={`cockpit-nav ${location.pathname === path ? "active" : ""}`} aria-current={location.pathname === path ? "page" : undefined}><Icon size={16} aria-hidden="true"/><span>{label}</span></button>)}</nav>
+      <div className="sidebar-footer"><button type="button" onClick={() => { setMobile(false); navigate("/help"); }} className={`cockpit-nav ${location.pathname === "/help" ? "active" : ""}`} aria-current={location.pathname === "/help" ? "page" : undefined}><CircleHelp size={16} aria-hidden="true"/><span>Help & tutorials</span></button></div>
+    </aside>
     <main id="main-content" tabIndex={-1} className="pt-[62px] md:pl-[232px]"><div className="mx-auto max-w-[1600px] p-4 md:p-7">{children}</div></main>
   </div>;
 }

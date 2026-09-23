@@ -281,6 +281,18 @@ html[data-theme="light"] { color-scheme: light; }
 .cockpit-nav { display:flex; width:100%; align-items:center; gap:.7rem; border-radius:5px; padding:.65rem .7rem; color:#8191a4; font-size:.78rem; text-align:left; transition:color .18s ease, background .18s ease, transform .18s ease; }
 .cockpit-nav:hover { color:#d7e1e9; background:#142334; transform:translateX(2px); }
 .cockpit-nav.active { color:#60d8e2; background:rgba(50,190,202,.09); box-shadow:inset 2px 0 #46cbd3; }
+.cockpit-nav svg { flex:none; }
+.cockpit-nav span { min-width:0; line-height:1.3; }
+/* The sidebar: the facility card and footer stay put while the navigation between them scrolls. */
+.cockpit-sidebar { display:flex; flex-direction:column; padding-top:.75rem; }
+.sidebar-facility { flex:none; margin:0 .75rem 1rem; }
+.sidebar-nav { display:flex; flex:1 1 auto; min-height:0; flex-direction:column; gap:.25rem; overflow-x:hidden; overflow-y:auto; overscroll-behavior:contain; padding:0 .75rem .75rem; scrollbar-width:thin; scrollbar-color:var(--cockpit-border-soft, #22313e) transparent; }
+.sidebar-footer { flex:none; margin:0 .75rem; border-top:1px solid var(--cockpit-border-soft, #22313e); padding:.75rem 0 1rem; }
+.sidebar-nav[data-more="below"] { mask-image:linear-gradient(to bottom, #000 calc(100% - 28px), transparent); }
+.sidebar-nav[data-more="above"] { mask-image:linear-gradient(to bottom, transparent, #000 28px); }
+.sidebar-nav[data-more="above below"] { mask-image:linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+/* Inside a scrolling list an outer focus ring would be clipped, so draw it inside. */
+.cockpit .cockpit-sidebar .cockpit-nav:focus-visible { outline-offset:-3px; }
 .cockpit-nav em { margin-left:auto; min-width:18px; border-radius:10px; background:#8c5b20; color:#f8d79e; font-size:10px; font-style:normal; text-align:center; padding:2px 5px; }
 .button { display:inline-flex; align-items:center; gap:.5rem; border-radius:5px; padding:.58rem .78rem; font-size:.75rem; font-weight:600; transition:transform .18s ease, background .18s ease, border-color .18s ease; }
 .button:hover { transform:translateY(-1px); }
