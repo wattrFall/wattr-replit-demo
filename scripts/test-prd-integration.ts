@@ -640,8 +640,8 @@ async function browserRegression() {
     const paths = [
       ["/facilities/sfo-01/intelligence", "Facility intelligence", "explore"],
       ["/facilities/sfo-01/history", "Change history", "history"],
-      ["/facilities/sfo-01/replay", "Historical Scenario Replay", "replay"],
-      ["/facilities/sfo-01/import", "Import existing engineering data", "import"],
+      ["/facilities/sfo-01/replay", "Scenario replay", "replay"],
+      ["/facilities/sfo-01/import", "Import engineering data", "import"],
     ] as const;
     for (const [viewport, suffixName] of [
       [{ width: 1440, height: 900 }, "desktop"],

@@ -42,7 +42,7 @@ export function FacilityHistoryPage({ data, facility }: { data: SessionData; fac
     {error && <section className="panel mb-4 p-4 text-sm text-red-300" role="alert">{error}</section>}
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,.85fr)]">
       <section className="panel overflow-hidden">
-        <div className="border-b border-slate-800 p-5"><div className="flex items-center gap-2"><History size={16} className="text-cyan-300"/><h2 className="font-semibold">Supported configuration events</h2></div><p className="mt-2 text-xs text-slate-500">Append-only events generated when a published model’s supported configuration differs.</p></div>
+        <div className="border-b border-slate-800 p-5"><div className="flex items-center gap-2"><History size={16} className="text-slate-500" aria-hidden="true"/><h2 className="font-semibold">Supported configuration events</h2></div><p className="mt-2 text-xs text-slate-500">Append-only events generated when a published model’s supported configuration differs.</p></div>
         {events.map((event) => <details key={event.id} className="disclosure border-x-0 border-t-0">
           <summary><span><b>{event.change_type === "RACK_RELOCATED" ? `Moved ${event.asset_id}` : event.change_type.replace(/_/g, " ")}</b><small className="mt-1 block text-slate-500">{new Date(event.occurred_at).toLocaleString()} · {event.source.replace(/_/g, " ")} · asset {event.asset_id ?? "facility-model"}</small></span><Status tone="warn">{event.model_version_id}</Status></summary>
           <div className="disclosure-content grid gap-3 md:grid-cols-2">
@@ -55,7 +55,7 @@ export function FacilityHistoryPage({ data, facility }: { data: SessionData; fac
         {!events.length && !error && <p className="p-6 text-sm text-slate-500">No supported configuration differences have been recorded yet. Identical configuration publishes do not create a change event.</p>}
       </section>
       <section className="panel overflow-hidden">
-        <div className="border-b border-slate-800 p-5"><div className="flex items-center gap-2"><Layers3 size={16} className="text-cyan-300"/><h2 className="font-semibold">Historical model states</h2></div><p className="mt-2 text-xs text-slate-500">Select a version in Scenario Replay to fork its immutable configuration.</p></div>
+        <div className="border-b border-slate-800 p-5"><div className="flex items-center gap-2"><Layers3 size={16} className="text-slate-500" aria-hidden="true"/><h2 className="font-semibold">Historical model states</h2></div><p className="mt-2 text-xs text-slate-500">Select a version in Scenario Replay to fork its immutable configuration.</p></div>
         {versions.map((version) => <details key={version.id} className="disclosure border-x-0 border-t-0">
           <summary><span><b className={mono}>{version.id}</b><small className="mt-1 block text-slate-500"><Clock3 size={11} className="mr-1 inline"/>{new Date(version.created_at).toLocaleString()}</small></span><Status tone={version.status === "PUBLISHED" ? "good" : "warn"}>{version.status}</Status></summary>
           <div className="disclosure-content"><pre className="overflow-x-auto rounded bg-black/20 p-3 text-xs text-slate-400">{JSON.stringify(version.config, null, 2)}</pre><button type="button" className="button secondary mt-3" onClick={() => navigate(`/facilities/${facility.id}/replay?modelVersion=${encodeURIComponent(version.id)}`)}>Use as replay baseline <ArrowRight size={14}/></button></div>

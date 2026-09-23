@@ -72,7 +72,7 @@ export function FacilityImportPage({ data, facility }: { data: SessionData; faci
     } catch (cause) { setError(describeError(cause)); } finally { setBusy(false); }
   };
   return <Shell data={data} facility={facility}>
-    <PageHead eyebrow="Facility creation" title="Import existing engineering data" detail="Store a floor-plan reference or parse IFC STEP data, review every proposed mapping, then create a Builder draft. Imports cannot publish Operations directly."/>
+    <PageHead eyebrow="Facility creation" title="Import engineering data" detail="Store a floor-plan reference or parse IFC STEP data, review every proposed mapping, then create a Builder draft. Imports cannot publish Operations directly."/>
     <div className="grid gap-4 xl:grid-cols-[.85fr_1.15fr]">
       <section className="panel p-5">
         <div className="flex items-start gap-3"><FileUp className="mt-1 text-cyan-300" aria-hidden="true"/><div><h2 className="font-semibold">1. Upload a source</h2><p className="copy">Floor plan: PDF, PNG, JPEG, SVG (max 15 MB; SVG max 5 MB). IFC: ISO-10303-21 STEP .ifc (max 20 MB).</p></div></div>

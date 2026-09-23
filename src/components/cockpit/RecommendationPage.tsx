@@ -251,7 +251,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(330px,.75fr)]">
       <div className="space-y-4">
         <section className="panel p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone="warn">ADVISORY · SYNTHETIC</Status><h2 className="mt-3 text-xl font-semibold">{snapshot.recommendation.what}</h2></div><ShieldCheck className="text-cyan-300"/></div>
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><Status tone="warn">ADVISORY · SYNTHETIC</Status><h2 className="mt-3 text-xl font-semibold">{snapshot.recommendation.what}</h2></div><ShieldCheck className="shrink-0 text-slate-500" aria-hidden="true"/></div>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
             <Metric label="Inaction peak" value={snapshot.recommendation.baselinePeakC.toFixed(1)} unit="°C" sub="same initial state" warn/>
             <Metric label="Recommended peak" value={snapshot.recommendation.advisoryPeakC.toFixed(1)} unit="°C" sub={`${snapshot.recommendation.reductionC.toFixed(1)}°C modeled reduction`}/>
@@ -261,7 +261,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
         </section>
 
         <section className="panel p-5" data-guide="what-if">
-          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="eyebrow">What-if comparison</div><h2 className="mt-2 text-xl font-semibold">Compare before you decide</h2><p className="copy">Adjust the permitted advisory and compare it with inaction and with the recommendation. Only the advisory parameters change; the initial state, event stream, replay instant and model version stay fixed.</p></div><SlidersHorizontal className="shrink-0 text-cyan-300" aria-hidden="true"/></div>
+          <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="eyebrow">What-if comparison</div><h2 className="mt-2 text-xl font-semibold">Compare before you decide</h2><p className="copy">Adjust the permitted advisory and compare it with inaction and with the recommendation. Only the advisory parameters change; the initial state, event stream, replay instant and model version stay fixed.</p></div><SlidersHorizontal className="shrink-0 text-slate-500" aria-hidden="true"/></div>
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <label className="field">{unitLabel} flow: <b>{flowPercent}%</b><input aria-label={`Alternative ${unitLabel.split("-")[0]} flow percent`} type="range" min="60" max="85" step="1" value={flowPercent} onChange={(event) => setFlowPercent(Number(event.target.value))}/></label>
             <label className="field">Duration: <b>{durationMinutes} minutes</b><input aria-label="Alternative duration minutes" type="range" min="1" max="30" step="1" value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}/></label>
@@ -309,7 +309,7 @@ export function Recommendation({ data, facility }: { data: SessionData; facility
             <button className="button secondary justify-center" onClick={() => decide("REQUEST_ALTERNATIVE")}><RotateCcw size={14}/>Request alternative</button>
           </div>
           {evaluation?.outcome === "WARNING" && <button className="button secondary mt-2 w-full justify-center" onClick={() => decide("ACKNOWLEDGE")}>Acknowledge warning without approval</button>}
-          {pendingReplacement && <div ref={replacementRef} tabIndex={-1} role="alertdialog" aria-labelledby="replace-disposition-title" aria-describedby="replace-disposition-body" className="subpanel mt-4 border-amber-400/60">
+          {pendingReplacement && <div ref={replacementRef} tabIndex={-1} role="alertdialog" aria-labelledby="replace-disposition-title" aria-describedby="replace-disposition-body" className="callout mt-4 border-amber-400/60">
             <b id="replace-disposition-title">{pendingReplacement.current ? "Replace the current disposition?" : "The disposition has changed"}</b>
             <p id="replace-disposition-body" className="text-xs leading-5 text-slate-400">{pendingReplacement.current
               ? `${pendingReplacement.current.recordedBy} ${DISPOSITION_PAST[pendingReplacement.current.decision]} at scenario time ${clockTime(pendingReplacement.current.simulatedAt)}. Recording "${DISPOSITION_LABELS[pendingReplacement.decision]}" makes it the current disposition. The earlier decision stays in the audit history.`

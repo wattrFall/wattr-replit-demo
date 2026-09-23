@@ -212,7 +212,7 @@ export function ThermalGraphPage({ data, facility }: { data: SessionData; facili
   />;
 
   return <Shell data={data} facility={facility}>
-    <PageHead eyebrow="Thermal dependency graph" title="Heat-flow topology" detail="Every asset is a node and every edge a path heat travels. Colour shows where the heat is; open a node to see what feeds it, where its heat goes and what depends on it."/>
+    <PageHead eyebrow="Thermal dependency graph" title="Thermal graph" detail="Every asset is a node and every edge a path heat travels. Colour shows where the heat is; open a node to see what feeds it, where its heat goes and what depends on it."/>
     <ReplayBar/>
     <section className={`panel lineage${expanded ? " focus-mode" : ""}`} style={{ "--heat-gradient": HEAT_GRADIENT } as CSSProperties}>
       <div className="lineage-toolbar">

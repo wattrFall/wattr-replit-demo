@@ -154,13 +154,13 @@ export function ScenarioReplayPage({ data, facility }: { data: SessionData; faci
   const candidateRaw = result?.candidateRawOutputs[selectedRawIndex];
 
   return <Shell data={data} facility={facility}>
-    <PageHead eyebrow="Scenario replay / historical inputs" title="Historical Scenario Replay" detail="Fork a historical model, hold validated boundary conditions constant, and evaluate one rack relocation. Results are simulated—not measured telemetry." action={<button type="button" className="button secondary" onClick={() => history.back()}>Back to history</button>}/>
+    <PageHead eyebrow="Scenario replay / historical inputs" title="Scenario replay" detail="Fork a historical model, hold validated boundary conditions constant, and evaluate one rack relocation. Results are simulated—not measured telemetry." action={<button type="button" className="button secondary" onClick={() => history.back()}>Back to history</button>}/>
     {!canWrite && <section className="panel mb-4 p-4 text-sm text-amber-200"><Status tone="warn">READ ONLY</Status><p className="mt-2">Your facility grant can inspect historical scenarios, but only the Engineer role can upload inputs, fork a scenario, or run a replay.</p></section>}
     {(error || message) && <p className={`mb-4 rounded-md border p-3 text-sm ${error ? "border-red-400/40 text-red-300" : "border-teal-400/30 text-teal-200"}`} role={error ? "alert" : "status"}>{error || message}</p>}
     <div className="grid gap-4 xl:grid-cols-[minmax(330px,.75fr)_minmax(0,1.25fr)]">
       <section className="space-y-4">
         <section className="panel p-5">
-          <div className="flex items-center gap-2"><FileUp size={17} className="text-cyan-300"/><h2 className="font-semibold">1. Historical input dataset</h2></div>
+          <div className="flex items-center gap-2"><FileUp size={17} className="text-slate-500" aria-hidden="true"/><h2 className="font-semibold">1. Historical input dataset</h2></div>
           <p className="mt-2 text-xs leading-5 text-slate-500">CSV requires timestamp, rack_id, workload_kw, rack_power_kw, ambient_c, and cooling_supply_c. Optional cooling_flow_pct and initial_inlet_c are validated when supplied; without complete initial inlet values, both branches disclose the documented 30°C synthetic initial state.</p>
           <label className="field mt-4 block">Historical model version<select className="select mt-2 w-full" value={selectedVersion} disabled={!canWrite} onChange={(event) => setSelectedVersion(event.target.value)}>{versions.map((version) => <option key={version.id} value={version.id}>{version.id} · {version.status}</option>)}</select></label>
           <label className="field mt-3 block">Upload historical CSV<input type="file" accept=".csv,text/csv" className="input mt-2 w-full" disabled={!canWrite || busy} onChange={(event) => setFile(event.target.files?.[0] ?? null)}/></label>
@@ -170,14 +170,14 @@ export function ScenarioReplayPage({ data, facility }: { data: SessionData; faci
           {dataset && <div className="mt-3 rounded border border-slate-800 bg-black/10 p-3 text-xs"><div className="flex justify-between gap-2"><b>{dataset.source === "SYNTHETIC_DEMO" ? "Synthetic demo dataset" : "Uploaded historical data"}</b><Status tone={dataset.validation.valid ? "good" : "bad"}>{dataset.validation.valid ? "VALID" : "INVALID"}</Status></div><p className="mt-2 text-slate-500">{formatTime(dataset.period_start_at)} → {formatTime(dataset.period_end_at)}</p><p className={`${mono} mt-2 text-xs text-slate-500`}>input checksum {dataset.checksum}</p></div>}
         </section>
         <section className="panel p-5">
-          <div className="flex items-center gap-2"><Thermometer size={17} className="text-cyan-300"/><h2 className="font-semibold">Input validation</h2></div>
+          <div className="flex items-center gap-2"><Thermometer size={17} className="text-slate-500" aria-hidden="true"/><h2 className="font-semibold">Input validation</h2></div>
           {dataset ? <div className="mt-4 grid grid-cols-2 gap-2 text-xs">{Object.entries(dataset.validation.inputStatus).map(([name, state]) => <div key={name} className="subpanel"><span className="text-slate-500">{name.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`)}</span><b className={`mt-1 block ${state === "PRESENT" ? "text-teal-300" : "text-red-300"}`}>{state}</b></div>)}</div> : <p className="mt-3 text-xs text-slate-500">Select a dataset to inspect source, completeness, and missing inputs.</p>}
           {dataset?.validation.errors.map((item) => <p key={item} className="mt-2 text-xs text-red-300">{item}</p>)}
           {dataset?.validation.warnings.map((item) => <p key={item} className="mt-2 text-xs text-amber-200">{item}</p>)}
         </section>
       </section>
       <section className="panel p-5">
-        <div className="flex items-center gap-2"><FlaskConical size={17} className="text-cyan-300"/><h2 className="font-semibold">2. Fork historical state</h2></div>
+        <div className="flex items-center gap-2"><FlaskConical size={17} className="text-slate-500" aria-hidden="true"/><h2 className="font-semibold">2. Fork historical state</h2></div>
         <p className="mt-2 text-xs leading-5 text-slate-500">The baseline stores an immutable snapshot of the selected historical model. Candidate edits are isolated to one supported rack relocation.</p>
         <div className="mt-5 grid gap-3 md:grid-cols-2">
           <label className="field">Scenario name<input className="input mt-2 w-full" value={name} disabled={!canWrite} onChange={(event) => setName(event.target.value)}/></label>

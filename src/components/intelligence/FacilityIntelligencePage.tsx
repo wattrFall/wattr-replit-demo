@@ -210,8 +210,8 @@ export function FacilityIntelligencePage({ data, facility }: { data: SessionData
 
   return <Shell data={data}>
     <PageHead
-      eyebrow="Facility intelligence / model-bound"
-      title={`${readableView[view]} explorer`}
+      eyebrow={`${readableView[view]} explorer / model-bound`}
+      title="Facility intelligence"
       detail={`Scope at ${formatSimulatedAt(Number(at))}. Asset identity comes from the active published model layout.`}
       action={<Status tone="warn">SIMULATED REPLAY DATA</Status>}
     />
@@ -226,11 +226,11 @@ export function FacilityIntelligencePage({ data, facility }: { data: SessionData
           }}>{part}</button>
         </span>)}
       </div>
-      <div className="mt-4 flex flex-wrap gap-2" role="tablist" aria-label="Facility operational view">
+      <div className="segmented mt-4" role="tablist" aria-label="Facility operational view">
         {(Object.keys(readableView) as View[]).map((candidate) => {
           const Icon = viewIcons[candidate];
           return <button type="button" role="tab" aria-selected={view === candidate} key={candidate}
-            className={`button ${view === candidate ? "primary" : "secondary"}`}
+            className={view === candidate ? "selected" : ""}
             onClick={() => {
               setView(candidate);
               const nextMetric = candidate === "power" ? "rack_power_kw"
@@ -240,7 +240,7 @@ export function FacilityIntelligencePage({ data, facility }: { data: SessionData
               setScopeMetric(nextMetric);
               updateRoute({ view: candidate, metric: nextMetric });
             }}>
-            <Icon size={14}/>{readableView[candidate]}
+            <Icon size={14} aria-hidden="true"/>{readableView[candidate]}
           </button>;
         })}
         <button type="button" className="button secondary" onClick={() => navigate(`/facilities/${facility.id}/history${assetId ? `?assetId=${encodeURIComponent(assetId)}&at=${encodeURIComponent(at)}` : `?at=${encodeURIComponent(at)}`}`)}>
@@ -275,7 +275,7 @@ export function FacilityIntelligencePage({ data, facility }: { data: SessionData
         </div>
         {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
         <div className="mt-5 grid gap-3 md:grid-cols-2">
-          {visibleAssets.map((asset) => <button type="button" key={asset.id} onClick={() => selectAsset(asset)} className={`subpanel text-left transition hover:border-cyan-400/50 ${asset.id === assetId ? "border-cyan-400/70" : ""}`}>
+          {visibleAssets.map((asset) => <button type="button" key={asset.id} onClick={() => selectAsset(asset)} className={`select-card text-left transition hover:border-cyan-400/50 ${asset.id === assetId ? "border-cyan-400/70" : ""}`}>
             <div className="flex items-start justify-between gap-3"><div><div className="eyebrow">{sentenceCase(asset.kind)}</div><h2 className="mt-1 font-semibold text-slate-100">{asset.name}</h2></div><Status tone={asset.location.status === "RESOLVED" ? "good" : "warn"}>{asset.location.status}</Status></div>
             <p className="mt-2 text-xs text-slate-400">{asset.id} · {asset.location.zoneName ?? "No mapped physical location"}</p>
             <p className="mt-2 text-xs text-slate-500">{asset.manufacturer || asset.model ? `${asset.manufacturer ?? "Unknown manufacturer"} ${asset.model ?? ""}` : "No manufacturer/model source supplied"}</p>

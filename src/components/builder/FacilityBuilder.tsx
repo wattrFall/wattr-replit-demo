@@ -257,7 +257,7 @@ export function FacilityBuilder({
         </div>
 
         {pending && (
-          <div role="alertdialog" aria-labelledby="builder-discard-title" className="subpanel mt-4 border-amber-400/60">
+          <div role="alertdialog" aria-labelledby="builder-discard-title" className="callout mt-4 border-amber-400/60">
             <b id="builder-discard-title">Replace your unsaved changes?</b>
             <p className="text-xs leading-5 text-slate-400">
               Opening {pending.label} replaces the layout in the editor. Save a draft first to keep your changes.
