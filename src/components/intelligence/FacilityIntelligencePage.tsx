@@ -268,7 +268,7 @@ export function FacilityIntelligencePage({ data, facility }: { data: SessionData
       <section className="panel p-5">
         <div className="flex flex-wrap items-end gap-3">
           <label className="field min-w-[220px] flex-1">Find an asset
-            <span className="relative mt-2 block"><Search size={15} className="absolute left-3 top-3 text-slate-500"/><input className="input w-full pl-9" value={search} onChange={(event) => { setSearch(event.target.value); updateRoute({ search: event.target.value }); }} placeholder="Name, ID, rack, type, manufacturer, model"/></span>
+            <span className="relative mt-2 block"><Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" aria-hidden="true"/><input className="input w-full pl-9" value={search} onChange={(event) => { setSearch(event.target.value); updateRoute({ search: event.target.value }); }} placeholder="Name, ID, rack, type, manufacturer, model"/></span>
           </label>
           <label className="field">Floor<select className="select mt-2" value={floor} onChange={(event) => { setFloor(event.target.value); setZone(""); setAssetId(""); updateRoute({ floor: event.target.value, zone: "", assetId: "" }); }}><option value="">All floors</option>{hierarchy.filter((node) => node.kind === "FLOOR").map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
           <label className="field">Zone<select className="select mt-2" value={zone} onChange={(event) => { setZone(event.target.value); setAssetId(""); updateRoute({ zone: event.target.value, assetId: "" }); }}><option value="">All zones</option>{zones.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
